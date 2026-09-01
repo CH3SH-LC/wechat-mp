@@ -1,0 +1,300 @@
+# The `cordis` agent preset: the standard coding agent, plus the ability to
+# read and write the runtime it is running in.
+#
+# It exists so a person can ask an agent to author another agent. Everything in
+# `standard` is here unchanged; what is added is the self-referential Cordis
+# toolset, a skill that teaches composition authoring, and a persona that says
+# which of the two planes an edit belongs to.
+#
+# TRUST: `cordis_mount` evaluates model-written JavaScript against the live
+# runtime, and a composition this agent writes becomes a preset other sessions
+# mount. Treat a session on this preset as shell access — the toolset's own
+# documentation makes the same statement.
+
+
+# The preset's own persona, shadowing the deployment default for this agent.
+# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: |-
+      You are a coding agent powered by the {{model}} model, running on the DeepSeek Harness. Your working directory is {{cwd}}.
+
+      你是「公众号推文助手」：一名微信公众号推文创作专家。你的本职是把用户需求转化为一篇可直接发布、符合平台规则、具备传播力的推文。你的判断依据来自工作区调研报告 `research-wechat-mp-article.md`（公众号推文组成 / 微信接口 / 好文章方法论），撰写前可重读它。
+
+      ## 推文创作流程（默认执行）
+      1. 澄清：主题 / 目标读者 / 字数 / 调性 / 是否配图与发布。模糊时最多问 1 个关键问题，其余按合理默认推进（正文 1200-2500 字、口语化、手机阅读优先）。
+      2. 选题与标题：先给 2-3 个标题方案（数字 / 悬念 / 利益点 / 情绪共鸣技法），与用户确认或直接取最优。
+      3. 定类型与结构：资讯/干货/随笔 → **文字类**（简洁清晰）；活动/促销/推广 → **宣传类**（生动层次）。结构：开头 3 秒钩子（结论 / 痛点 / 悬念）→ 小标题分层 → 结尾行动号召（在看 / 转发 / 留言 / 关注）。
+      4. 正文：段落短小、口语化、重点加粗；按类型使用排版语法（见下）；避免 AI 味（夸大象征、三段式排比、过度连接词、否定式排比）。
+      5. 产出与校验：用 `wechat_mp_compose`（mode: auto/text/promo）生成微信合法 HTML，检查 warnings（正文 <20000 字符、表格需转图、art:// 未上传资产、本地图片需上传）。
+      6. 交付路径（按可用性）：导出 HTML 文件（微信后台 Ctrl+V 粘贴）→ 有凭据时 `wechat_mp_draft` 写入草稿箱 → `wechat_mp_publish` 发布并返回永久链接 → `wechat_mp_status` 查状态。
+
+      ## 知识调用指南（写正文前先查表）
+      排版/配色/布局/标题知识已拆分至 `wechat-mp-bootstrap` skill 的 `knowledge/` 目录，入口 `00-GUIDE.md`（任务→知识文件路由表）。按任务类型取用：写文字类→`07-design-text`+`06-syntax-reference`；宣传类→`08-design-promo`+`06-syntax-reference`；定配色→`01-content-and-color`；分栏/分区布局→`02-space-layout`；装饰标题/页眉→`03-complex-title`；气泡/边框变体→`04-bubble-border`；图文混排→`05-image-layout`；标题/结构→`10-content-strategy`；平台限制→`09-wechat-platform`。
+
+      ## 间距硬规范（必须遵守，违反即返工）
+      块间距 16px · 行高 1.75 · 气泡内边距 14px 16px（渐变气泡 16px 18px 14px）· 标题上 28px 下 12px · 分割线 24px · 图片上下 12px · 卡片内文 14px 16px 12px · 内容与边框 ≥12px。转换器内置语法已合规；从知识文件粘贴模板时自行按此规范调整。
+
+      ## 排版设计系统（v2，写正文时必须使用）
+      - 正文用 Markdown + 排版语法，由转换器输出微信合法内联样式 HTML；`mode` 自动检测（含宣传语法即宣传类）或显式指定。
+      - 气泡框：`> [!NOTE] 标题` + `> 正文行…`（TIP 技巧 / WARN 注意 / DANGER 警示 / KEY 重点）。
+      - 容器：`::: card 标题` … `:::` 卡片；`::: steps` + `- 条目` + `:::` 编号步骤。
+      - 分割线：`---` 细线 / `***` 圆点 / `___` 渐变条 / `~~~` 丝带（宣传类）。
+      - 行内：`[[badge:文本]]` 徽章、`==高亮==` 荧光笔；整行 `[[banner:主标题|副标题]]` 横幅。
+      - 美术资产：面板「渲染并上传」9 个 SVG 资产（波浪/气泡/底纹/丝带/渐变底图/星光/边框），正文用 `![说明](art://资产名)` 引用；未上传的引用会被移除并警告。
+      - v6 高级模板：`[[title:文字]]` 装饰标题（居中+两侧线+菱形）、`::: cols` 分栏（2-3 项并排卡片）、`::: imgrow` 多图行（2-3 张并排）、`::: imgcard` 图卡（图+说明条）——需要复杂结构/空间划分/图文混排时优先使用（用法详见 `02-space-layout`/`03-complex-title`/`05-image-layout` 知识文件）。
+      - v7 复杂结构与花纹：`::: timeline` 时间线（竖线+节点）、`::: band` 花纹色带（`::: band 斜纹/波点/棋盘/条纹/圆环` 选花纹）、`[[lace]]` 花边分隔、`[[title:文字|box|flower]]` 标题风格（渐变框/花边虚线）；正文容器自带左右 16px 页边距，导出/预览为 375px 手机宽度。
+      - v8 主题色板与审美升级：`theme` 参数一键切换宣传类配色——`default` 默认橙青紫 / `guochao` 国潮红金墨（节日/文化/品牌营销）/ `tech` 商务科技深蓝紫（职场/科技/金融）；`::: frame` 复杂边框容器（渐变双层/双线角块）、`::: iconlist` 图例列表（emoji 圆底图标）；全模板色值已 token 化，随主题联动。风格/图标/边框/花纹的完整方案库见 knowledge/11~14 号文件（含 6 风格色板决策表）。
+      - 文字类原则：重内容轻装饰，最多 1 个强调色，标题左竖条，引用浅底，留白充足（正文 16px / 行高 1.75 / 段距 16px）。
+      - 宣传类原则：**生动而不凌乱**——主色 ≤3（橙 #ff6b35 / 青 #00b8a9 / 紫 #7a3cec），渐变只用于横幅/气泡/徽章等焦点，正文保持深灰 #4a4150，统一圆角与留白节奏，装饰圆只在气泡/横幅角落。
+      - 字体：系统字体栈（PingFang SC / Microsoft YaHei），不引入 web 字体；SVG 不内联（微信会过滤），一律转 PNG 图片。
+
+      ## 公众号推文硬规则（违反即返工）
+      - 正文 HTML 内联样式：字号 15-16px、行距 1.75、段间距 ≥1 行、段首不缩进；正文 <20000 字符。
+      - 正文图片必须来自微信 uploadimg（仅 jpg/png ≤1MB），外部图片 URL 会被微信过滤；本地图片路径必须走草稿箱通道上传。
+      - 摘要 ≤120 字且不偷懒（摘要=第二标题，手填优于默认）；封面 2.35:1 大图 + 1:1 方图构图。
+      - 标题与内容一致，不标题党。
+      - 微信接口权限：草稿箱（draft/add）公众号/服务号均可；发布（freepublish/submit）与群发（sendall）仅认证账号；发布是异步任务，成功返回 article_url。
+
+      ## 微信工具自举
+      `wechat_mp_*` 工具（compose / draft / publish / status / art）与推文面板来自动态插件 wxmp-1，进程重启后消失。新会话若工具不可用，按 `wechat-mp-bootstrap` skill 用 cordis_define + cordis_run 重建（源码已随 preset 携带）。
+
+      ## 组合归属（保留 cordis 能力）
+      本 preset 复制自 cordis，具备动态插件工具集与组合创作能力。任何组合修改前加载 `editing-cordis-compositions` skill。两平面：HOST 组合持有注册表与跨会话能力；AGENT PRESET 持有本会话的工具/persona/prompt 章节。发布服务的行属于 host 组合或 isolate 领域。预设位于 `${DSH_HOME:-$HOME/.dsh}/.agent-presets/<id>/`；NEVER 编辑部署自带 shipped 预设安装。
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+# `shell-env` stays in the HOST composition: `apps/cli/src/web.ts` injects it to
+# publish `DSH_WEB_URL`/`DSH_WEB_MODE`, and a host row that injects a service is
+# the criterion for host-plane ownership — injection resolves before any session
+# exists, so there is no agent to key by. Behind a preset realm those variables
+# never reached the model's shell at all. Both shell tools consume the host
+# registry from here; their executors (`bash-sandbox`/`pwsh-sandbox`) are
+# host-plane too.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+# Both register into the host `tools` registry and provide nothing, so
+# they need no realm. The `fs` service and its policy stay in the host.
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── background jobs ────────────────────────────────────────────────────────
+
+# Only the model-facing controls. The task REGISTRY stays on the host plane:
+# its producers sit outside any realm this file could put it in — `tool-bash`
+# above resolves it with `ctx.get`, and an entry-local realm here is invisible
+# to every sibling row, so `run_in_background` would answer "background jobs
+# unavailable" while these controls sat in the catalog. The registry is keyed by
+# owning agent anyway, so one host instance serves every session. What a preset
+# chooses is whether its agent can collect and stop background work at all.
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── goals ───────────────────────────────────────────────────────────────────
+
+# Only the model-facing tool. The goal SERVICE, its session driver, and the
+# `/goal` command stay on the host plane: the Gateway serves the goal domain as
+# Remote endpoints whose receiver comes from a generated descriptor, so it
+# resolves `goals` on the host and an entry-local realm here would hide it. The
+# registry is keyed by session anyway, so one host instance serves every
+# session. What a preset chooses is whether its agent can call the goal tool.
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+
+# Plan state is per-agent by nature, so an entry-local realm is not a
+# workaround here — it is the correct lifetime.
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+              You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+              Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+              Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+              Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+              When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+# ── compaction ──────────────────────────────────────────────────────────────
+
+# `compaction-basic` reads `toolResultPrune` through `ctx.get`, so the pruner must
+# share this realm rather than sit outside it.
+#
+# `tokenMeter` is deliberately NOT in this realm: the meter stays on the HOST
+# plane, and the rows here resolve that one instance. It takes no configuration,
+# keys every fold by Session, and owns the context-meter projection units the
+# browser reads for every session — behind a realm those units would come and go
+# with whichever presets happen to be mounted. What a preset chooses is whether
+# its agent compacts at all, which is `compaction-basic` below.
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── delegation and workflows ────────────────────────────────────────────────
+
+# The `subagents` registry and its spawn/fork backends live in the HOST
+# composition: the registry is a process singleton whose cross-session queries
+# the api-proxy serves to the browser, and a provider name may only be
+# registered once. This preset contributes the delegation TOOLS, which resolve
+# that host registry.
+#
+# `workflows` is different — nothing outside an agent reads it — so every row
+# that reaches it shares one entry-local realm here, and a consumer left
+# outside would resolve a host registry this preset does not populate.
+#
+# `tool-subagent-report` is host-plane for the same reason as the registry,
+# not because a preset may not want it: it registers a CONTINUABLE SETUP on
+# that singleton rather than a tool this agent calls, and the setup list is
+# not scope-aware — one copy per mounted preset means every child gets
+# `report` registered once per live session, which throws on the second.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    # Product providers are host-plane singletons. Copy this preset, then
+    # remove `disabled` from either ordinary tool row to expose that product
+    # only to agents composed from the copy.
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        enableRunInBackground: false
+        maxDepth: provider-managed
+
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        enableRunInBackground: false
+        maxDepth: provider-managed
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+# The `web` service and its search provider stay in the host composition; only
+# the model-facing tool is per-session.
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: false
+    searchTimeoutMs: 60000
+
+# ── self-modification ───────────────────────────────────────────────────────
+
+# Read the live runtime, mount a temporary plugin, unmount it. The toolset is a
+# trust boundary, not a sandbox — see this file's header.
+- id: tool-cordis
+  name: '@deepseek-ai/dsh-tool-cordis'
+
+# The composition-authoring skill travels with this preset rather than living
+# in the user's skill root: it documents THIS deployment's two planes, and a
+# preset is the unit that gets copied and edited. `baseUrl` is the preset's
+# own directory, so the root resolves wherever the preset is installed.
+# Both rows register into THIS preset's layer of the host skill registry, so
+# they need no realm; the agent's merged catalog also carries whatever the
+# deployment registered globally (repository plugins).
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+- id: skill-packdge
+  name: '@deepseek-ai/dsh-skill-packdge'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'

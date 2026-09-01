@@ -1,0 +1,19 @@
+# 部署自带的 Cordis 技能（非本项目产物，不随项目发布）
+skills/cordis-plugin-development/
+skills/editing-cordis-compositions/
+
+# 运行时/环境
+.env
+*.local
+
+# 系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 节点/依赖（如未来引入）
+node_modules/
+.pnpm-store/
+
+# 临时产物
+*.tmp
