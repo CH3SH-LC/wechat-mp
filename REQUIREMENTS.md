@@ -123,6 +123,13 @@
 - 验收标准：852 字、5 节主体、8 类组件全覆盖、375px 壳渲染 24 图加载 + 19/19 文字界内 + 非白 39.4%、铁律全守（小标题 2 样式/卡片一种/气泡每屏≤2/徽章≤3/零 emoji）。
 - 状态：✅ 完成（已入 GitHub 仓库）
 
+### 2026-08-29｜第 12 轮：行内装饰资产与文字协调（登记后开发）
+
+- 需求：用户反馈新问题——**svg 资产难以与文字协调**（如"应该在第一行行首的小花由于大小问题飘到了第一行上面"）。知识文件教写者用 `![说明](art://sprig-grass)` 做行首装饰，但渲染器 `inline()` 对所有 art:// 统一输出 `max-width:56%;height:auto;vertical-align:middle;margin:12px auto`——行首小花被放大到近 192px 宽的巨大盒子，可见图案与 15px 文字基线完全脱离；且现有资产（sprig-grass/blossom-branch 等）图案在画布内位置不固定，无法预测对齐。要求：检查根因、设计方案、真实解决、自主测试。
+- 改动点：①**语法**：`![说明](art://名称[:显示高px])`（如 `art://inline-flower:16`），缺省 16px；②**渲染器**：`inline()` 内 art:// 改为行内装饰 CSS（`display:inline-block;height:Npx;width:auto;vertical-align:baseline;margin:0 3px 0 0`），整行图片路径保持居中 56% 不变；③**新资产族**：`test/inline-deco/` 6 个紧裁行内装饰资产（inline-flower 橙花/inline-sprig 小草/inline-leaf 青叶/inline-star 金星/inline-ball 足球/inline-seal 朱印），画布 120×120、图案包围盒 ≥70% 画布、底部锚点（底边留白 ≤5px）；④**知识文件**：新建 module-inline-deco（行内装饰规范：语法/紧裁/底部锚点/对齐/密度每屏 ≤2 处/三层验证），index-module 注册，module-badge/module-list 行内 art 引用指向新条目；⑤**SKILL-修改点**：追加第 12 轮（inline() 渲染器改动 + 6 新资产 + 语法表）。
+- 验收标准：before 复现证据（旧渲染 375px 壳实测图案与文字基线脱离 ≥20px）；after 375px 壳实测——每个行内图显示高=指定 px、图案底部与首行文字基线 ±4px 对齐、无横向重叠；资产 probe + 紧裁（≥70%）+ 底部锚点（≤5px）+ PNG ≤1MB 全绿；知识文件零 emoji/零渐变；文档同步。真实 SKILL.md 不动，转正待整体确认。
+- 状态：✅ 完成（before 复现：旧渲染花枝图片盒 192×105px、图案带与文字带底差 -40px；after 375px 壳 5/5 对齐全绿——显示高=指定 px、图案/文字像素底差 ≤4px、图案顶不飘出行；资产级 6/6 全绿——probe 3/3、紧裁 ≥70%、底部锚点 ≤5px、PNG ≤23KB；产物 test/inline-deco/（ARTS-inline-deco.mjs + render-inline-demo.mjs + verify-inline-deco.mjs + demo-inline-before/after.html/.png）；module-inline-deco 知识文件 + index-module 注册 + module-badge/module-list 指针 + SKILL-修改点第 12 轮；真实 SKILL.md 不动，转正待整体确认）
+
 ---
 
 （后续轮次在此追加：`### YYYY-MM-DD｜第 N 轮：<标题>`，含需求描述 / 改动点 / 验收标准 / 状态）

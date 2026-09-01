@@ -46,6 +46,7 @@
 | module-band.md | 花纹色带：斜纹/波点/棋盘/条纹/圆环 | 分区强调、小标题衬底 |
 | module-divider.md | 分割线：横线/渐变线/图文分隔 | 章节间、内容换气 |
 | module-badge.md | 徽章/角标：短标签提示 | 卖点、限量、NEW 标记 |
+| module-inline-deco.md | 行内装饰资产：行首小花/句间点缀（12-20px，紧裁+底部锚点，`art://名称:px`） | 正文行内想加小花/小草/星点/印章时 |
 | module-table.md | 表格：数据对比/参数清单 | 数据、对比、参数 |
 | module-image.md | 图片：配图/图注/多图行 | 配图场景 |
 | module-media.md | 音视频卡片：插入音视频 | 多媒体内容 |

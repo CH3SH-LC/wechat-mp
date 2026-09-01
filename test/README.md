@@ -217,6 +217,24 @@
 
 **关键经验**：①整图叠字行高需紧凑（1.2-1.4），CSS 行高 1.75 余量不足；②连通性校验（parts/runs）受 anti-aliasing 影响应做上限校验而非严格相等；③代码骨架组件（band/list/badge）优先 CSS 拼装，整图仅用于复杂图案——知识文件 §5.0 分档规范有效（card 加高案例）。
 
+## 〇·十九、第 12 轮记录：svg 行内资产与文字协调修复（2026-08-29）
+
+用户反馈："svg 资产难以与文字协调（比如应该在第一行行首的小花由于大小问题飘到了第一行上面）"。
+
+**根因**：①`inline()` 对 art:// 统一输出 `max-width:56%;height:auto;vertical-align:middle;margin:12px auto`（整幅装饰样式误用于行内）→ 行首小花放大成 192×105px 巨盒，图案带与文字带底差 -40px（实测）；②旧资产（300×300 等大画布）图案位置无对齐契约，缩小后无法预测与基线关系。
+
+**修复三板斧**：①尺寸受控——行内语法 `art://名称[:px]`（缺省 16px，12-20px 为宜）；②底部锚点——行内资产画布 120×120、图案包围盒 ≥70%、图案底贴画布底（留白 ≤5px）；③基线对齐——行内 CSS `display:inline-block;vertical-align:baseline;margin:0 3px 0 0`（独立成行整幅 art:// 保持居中 56% 不变）。
+
+**产出（`test/inline-deco/`）**：
+- `ARTS-inline-deco.mjs`：6 个行内资产（inline-flower 橙花 / inline-sprig 绿草 / inline-leaf 青叶 / inline-star 金星 / inline-ball 足球 / inline-seal 朱印），各 3 个纯色 probe
+- `render-inline-demo.mjs`：before/after 375px 壳对比渲染 + DOM/像素带验证
+- `verify-inline-deco.mjs`：独立复跑（资产级 probe/紧裁/锚点/体积 + 375px 壳像素带对齐）
+- 产物：`png-inline/*.png`（4x 480×480，12-23KB）、`demo-inline-before.html/.png`、`demo-inline-after.html/.png`
+
+**验证全绿**：before 复现（图片盒 192.1×105.6px、底差 -40px）；after 375px 壳 5/5 对齐（显示高=指定 px、图案/文字像素带底差 ≤4px 实测 -1~-2px、图案顶不飘出行）；资产级 6/6（probe 3/3、紧裁 ≥70%×70%、底部留白 ≤20px@4x、PNG ≤23KB）。
+
+**知识文件**：`knowledge/module-inline-deco.md`（八节：核心模型/构建总则/构建模板/风格填充/现有实现/铁律/示例/常见错误/个性化）；index-module 注册；module-badge / module-list 行内 art 引用补指针；SKILL-修改点第 12 轮（106→112 资产）。真实库未动，转正待整体确认。
+
 ## 一、模拟了哪些修改
 
 | 真实位置 | 模拟文件 | 动作 |
