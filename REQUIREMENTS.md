@@ -114,7 +114,14 @@
 - 需求：用户指令"将整个项目开源到 github 上，作为一个新的公开仓库"。
 - 改动点：①敏感信息扫描（无实际凭据，仅表单字段定义）；②`.gitignore` 排除部署自带 cordis 技能（cordis-plugin-development/editing-cordis-compositions）与运行时文件；③`git init` + 初始提交（470 文件/47698 行）；④README 改写为开源版（特性/目录/快速开始/开发历史）；⑤新增 MIT LICENSE；⑥`gh repo create --public` 创建并推送。
 - 验收标准：公开仓库可访问、本地与远程同步、无敏感信息泄露、部署自带技能不随项目发布。
-- 状态：✅ 完成（`https://github.com/CH3SH-LC/wechat-mp`，PUBLIC，master 分支 2 commits：3b29032 初始 + 500cbf6 README/LICENSE；本地=远程 500cbf6；测试推文 product-new 生成后另行 commit）
+- 状态：✅ 完成（`https://github.com/CH3SH-LC/wechat-mp`，PUBLIC，master 分支 4 commits：3b29032 初始 + 500cbf6 README/LICENSE + 3f19255 第 11 轮登记 + 3fad80d 测试推文；本地=远程 3fad80d）
+
+### 2026-08-29｜第 11 轮·追加：新生入学典礼测试推文（完成）
+
+- 需求：用户指令"开子智能体，借助最新的知识库，生成一篇完整的测试推文，一次生成，我要看效果。测试推文是介绍新生入学典礼"。
+- 改动点：子智能体（2d8cb5f3）注入 9 个知识文件 + 80 资产池，生成 `test/product-new/`（article-source.md / render-new.mjs / demo-new.html / demo-new.png）；主智能体独立复跑验证全绿后提交推送（3fad80d）。
+- 验收标准：852 字、5 节主体、8 类组件全覆盖、375px 壳渲染 24 图加载 + 19/19 文字界内 + 非白 39.4%、铁律全守（小标题 2 样式/卡片一种/气泡每屏≤2/徽章≤3/零 emoji）。
+- 状态：✅ 完成（已入 GitHub 仓库）
 
 ---
 
