@@ -109,6 +109,13 @@
 - 验收标准：6 组件知识文件全部含 ≥3 组合方式模板 + §5.0 规范；每组件 10 资产三层验证 10/10（独立复跑）；原条目参数 100% 迁移无丢失；REQUIREMENTS/PROGRESS 双文件同步。
 - 状态：✅ 完成（阶段 A：6 个知识文件 module-{card,divider,band,steps,list,badge}.md 全部落盘并通过参数迁移审查；阶段 B：6 个资产生成子智能体并行产出 60 资产（36 组合方式覆盖），全部三层验证独立复跑 10/10——渲染+probe+体积 / zone 洁净 / 375px 壳 DOM；card 按知识文件"不得硬塞"规则加高画布至 750×360；divider 洁净带校验器连通性抖动修正为上限校验；产物在 test/assets/{card,divider,band,steps,list,badge}/，真实库未动，转正待整体确认）
 
+### 2026-08-29｜第 11 轮：项目开源到 GitHub（完成）
+
+- 需求：用户指令"将整个项目开源到 github 上，作为一个新的公开仓库"。
+- 改动点：①敏感信息扫描（无实际凭据，仅表单字段定义）；②`.gitignore` 排除部署自带 cordis 技能（cordis-plugin-development/editing-cordis-compositions）与运行时文件；③`git init` + 初始提交（470 文件/47698 行）；④README 改写为开源版（特性/目录/快速开始/开发历史）；⑤新增 MIT LICENSE；⑥`gh repo create --public` 创建并推送。
+- 验收标准：公开仓库可访问、本地与远程同步、无敏感信息泄露、部署自带技能不随项目发布。
+- 状态：✅ 完成（`https://github.com/CH3SH-LC/wechat-mp`，PUBLIC，master 分支 2 commits：3b29032 初始 + 500cbf6 README/LICENSE；本地=远程 500cbf6；测试推文 product-new 生成后另行 commit）
+
 ---
 
 （后续轮次在此追加：`### YYYY-MM-DD｜第 N 轮：<标题>`，含需求描述 / 改动点 / 验收标准 / 状态）
