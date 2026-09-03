@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
+import SettingsPanel from './components/SettingsPanel'
 import { buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
@@ -39,6 +40,7 @@ export default function App() {
   const [style, setStyle] = useState<Style>('auto')
   const [kbCount, setKbCount] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState('')
+  const [showSettings, setShowSettings] = useState(false)
 
   // 知识库懒加载：首屏后异步载入，显示条目数
   useEffect(() => {
@@ -225,8 +227,12 @@ export default function App() {
           <span>{kbCount === null ? '知识库加载中…' : `知识库 ${kbCount} 条目 · 三层结构`}</span>
           {savedAt && <span className="hint">已自动保存 {savedAt}</span>}
           <span className="hint">底座：极简智能体（persona + 知识检索 + 流式对话）</span>
+          <button className="mini topbar-settings" onClick={() => setShowSettings(true)}>
+            设置
+          </button>
         </div>
       </header>
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
       <main className="workspace">
         <ChatPane
           msgs={msgs}

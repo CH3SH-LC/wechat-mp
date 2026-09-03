@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-04
+- [New Feature] 第 7 轮：应用内 API 设置——顶栏设置面板（Key 掩码/端点/模型，settings.json/localStorage），密钥解析 env>设置>~/.dsh 兼容回退（pick_key 纯函数）；Rust 16/16；E2E 七场景全绿含 S7 保存→刷新持久→恢复默认
 - [Build] 第 6 轮：安装器真实验证——setup 静默安装 exit 0 → 安装版启动存活 → 卸载 exit 0 目录清理，发布闭环完成
 - [Build] 第 5 轮：发布打包——tauri build --bundles nsis 成功（release exe 12.2MB + setup 3.7MB），release exe 启动冒烟通过；RELEASE-NOTES.md 发布说明；清理 dead_code；回归 13/13
 - [New Feature] 第 4 轮：会话自动存档/恢复（draft.rs→文档/wechat-mp-workspace/draft.json 损坏容错，浏览器 localStorage；防抖自动保存+流结束即存+顶栏已自动保存；E2E S1.6 刷新恢复/清空清存储通过）+ 导出目录统一 workspace/exports + live_article_sample 真实整篇抽样（3753 字 0 issues）；Rust 13/13

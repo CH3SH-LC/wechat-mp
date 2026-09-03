@@ -29,10 +29,12 @@
 
 ## 配置
 
-- 模型密钥：环境变量 `DEEPSEEK_API_KEY`；未设置时自动读取
-  `~/.dsh/.credentials.yaml` 的 `DEEPSEEK_API_KEY`（仅本机自用，绝不入库）。
-- 端点/模型：`DEEPSEEK_BASE_URL`（默认 https://api.deepseek.com）、
-  `DEEPSEEK_MODEL`（默认 deepseek-chat）。
+- 应用内「设置」面板（顶栏按钮）：API Key（掩码输入）/ 接口地址 / 模型，
+  保存到 `文档/wechat-mp-workspace/settings.json`（浏览器模式 localStorage）。
+- 密钥优先级：环境变量 `DEEPSEEK_API_KEY` > 应用设置 > 旧版 `~/.dsh/.credentials.yaml`
+  兼容读取（仅桌面模式，用于老机器平滑迁移）。
+- 端点/模型：设置面板或 `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`（默认
+  https://api.deepseek.com、deepseek-chat）。设置明文存本地，仅本机自用，不入库。
 
 ## 验证基线（第 1-5 轮全绿）
 

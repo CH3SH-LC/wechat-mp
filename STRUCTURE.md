@@ -25,8 +25,9 @@ wechat-mp-desktop/
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左栏：消息流 + 快速示例 + 输入行
-│   │   └── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 缩放/复制/清空
+│   │   ├── ChatPane.tsx   # 左栏：消息流 + 快速示例 + 模式/风格控制条 + 输入行
+│   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
+│   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
 │   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
@@ -34,7 +35,8 @@ wechat-mp-desktop/
 │   │   ├── extract.ts     # 从回复中提取 ```html 围栏
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
-│   │   └── draft.ts       # 会话存档：Tauri→save/load_draft / 浏览器→localStorage
+│   │   ├── draft.ts       # 会话存档：Tauri→save/load_draft / 浏览器→localStorage
+│   │   └── settings.ts    # API 设置：Tauri→save/load_settings / 浏览器→localStorage
 │   └── knowledge/         # 知识语料 149 文件（三层：文本/视觉/插图/其它 + 00-GUIDE/design-logic）
 │       ├── 00-GUIDE.md    # 三层路由总表
 │       ├── design-logic-components.md
@@ -46,10 +48,11 @@ wechat-mp-desktop/
     ├── icons/             # 应用图标
     └── src/
         ├── main.rs        # 入口（调 lib::run）
-        ├── lib.rs         # Builder + chat_stream / export_html / save_draft / load_draft 注册
-        ├── chat.rs        # LLM 客户端：密钥解析(env/credentials)、SSE 流式、事件推送、单测+live 冒烟/整篇抽样
-        ├── export.rs      # 导出 HTML（文档/wechat-mp-workspace/exports/，文件名消毒，4 单测）
-        └── draft.rs       # 会话存档（文档/wechat-mp-workspace/draft.json，损坏容错，3 单测）
+        ├── lib.rs         # Builder + 6 命令注册（chat/export/draft/settings）
+        ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式、事件推送、单测+live
+        ├── export.rs      # 导出 HTML（workspace/exports/，文件名消毒，4 单测）
+        ├── draft.rs       # 会话存档（workspace/draft.json，损坏容错，3 单测）
+        └── settings.rs    # API 设置（workspace/settings.json，损坏→默认，2 单测）
 
 ## 当前核心事实
 - 运行时：Node 24 / Rust 1.95；包管理器：pnpm 11（onlyBuiltDependencies esbuild）

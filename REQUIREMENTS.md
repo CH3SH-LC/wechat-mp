@@ -11,6 +11,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-04｜第 7 轮：应用内 API 设置——彻底脱离 ~/.dsh（开发中）
+- 需求：桌面端对外分发后不应依赖用户机器上的 ~/.dsh 凭据：应用内「设置」面板可配置 API Key/端点/模型，存到工作区 settings.json（env > 应用设置 > 旧 ~/.dsh 兼容回退）；浏览器模式存 localStorage。
+- 改动点：src-tauri/settings.rs（读写 workspace/settings.json + 命令）；chat.rs 配置解析优先级重构（env > settings > ~/.dsh）；前端 SettingsPanel（顶栏入口，Key 掩码输入、模型/端点、保存/恢复默认）。
+- 验收标准：settings 单测通过（roundtrip/优先级纯函数）；E2E 设置场景（浏览器：填入保存 → 刷新 → 值仍在 → 恢复默认清空）；cargo test 全绿；文档同步 + 提交。
+- 状态：✅ 完成（Rust 16/16 含 settings roundtrip/损坏默认 + pick_key 优先级（修空白 env 处理）；E2E 七场景全绿含 S7 设置保存→刷新持久→恢复默认；chat_stream 走 resolve_config env>settings>~/.dsh；窗口重启含 6 命令）
+
 ### 2026-09-04｜第 6 轮：安装器真实验证——静默安装/启动/卸载闭环（开发中）
 - 需求：对第 5 轮 NSIS setup 做端到端真实验证：静默安装到用户目录 → 安装产物存在且可启动 → 静默卸载 → 目录清理。
 - 验收标准：安装 exit 0 且 exe 落盘；安装版启动冒烟通过；卸载 exit 0 且安装目录删除；文档同步 + 提交。

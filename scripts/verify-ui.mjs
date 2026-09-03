@@ -119,6 +119,41 @@ for (const [name, ok] of s2.checks) {
 }
 console.log(`S2 issue count = ${s2.nIssues}`)
 
+// S7 设置面板（浏览器模式 localStorage）：填入保存 → 刷新仍在 → 恢复默认清空
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.topbar-settings', { timeout: 20000 })
+  await page.locator('.topbar-settings').click()
+  await page.waitForSelector('.settings-panel', { timeout: 10000 })
+  await page.locator('.set-key').fill('sk-e2e-123')
+  await page.locator('.settings-foot .btn-send').click()
+  await page.waitForSelector('.settings-msg', { timeout: 10000 })
+  const savedText = await page.locator('.settings-msg').innerText()
+  const lsHas = await page.evaluate(() => (localStorage.getItem('wxmp-settings-v1') || '').includes('sk-e2e-123'))
+  const savedOk = savedText.includes('已保存') && lsHas
+  console.log(`  ${savedOk ? 'PASS' : 'FAIL'} - S7 settings save (${savedText})`)
+  if (!savedOk) failed++
+
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.locator('.topbar-settings').click()
+  await page.waitForSelector('.set-key', { timeout: 10000 })
+  const persisted = await page.locator('.set-key').inputValue()
+  const persistOk = persisted === 'sk-e2e-123'
+  console.log(`  ${persistOk ? 'PASS' : 'FAIL'} - S7 settings persisted after reload (${persisted})`)
+  if (!persistOk) failed++
+
+  await page.locator('.settings-foot .mini-danger').click()
+  await page.waitForTimeout(300)
+  const cleared = await page.locator('.set-key').inputValue()
+  const clearedOk = cleared === ''
+  console.log(`  ${clearedOk ? 'PASS' : 'FAIL'} - S7 settings reset to default (${cleared})`)
+  if (!clearedOk) failed++
+  await page.locator('.settings-head .mini').click()
+} catch (e) {
+  console.log('  FAIL - S7 settings error:', String(e).slice(0, 200))
+  failed++
+}
+
 if (errors.length) {
   console.log('browser errors:', errors.slice(0, 5))
   failed++

@@ -7,6 +7,24 @@
 
 ## 2026-09-04
 
+### [New Feature] 第 7 轮：应用内 API 设置——彻底脱离 ~/.dsh
+
+需求 / 变更原因：
+对外分发的桌面端不应依赖用户机器的 ~/.dsh 凭据——应用内提供 API 配置（Key/端点/模型），本地保存；密钥解析优先级 env > 应用设置 > 旧 ~/.dsh 兼容回退。
+
+实现：
+- src-tauri/src/settings.rs：AppSettings + read/save（损坏→默认不覆盖）+ save_settings/load_settings 命令（2 单测）
+- chat.rs：LlmConfig + resolve_config（env > settings.json > ~/.dsh legacy）+ stream_chat 改收 &LlmConfig（修空白 env 处理，+1 优先级单测）
+- 前端 lib/settings.ts（Tauri invoke / localStorage wxmp-settings-v1）+ SettingsPanel（Key 掩码/地址/模型/保存/恢复默认/优先级说明）+ 顶栏「设置」入口
+- RELEASE-NOTES 配置段改写
+
+验证：
+- cargo test 16/16（2 ignored）
+- pnpm build exit 0（主包 240.3kB）
+- E2E 七场景全绿：S1 通过 / S1.5 导出 / S1.6 恢复+清空 / S2 检出 4 项 / **S7 设置保存→刷新持久(sk-e2e-123)→恢复默认清空**
+
+---
+
 ### [Build] 第 6 轮：安装器真实验证——静默安装/启动/卸载闭环
 
 需求 / 变更原因：

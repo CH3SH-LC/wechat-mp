@@ -1,0 +1,80 @@
+// settings.ts —— 应用内 API 设置：Tauri → settings.json（文档/wechat-mp-workspace/）；浏览器 → localStorage
+import { invoke } from '@tauri-apps/api/core'
+import { inTauri } from './chat'
+
+export interface AppSettings {
+  apiKey: string
+  baseUrl: string
+  model: string
+}
+
+export const DEFAULTS: AppSettings = {
+  apiKey: '',
+  baseUrl: 'https://api.deepseek.com',
+  model: 'deepseek-chat',
+}
+
+const LS_KEY = 'wxmp-settings-v1'
+
+export async function loadAppSettings(): Promise<AppSettings> {
+  if (inTauri()) {
+    try {
+      const s = await invoke<{ api_key: string; base_url: string; model: string }>('load_settings')
+      return {
+        apiKey: s.api_key || '',
+        baseUrl: s.base_url || DEFAULTS.baseUrl,
+        model: s.model || DEFAULTS.model,
+      }
+    } catch {
+      return { ...DEFAULTS }
+    }
+  }
+  try {
+    const raw = localStorage.getItem(LS_KEY)
+    if (!raw) return { ...DEFAULTS }
+    const d = JSON.parse(raw) as Partial<AppSettings>
+    return {
+      apiKey: d.apiKey || '',
+      baseUrl: d.baseUrl || DEFAULTS.baseUrl,
+      model: d.model || DEFAULTS.model,
+    }
+  } catch {
+    return { ...DEFAULTS }
+  }
+}
+
+export async function saveAppSettings(s: AppSettings): Promise<void> {
+  if (inTauri()) {
+    try {
+      await invoke('save_settings', {
+        settings: { api_key: s.apiKey, base_url: s.baseUrl, model: s.model },
+      })
+    } catch {
+      // ignore
+    }
+    return
+  }
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify(s))
+  } catch {
+    // ignore
+  }
+}
+
+export async function resetAppSettings(): Promise<void> {
+  if (inTauri()) {
+    try {
+      await invoke('save_settings', {
+        settings: { api_key: '', base_url: '', model: '' },
+      })
+    } catch {
+      // ignore
+    }
+    return
+  }
+  try {
+    localStorage.removeItem(LS_KEY)
+  } catch {
+    // ignore
+  }
+}

@@ -14,7 +14,7 @@ fn read_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.is_empty())
 }
 
-/// 从 `~/.dsh/.credentials.yaml` 提取 DEEPSEEK_API_KEY（仅本机自用）
+/// 从 `~/.dsh/.credentials.yaml` 提取 DEEPSEEK_API_KEY（兼容旧环境，仅本机自用）
 fn parse_credentials(content: &str) -> Option<String> {
     for line in content.lines() {
         let l = line.trim();
@@ -29,26 +29,55 @@ fn parse_credentials(content: &str) -> Option<String> {
     None
 }
 
-pub fn resolve_api_key() -> Result<String, String> {
-    if let Some(k) = read_env("DEEPSEEK_API_KEY") {
-        return Ok(k);
-    }
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "无法定位用户目录：请设置环境变量 DEEPSEEK_API_KEY".to_string())?;
+fn legacy_key_from_dsh() -> Option<String> {
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()?;
     let path = format!("{home}\\.dsh\\.credentials.yaml");
-    let content = std::fs::read_to_string(&path)
-        .map_err(|_| format!("未设置 DEEPSEEK_API_KEY，且读取密钥文件失败：{path}"))?;
-    parse_credentials(&content).ok_or_else(|| format!("密钥文件 {path} 中未找到 DEEPSEEK_API_KEY"))
+    let content = std::fs::read_to_string(path).ok()?;
+    parse_credentials(&content)
 }
 
-fn api_url() -> String {
-    let base = read_env("DEEPSEEK_BASE_URL").unwrap_or_else(|| "https://api.deepseek.com".into());
-    format!("{base}/chat/completions")
+pub struct LlmConfig {
+    pub key: String,
+    pub base_url: String,
+    pub model: String,
 }
 
-fn model() -> String {
-    read_env("DEEPSEEK_MODEL").unwrap_or_else(|| "deepseek-chat".into())
+/// 密钥优先级（纯函数，可测）：环境变量 > 应用设置 > 旧 ~/.dsh 凭据（空白视为未设置）
+fn pick_key(env: Option<&str>, file: &str, legacy: Option<&str>) -> Option<String> {
+    let env_trim = env.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let legacy_trim = legacy.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    env_trim
+        .or_else(|| (!file.trim().is_empty()).then(|| file.trim().to_string()))
+        .or(legacy_trim)
+}
+
+fn pick_text(env: Option<&str>, file: &str, default: &str) -> String {
+    env.filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| (!file.is_empty()).then(|| file.to_string()))
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// 组装最终配置：env > 工作区 settings.json > ~/.dsh 兼容回退
+pub fn resolve_config() -> Result<LlmConfig, String> {
+    let file = crate::settings::read_settings().unwrap_or_default();
+    let key = pick_key(
+        read_env("DEEPSEEK_API_KEY").as_deref(),
+        &file.api_key,
+        legacy_key_from_dsh().as_deref(),
+    )
+    .ok_or_else(|| "未配置 DEEPSEEK_API_KEY：请在应用「设置」中填写，或设置环境变量 DEEPSEEK_API_KEY".to_string())?;
+    let base_url = pick_text(
+        read_env("DEEPSEEK_BASE_URL").as_deref(),
+        &file.base_url,
+        "https://api.deepseek.com",
+    );
+    let model = pick_text(read_env("DEEPSEEK_MODEL").as_deref(), &file.model, "deepseek-chat");
+    Ok(LlmConfig { key, base_url, model })
+}
+
+pub fn resolve_api_key() -> Result<String, String> {
+    resolve_config().map(|c| c.key)
 }
 
 /// 解析一行 SSE：`data: {...}` → delta.content；`[DONE]` 或空 → None
@@ -67,19 +96,20 @@ fn sse_delta(line: &str) -> Option<String> {
 
 /// 流式对话核心：返回完整文本，同时逐段回调（测试可直接调用）
 async fn stream_chat(
-    key: &str,
+    cfg: &LlmConfig,
     messages: Vec<ChatMsg>,
     mut on_delta: impl FnMut(String),
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", cfg.base_url);
     let body = serde_json::json!({
-        "model": model(),
+        "model": cfg.model,
         "stream": true,
         "messages": messages,
     });
     let res = client
-        .post(api_url())
-        .header("Authorization", format!("Bearer {key}"))
+        .post(url)
+        .header("Authorization", format!("Bearer {}", cfg.key))
         .json(&body)
         .send()
         .await
@@ -119,8 +149,8 @@ async fn stream_chat(
 
 #[tauri::command]
 pub async fn chat_stream(app: AppHandle, messages: Vec<ChatMsg>) -> Result<(), String> {
-    let key = resolve_api_key()?;
-    stream_chat(&key, messages, |d| {
+    let cfg = resolve_config()?;
+    stream_chat(&cfg, messages, |d| {
         let _ = app.emit("chat-delta", d);
     })
     .await
@@ -149,6 +179,18 @@ mod tests {
     }
 
     #[test]
+    fn key_precedence_env_over_file_over_legacy() {
+        assert_eq!(
+            pick_key(Some("env"), "file", Some("legacy")).as_deref(),
+            Some("env")
+        );
+        assert_eq!(pick_key(None, "file", Some("legacy")).as_deref(), Some("file"));
+        assert_eq!(pick_key(None, "", Some("legacy")).as_deref(), Some("legacy"));
+        assert_eq!(pick_key(None, "", None), None);
+        assert_eq!(pick_key(Some("  "), "file", None).as_deref(), Some("file"));
+    }
+
+    #[test]
     fn sse_line_extracts_content() {
         let line = r#"data: {"choices":[{"delta":{"content":"你好"}}]}"#;
         assert_eq!(sse_delta(line).as_deref(), Some("你好"));
@@ -170,10 +212,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "需要真实 DeepSeek API 与密钥（env DEEPSEEK_API_KEY 或 ~/.dsh/.credentials.yaml）"]
     async fn live_deepseek_smoke() {
-        let key = resolve_api_key().expect("应能解析到密钥");
+        let cfg = resolve_config().expect("应能解析到密钥配置");
         let mut got = String::new();
         let reply = stream_chat(
-            &key,
+            &cfg,
             vec![ChatMsg {
                 role: "user".into(),
                 content: "只回复六个字：桌面链路测试通过".into(),
@@ -191,11 +233,11 @@ mod tests {
     #[ignore = "需要真实 DeepSeek API 与密钥"]
     async fn live_article_sample() {
         // 真实模型整篇输出抽样：按 persona 关键规则直接产出推文 HTML
-        let key = resolve_api_key().expect("应能解析到密钥");
+        let cfg = resolve_config().expect("应能解析到密钥配置");
         let system = "你是公众号推文创作专家。间距：块距16px/行高1.75。审美铁律：零emoji零图标字符、零linear-gradient、零box-shadow、低饱和纯色+细边框；不要<style>/<script>/<html>/<body>标签，全部内联样式；正文15-16px 深灰。只输出一个```html代码块。";
         let user = "写一篇咖啡店新店开业的宣传类推文，日系暖色调，500字左右，直接写";
         let reply = stream_chat(
-            &key,
+            &cfg,
             vec![
                 ChatMsg { role: "system".into(), content: system.into() },
                 ChatMsg { role: "user".into(), content: user.into() },
