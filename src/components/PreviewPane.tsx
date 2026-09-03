@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import type { QualityResult } from '../lib/quality'
 
 interface Props {
   html: string | null
+  quality: QualityResult | null
   onClear: () => void
 }
 
@@ -22,7 +24,7 @@ ${html}
 </html>`
 }
 
-export default function PreviewPane({ html, onClear }: Props) {
+export default function PreviewPane({ html, quality, onClear }: Props) {
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
 
@@ -54,6 +56,21 @@ export default function PreviewPane({ html, onClear }: Props) {
           </button>
         </div>
       </div>
+
+      {html && quality && (
+        <div className={`quality-strip ${quality.ok ? 'q-ok' : 'q-fail'}`}>
+          <span className="q-title">{quality.ok ? '质量检查 · 通过' : `质量检查 · ${quality.issues.length} 项问题`}</span>
+          {!quality.ok && (
+            <ul className="q-list">
+              {quality.issues.slice(0, 5).map((it, i) => (
+                <li key={i}>
+                  {it.kind}: {it.detail}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       <div className="preview-body">
         {!html ? (

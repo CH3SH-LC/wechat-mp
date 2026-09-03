@@ -40,6 +40,16 @@ export const MOCK_TOPICS: MockTopic[] = [
   },
 ]
 
+const BAD_HTML = `<section style="margin:0 0 16px;"><p style="font-size:15px;color:#333;line-height:1.75;">这是违规演示：包含 emoji 与渐变，应被质量检查检出。✅🎉</p></section>
+<section style="background:linear-gradient(135deg,#ff9a9e,#fecfef);border-radius:12px;padding:14px 16px;margin:0 0 16px;"><p style="font-size:15px;color:#333;line-height:1.75;margin:0;">渐变底色 + box-shadow:0 2px 8px rgba(0,0,0,.2)，全都不允许。</p></section>
+<section style="margin:0 0 16px;"><p style="font-size:15px;color:#333;line-height:1.75;margin:0;"><img src="https://example.com/x.jpg" style="width:100%;"></p></section>`
+
+export const MOCK_BAD: MockTopic = {
+  label: '演示：违规输出检测',
+  prompt: '演示质量检查：请故意输出包含 emoji、渐变与外链图的推文',
+  html: BAD_HTML,
+}
+
 export interface StreamHandle {
   cancel: () => void
 }
@@ -51,7 +61,8 @@ export function sendChatMock(
   onDone?: () => void,
 ): StreamHandle {
   const user = [...messages].reverse().find((m) => m.role === 'user')
-  const topic = MOCK_TOPICS.find((t) => user?.content.includes(t.label.slice(4))) ?? MOCK_TOPICS[0]
+  const bad = user?.content.includes('违规') ?? false
+  const topic = bad ? MOCK_BAD : (MOCK_TOPICS.find((t) => user?.content.includes(t.label.slice(4))) ?? MOCK_TOPICS[0])
   const full = `好的，按宣传类 + 校园风直接产出（375px 微信排版，零 emoji 零渐变）：\n\n\`\`\`html\n${topic.html}\n\`\`\``
   let i = 0
   const timer = window.setInterval(() => {

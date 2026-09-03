@@ -63,6 +63,35 @@ body {
 .badge-warn { background: #fff3e0; color: #b26a00; }
 
 .chat-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+
+/* ---------- 模式/风格控制条 ---------- */
+.chat-controls { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.ctrl-row { display: flex; align-items: center; gap: 8px; }
+.ctrl-label { font-size: 12px; color: var(--sub); }
+.ctrl-gap { margin-left: 6px; }
+.seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg-btn {
+  border: none; background: #fff; color: var(--text); font-size: 12px;
+  padding: 4px 10px; cursor: pointer;
+}
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn.seg-on { background: var(--accent); color: #fff; }
+.seg-btn:disabled { opacity: 0.55; cursor: default; }
+.style-select {
+  border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px;
+  font-size: 12px; color: var(--text); background: #fff; outline: none;
+}
+
+/* ---------- 质量检查条 ---------- */
+.quality-strip {
+  flex: 0 0 auto; margin: 0 12px 10px; padding: 8px 12px; border-radius: 8px;
+  font-size: 12.5px; max-height: 110px; overflow-y: auto;
+}
+.q-ok { background: #e4f4ec; color: var(--green); border: 1px solid #bfe5d2; }
+.q-fail { background: #fdecec; color: #a33; border: 1px solid #f3c3c3; }
+.q-title { font-weight: 700; }
+.q-list { margin: 4px 0 0; padding-left: 16px; }
+.q-list li { line-height: 1.6; }
 .chat-empty { color: var(--sub); font-size: 13px; margin: auto; text-align: center; max-width: 340px; }
 .chips { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .chip {

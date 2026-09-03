@@ -30,8 +30,9 @@ wechat-mp-desktop/
 │   ├── lib/
 │   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）
 │   │   ├── retrieval.ts   # 极简知识检索（主题词映射+二元组相似度，149 条目索引）
-│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟
-│   │   └── extract.ts     # 从回复中提取 ```html 围栏
+│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（含违规演示样本）
+│   │   ├── extract.ts     # 从回复中提取 ```html 围栏
+│   │   └── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   └── knowledge/         # 知识语料 149 文件（三层：文本/视觉/插图/其它 + 00-GUIDE/design-logic）
 │       ├── 00-GUIDE.md    # 三层路由总表
 │       ├── design-logic-components.md

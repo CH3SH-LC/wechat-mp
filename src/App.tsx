@@ -1,20 +1,41 @@
 import { useEffect, useRef, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
-import ChatPane, { DisplayMsg } from './components/ChatPane'
+import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import { buildSystemPrompt } from './lib/persona'
 import { retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
+import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
 import './App.css'
 
 let idSeq = 1
 
+const STYLE_PHRASE: Record<Exclude<Style, 'auto'>, string> = {
+  campus: '校园',
+  tech: '科技',
+  guochao: '国潮',
+  japanese: '日系',
+  minimal: '极简',
+  business: '商务',
+  handbook: '手账',
+}
+
+function decoratePrompt(text: string, mode: Mode, style: Style): string {
+  let out = text
+  if (mode !== 'auto') out += mode === 'promo' ? '\n（按宣传类处理：生动层次、利益点与行动号召）' : '\n（按文字类处理：简洁清晰、重内容轻装饰）'
+  if (style !== 'auto') out += `\n（视觉风格采用「${STYLE_PHRASE[style]}」，色板与模块表现以风格知识为准）`
+  return out
+}
+
 export default function App() {
   const [msgs, setMsgs] = useState<DisplayMsg[]>([])
   const [busy, setBusy] = useState(false)
   const [html, setHtml] = useState<string | null>(null)
+  const [quality, setQuality] = useState<QualityResult | null>(null)
   const [note, setNote] = useState('')
+  const [mode, setMode] = useState<Mode>('auto')
+  const [style, setStyle] = useState<Style>('auto')
 
   const busyRef = useRef(false)
   const draftRef = useRef('')
@@ -63,12 +84,14 @@ export default function App() {
 
   const send = async (text: string) => {
     if (busyRef.current) return
-    const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content: text }
+    const userText = decoratePrompt(text, mode, style)
+    const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content: userText }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
     setHtml(null)
+    setQuality(null)
 
-    const r = retrieve(text)
+    const r = retrieve(text + (style !== 'auto' ? STYLE_PHRASE[style] : ''))
     setNote(
       r.hits.length
         ? r.hits.slice(0, 8).join(' / ')
@@ -83,7 +106,7 @@ export default function App() {
       ...history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      { role: 'user', content: text },
+      { role: 'user', content: userText },
     ]
 
     busyRef.current = true
@@ -105,6 +128,12 @@ export default function App() {
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
+    // 流结束后跑一次质量检查
+    const final = extractHtml(draftRef.current)
+    if (final) {
+      setHtml(final.html)
+      setQuality(checkHtml(final.html))
+    }
   }
 
   const stop = () => {
@@ -117,6 +146,7 @@ export default function App() {
   const clear = () => {
     setMsgs([])
     setHtml(null)
+    setQuality(null)
     setNote('')
   }
 
@@ -142,8 +172,12 @@ export default function App() {
           onStop={stop}
           status={status}
           knowledgeNote={note}
+          mode={mode}
+          style={style}
+          onModeChange={setMode}
+          onStyleChange={setStyle}
         />
-        <PreviewPane html={html} onClear={clear} />
+        <PreviewPane html={html} quality={quality} onClear={clear} />
       </main>
     </div>
   )

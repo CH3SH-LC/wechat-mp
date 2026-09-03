@@ -14,7 +14,31 @@ interface Props {
   onStop: () => void
   status: string
   knowledgeNote: string
+  mode: Mode
+  style: Style
+  onModeChange: (m: Mode) => void
+  onStyleChange: (s: Style) => void
 }
+
+export type Mode = 'auto' | 'text' | 'promo'
+export type Style = 'auto' | 'campus' | 'tech' | 'guochao' | 'japanese' | 'minimal' | 'business' | 'handbook'
+
+const MODES: { v: Mode; label: string }[] = [
+  { v: 'auto', label: '自动' },
+  { v: 'text', label: '文字类' },
+  { v: 'promo', label: '宣传类' },
+]
+
+const STYLES: { v: Style; label: string }[] = [
+  { v: 'auto', label: '风格自动' },
+  { v: 'campus', label: '校园' },
+  { v: 'tech', label: '科技' },
+  { v: 'guochao', label: '国潮' },
+  { v: 'japanese', label: '日系' },
+  { v: 'minimal', label: '极简' },
+  { v: 'business', label: '商务' },
+  { v: 'handbook', label: '手账' },
+]
 
 const QUICK_PROMPTS = [
   '写一篇新生入学典礼的宣传类推文，校园风，直接写',
@@ -22,7 +46,18 @@ const QUICK_PROMPTS = [
   '写一篇软件使用教程的干货文开头与三个分点，直接写',
 ]
 
-export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledgeNote }: Props) {
+export default function ChatPane({
+  msgs,
+  busy,
+  onSend,
+  onStop,
+  status,
+  knowledgeNote,
+  mode,
+  style,
+  onModeChange,
+  onStyleChange,
+}: Props) {
   const [input, setInput] = useState('')
 
   const send = () => {
@@ -38,6 +73,37 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
         <span className="dot" />
         AI 对话生成
         <span className={`badge ${status.includes('模拟') ? 'badge-warn' : 'badge-ok'}`}>{status}</span>
+      </div>
+
+      <div className="chat-controls">
+        <div className="ctrl-row">
+          <span className="ctrl-label">模式</span>
+          <div className="seg">
+            {MODES.map((m) => (
+              <button
+                key={m.v}
+                className={`seg-btn ${mode === m.v ? 'seg-on' : ''}`}
+                disabled={busy}
+                onClick={() => onModeChange(m.v)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <span className="ctrl-label ctrl-gap">风格</span>
+          <select
+            className="style-select"
+            value={style}
+            disabled={busy}
+            onChange={(e) => onStyleChange(e.target.value as Style)}
+          >
+            {STYLES.map((s) => (
+              <option key={s.v} value={s.v}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div className="chat-body">
@@ -56,6 +122,9 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
                 ▶ {MOCK_TOPICS[0].label}
               </button>
             )}
+            <button className="chip" disabled={busy} onClick={() => onSend('演示质量检查：请故意输出包含 emoji、渐变与外链图的推文（违规输出检测）')}>
+              演示：违规输出检测
+            </button>
           </div>
         )}
 
