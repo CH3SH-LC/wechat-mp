@@ -33,10 +33,6 @@ pub fn exports_dir() -> Result<std::path::PathBuf, String> {
     Ok(workspace_dir()?.join("exports"))
 }
 
-fn draft_path() -> Result<std::path::PathBuf, String> {
-    Ok(workspace_dir()?.join("draft.json"))
-}
-
 pub fn save_draft_to(dir: &Path, draft: &Draft) -> Result<String, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败：{e}"))?;
     let path = dir.join("draft.json");

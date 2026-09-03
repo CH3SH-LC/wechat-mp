@@ -7,6 +7,24 @@
 
 ## 2026-09-04
 
+### [Build] 第 5 轮：发布打包——独立安装版（tauri build + NSIS）
+
+需求 / 变更原因：
+把桌面端做成可脱离开发环境交付的独立安装版：release 编译 + NSIS 安装器；并冒烟验证发布产物可启动。
+
+产出：
+- `pnpm tauri build --bundles nsis`：release exe 12.2MB + NSIS setup 3.7MB（wechat-mp-desktop_0.1.0_x64-setup.exe，makensis 本地工具无需外网）
+- RELEASE-NOTES.md：功能清单 / 运行与打包方式 / 配置 / 验证基线 / 已知边界
+- 清理 draft.rs dead_code 警告（删除未用 draft_path）
+
+验证：
+- 产物存在：bundle/nsis/setup.exe 3.7MB、release/wechat-mp-desktop.exe 12.2MB
+- release exe 启动冒烟：进程存活（78MB）→ 正常关闭
+- 回归 cargo test 13/13（2 ignored）
+- tauri build 整程 1m34s release + NSIS 完成（exit 1 为 pnpm/stderr 噪音，产物完整）
+
+---
+
 ### [New Feature] 第 4 轮：会话自动存档/恢复 + 工作区目录统一 + 真实模型整篇抽样
 
 需求 / 变更原因：
