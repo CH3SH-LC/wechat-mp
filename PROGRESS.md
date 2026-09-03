@@ -7,6 +7,20 @@
 
 ## 2026-09-04
 
+### [Build] 第 8 轮：发布刷新——全功能 release 重建 + 安装闭环复验
+
+需求 / 变更原因：
+第 5 轮安装包落后于第 6/7 轮功能（存档目录统一、应用内设置），重建交付最终产物并复验安装闭环。
+
+产出 / 验证：
+- pnpm tauri build --bundles nsis 重建（release 32s；exe + setup 覆盖）
+- 复验：静默安装 exit 0 → 安装版启动存活 → 卸载 exit 0 目录删除
+- 清理 resolve_api_key dead_code（release 无用）
+- cargo 16/16 无警告
+- 交付物：src-tauri/target/release/bundle/nsis/wechat-mp-desktop_0.1.0_x64-setup.exe（含 1-7 轮全部功能）
+
+---
+
 ### [New Feature] 第 7 轮：应用内 API 设置——彻底脱离 ~/.dsh
 
 需求 / 变更原因：

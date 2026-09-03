@@ -76,10 +76,6 @@ pub fn resolve_config() -> Result<LlmConfig, String> {
     Ok(LlmConfig { key, base_url, model })
 }
 
-pub fn resolve_api_key() -> Result<String, String> {
-    resolve_config().map(|c| c.key)
-}
-
 /// 解析一行 SSE：`data: {...}` → delta.content；`[DONE]` 或空 → None
 fn sse_delta(line: &str) -> Option<String> {
     let l = line.trim();

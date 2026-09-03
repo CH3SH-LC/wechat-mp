@@ -11,6 +11,11 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-04｜第 8 轮：发布刷新——含全功能的 release 重建 + 安装闭环复验（开发中）
+- 需求：第 5 轮安装包不含第 6/7 轮功能（会话存档目录统一、应用内设置），重建含全功能 release 并复验安装/卸载闭环；交付最终产物。
+- 验收标准：tauri build --bundles nsis 成功；静默安装 → 安装版启动存活 → 卸载 exit 0 目录清理；文档同步 + 提交。
+- 状态：✅ 完成（全功能 release 重建成功（32s，含第 7 轮设置）；静默安装 exit 0 → 安装版启动存活 → 卸载 exit 0 目录删除；清理 resolve_api_key dead_code；cargo 16/16 无警告）
+
 ### 2026-09-04｜第 7 轮：应用内 API 设置——彻底脱离 ~/.dsh（开发中）
 - 需求：桌面端对外分发后不应依赖用户机器上的 ~/.dsh 凭据：应用内「设置」面板可配置 API Key/端点/模型，存到工作区 settings.json（env > 应用设置 > 旧 ~/.dsh 兼容回退）；浏览器模式存 localStorage。
 - 改动点：src-tauri/settings.rs（读写 workspace/settings.json + 命令）；chat.rs 配置解析优先级重构（env > settings > ~/.dsh）；前端 SettingsPanel（顶栏入口，Key 掩码输入、模型/端点、保存/恢复默认）。
