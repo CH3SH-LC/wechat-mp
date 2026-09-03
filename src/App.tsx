@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import { buildSystemPrompt } from './lib/persona'
-import { retrieve } from './lib/retrieval'
+import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
@@ -36,6 +36,12 @@ export default function App() {
   const [note, setNote] = useState('')
   const [mode, setMode] = useState<Mode>('auto')
   const [style, setStyle] = useState<Style>('auto')
+  const [kbCount, setKbCount] = useState<number | null>(null)
+
+  // 知识库懒加载：首屏后异步载入，显示条目数
+  useEffect(() => {
+    ensureKnowledgeLoaded().then((e) => setKbCount(e.length)).catch(() => setKbCount(0))
+  }, [])
 
   const busyRef = useRef(false)
   const draftRef = useRef('')
@@ -91,7 +97,7 @@ export default function App() {
     setHtml(null)
     setQuality(null)
 
-    const r = retrieve(text + (style !== 'auto' ? STYLE_PHRASE[style] : ''))
+    const r = await retrieve(text + (style !== 'auto' ? STYLE_PHRASE[style] : ''))
     setNote(
       r.hits.length
         ? r.hits.slice(0, 8).join(' / ')
@@ -160,7 +166,7 @@ export default function App() {
           公众号推文助手
         </div>
         <div className="topbar-meta">
-          <span>知识库 149 条目 · 三层结构</span>
+          <span>{kbCount === null ? '知识库加载中…' : `知识库 ${kbCount} 条目 · 三层结构`}</span>
           <span className="hint">底座：极简智能体（persona + 知识检索 + 流式对话）</span>
         </div>
       </header>

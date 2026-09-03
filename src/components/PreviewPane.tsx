@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { QualityResult } from '../lib/quality'
+import { exportHtml } from '../lib/exportHtml'
 
 interface Props {
   html: string | null
@@ -27,6 +28,7 @@ ${html}
 export default function PreviewPane({ html, quality, onClear }: Props) {
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
+  const [exportMsg, setExportMsg] = useState('')
 
   const copy = async () => {
     if (!html) return
@@ -37,6 +39,13 @@ export default function PreviewPane({ html, quality, onClear }: Props) {
     } catch {
       setCopied(false)
     }
+  }
+
+  const doExport = async () => {
+    if (!html) return
+    const r = await exportHtml(html)
+    setExportMsg(r.ok ? `已导出：${r.msg}` : `导出失败：${r.msg}`)
+    setTimeout(() => setExportMsg(''), 8000)
   }
 
   return (
@@ -51,11 +60,16 @@ export default function PreviewPane({ html, quality, onClear }: Props) {
           <button className="mini" onClick={copy} disabled={!html}>
             {copied ? '已复制' : '复制 HTML'}
           </button>
+          <button className="mini" onClick={() => void doExport()} disabled={!html}>
+            导出
+          </button>
           <button className="mini mini-danger" onClick={onClear} disabled={!html}>
             清空
           </button>
         </div>
       </div>
+
+      {exportMsg && <div className="export-msg">{exportMsg}</div>}
 
       {html && quality && (
         <div className={`quality-strip ${quality.ok ? 'q-ok' : 'q-fail'}`}>

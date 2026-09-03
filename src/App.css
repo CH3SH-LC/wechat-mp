@@ -154,6 +154,11 @@ body {
 .mini:disabled { opacity: 0.45; cursor: default; }
 .mini-danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); }
 
+.export-msg {
+  flex: 0 0 auto; margin: 0 12px 10px; padding: 6px 10px; border-radius: 6px;
+  background: #eef3fb; color: #2457c4; font-size: 12px; word-break: break-all;
+}
+
 .preview-body { flex: 1 1 auto; overflow: auto; padding: 18px; display: flex; justify-content: center; }
 .preview-empty {
   border: 1.5px dashed #cdd5dd; border-radius: 12px; color: var(--sub);

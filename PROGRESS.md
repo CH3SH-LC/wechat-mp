@@ -7,6 +7,24 @@
 
 ## 2026-09-04
 
+### [New Feature] 第 3 轮：导出 HTML 文件 + 知识库懒加载减包
+
+需求 / 变更原因：
+生成结果要"能带走"：①导出按钮——Tauri 模式经 Rust 命令写入 文档/wechat-mp-exports/（文件名消毒、返回完整路径展示），浏览器模式走 <a download>；②知识库 eager 全量内联导致主包 2.4MB，改为懒加载按文件拆分。
+
+实现：
+- src-tauri/src/export.rs：default_export_dir/sanitize_name/with_html_ext/export_to_dir + export_html 命令（4 单测：非法字符消毒、htm/html 扩展、写盘内容一致、默认名前缀）
+- src/lib/exportHtml.ts：双通道导出（invoke export_html / blob+a.download，文件名 tuiwen-yyyymmdd-hhmm.html）；PreviewPane「导出」按钮 + 结果提示条
+- src/lib/retrieval.ts：import.meta.glob 改懒加载（ensureKnowledgeLoaded 缓存 Promise）；App 异步 await retrieve + 顶栏条目数动态显示（加载中…）
+
+验证：
+- cargo test 10/10（含 export 4 项；修测试预期：尾部 '_' 被 trim 属预期行为）
+- pnpm build exit 0：主包 2388kB → 235.8kB（gzip 75.1kB），知识条目拆 149 个懒加载 chunk
+- E2E 全绿：S1 质量通过 / S1.5 导出下载（tuiwen-20260904-0243.html 2254B，内容含 <section>）/ S2 违规检出 4 项
+- tauri dev 自动重建重启窗口（PID 更替），export_html 命令已注册
+
+---
+
 ### [New Feature] 第 2 轮：生成体验产品化——类型/风格选择注入 + 输出质量检查护栏
 
 需求 / 变更原因：

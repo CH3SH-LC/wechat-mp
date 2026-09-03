@@ -1,4 +1,5 @@
 // retrieval.ts —— 极简知识检索：按主题词映射 + 二元组相似度，从知识库挑 ≤K 个条目
+// 知识库懒加载：首次调用 ensureKnowledgeLoaded() 后缓存（打包体积从 2.4MB 降至数百 KB）
 import type { KnowledgePick } from './persona'
 
 export interface KnowledgeEntry {
@@ -9,26 +10,29 @@ export interface KnowledgeEntry {
   text: string // 全文
 }
 
-const mdFiles = import.meta.glob('/src/knowledge/**/*.md', {
+const mdGlob = import.meta.glob('/src/knowledge/**/*.md', {
   query: '?raw',
   import: 'default',
-  eager: true,
-}) as Record<string, string>
+}) as Record<string, () => Promise<string>>
 
-let cache: KnowledgeEntry[] | null = null
+let cache: Promise<KnowledgeEntry[]> | null = null
 
-export function loadKnowledge(): KnowledgeEntry[] {
-  if (cache) return cache
-  cache = Object.entries(mdFiles)
-    .map(([path, text]) => {
-      const rel = path.replace(/^\/src\/knowledge\//, '')
-      const seg = rel.split('/')
-      const name = (seg[seg.length - 1] || '').replace(/\.md$/, '')
-      const dir = seg.length > 1 ? seg[0] : ''
-      const head = (text.match(/^#\s+.*$/m) || [''])[0]
-      return { path, name, dir, head, text }
-    })
-    .filter((e) => !e.name.startsWith('00-') && e.name !== 'design-logic-components')
+export function ensureKnowledgeLoaded(): Promise<KnowledgeEntry[]> {
+  if (!cache) {
+    cache = Promise.all(
+      Object.entries(mdGlob).map(async ([path, loader]) => {
+        const text = (await loader()) as string
+        const rel = path.replace(/^\/src\/knowledge\//, '')
+        const seg = rel.split('/')
+        const name = (seg[seg.length - 1] || '').replace(/\.md$/, '')
+        const dir = seg.length > 1 ? seg[0] : ''
+        const head = (text.match(/^#\s+.*$/m) || [''])[0]
+        return { path, name, dir, head, text }
+      }),
+    ).then((entries) =>
+      entries.filter((e) => !e.name.startsWith('00-') && e.name !== 'design-logic-components'),
+    )
+  }
   return cache
 }
 
@@ -146,8 +150,8 @@ export interface RetrievalResult {
   sourceCount: number
 }
 
-export function retrieve(query: string, topK = 6): RetrievalResult {
-  const entries = loadKnowledge()
+export async function retrieve(query: string, topK = 6): Promise<RetrievalResult> {
+  const entries = await ensureKnowledgeLoaded()
   const hits: string[] = []
   const byName = new Map(entries.map((e) => [e.name, e]))
   const picked = new Set<string>()

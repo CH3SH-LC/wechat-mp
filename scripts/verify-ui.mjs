@@ -61,6 +61,23 @@ for (const [name, ok] of s1.checks) {
   if (!ok) failed++
 }
 
+// S1.5 导出（浏览器模式 = <a download>，playwright 捕获 download 事件）
+try {
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 15000 }),
+    page.locator('.mini', { hasText: '导出' }).click(),
+  ])
+  const fs = await import('fs')
+  const buf = fs.readFileSync(await download.path())
+  const text = buf.toString('utf8')
+  const dlOk = download.suggestedFilename().endsWith('.html') && text.includes('<section')
+  console.log(`  ${dlOk ? 'PASS' : 'FAIL'} - S1.5 export download (${download.suggestedFilename()}, ${buf.length} bytes)`)
+  if (!dlOk) failed++
+} catch (e) {
+  console.log('  FAIL - S1.5 export download error:', String(e).slice(0, 200))
+  failed++
+}
+
 const s2 = await runScenario(
   'fail',
   () => page.locator('.chip', { hasText: '违规输出检测' }).click(),
