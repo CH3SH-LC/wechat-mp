@@ -235,6 +235,19 @@
 
 **知识文件**：`knowledge/module-inline-deco.md`（八节：核心模型/构建总则/构建模板/风格填充/现有实现/铁律/示例/常见错误/个性化）；index-module 注册；module-badge / module-list 行内 art 引用补指针；SKILL-修改点第 12 轮（106→112 资产）。真实库未动，转正待整体确认。
 
+## 〇·二十、第 13 轮记录：知识库三层重组——文本/视觉/插图/其它（2026-08-29）
+
+用户方案（知识库由"13 维度平铺"重组为三层）：**L1 大方面 = 文本 / 视觉 / 插图 / 其它**；L2 细化 = 文本（内容类型——不同类型文案如何写 / 文案——不同位置文案如何写 / 合规）、视觉（模块——不同模块的组件资产如何生成 / 风格——不同风格如何填充组件模板）、插图（如何将图片、视频插入组件）、其它（封面 / 可读性）；L3 每个文件 = 细化方向上的一个点。发布、复盘等运营内容不放入本知识库。经用户确认：范围 = test/knowledge 镜像先行（真实库不动）；排除维度 = 移出另建归档目录 ops-knowledge/；插图 = 结构 + 补点（图片改写、视频新写，视频提纲先确认）。
+
+**产出（`test/knowledge/` 重组镜像，151 文件）**：
+- 归位映射：type 14 → 文本/内容类型；copy 25 + copy-subheading 草稿 → 文本/文案 26；compliance 6 → 文本/合规；module 44 → 视觉/模块 46（badge/band/bubble/card/divider/list/steps 7 个同名条目以 test 八节草稿版取代真实旧版，+module-subheading、module-inline-deco 草稿）；style 29 → 视觉/风格；image 4 → 插图/图片（定位链条化 + 新增 img-insert.md 插入环）；cover 5 → 其它/封面；readable 5 → 其它/可读性
+- 根级：新 `00-GUIDE.md`（三层路由总表 + 间距/审美硬规范 + 工作流）；design-logic-components.md 保留（全库先读）；`迁移说明.md`（映射表 + 排除 41 文件 → ops-knowledge/ 清单 + 转正执行顺序）；旧根级 index-copy/index-module 草稿退役删除（内容并入新 00-索引）
+- img-sources / img-copyright / img-processing / img-alternatives：头部定位补"图片插入链条第 N 环"，尾部交叉行改新路径（legacy/05 引用移除，指向 module-image / comp-copyright 等）
+
+**自检全绿**：复制文件与真实库源哈希 0 差异；草稿 10/10 就位；排除维度文件零进入（00-GUIDE 同名误报已核实）；8 方向 00-索引 ↔ 文件互检 0 失败。
+
+**待办 → 已完成**：插图/视频方向提纲 2026-08-29 经用户确认，video-prepare / video-insert + 00-索引 三文件写入 `插图/视频/`。真实库未动，转正待整体确认。
+
 ## 一、模拟了哪些修改
 
 | 真实位置 | 模拟文件 | 动作 |

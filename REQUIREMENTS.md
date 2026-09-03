@@ -130,6 +130,14 @@
 - 验收标准：before 复现证据（旧渲染 375px 壳实测图案与文字基线脱离 ≥20px）；after 375px 壳实测——每个行内图显示高=指定 px、图案底部与首行文字基线 ±4px 对齐、无横向重叠；资产 probe + 紧裁（≥70%）+ 底部锚点（≤5px）+ PNG ≤1MB 全绿；知识文件零 emoji/零渐变；文档同步。真实 SKILL.md 不动，转正待整体确认。
 - 状态：✅ 完成（before 复现：旧渲染花枝图片盒 192×105px、图案带与文字带底差 -40px；after 375px 壳 5/5 对齐全绿——显示高=指定 px、图案/文字像素底差 ≤4px、图案顶不飘出行；资产级 6/6 全绿——probe 3/3、紧裁 ≥70%、底部锚点 ≤5px、PNG ≤23KB；产物 test/inline-deco/（ARTS-inline-deco.mjs + render-inline-demo.mjs + verify-inline-deco.mjs + demo-inline-before/after.html/.png）；module-inline-deco 知识文件 + index-module 注册 + module-badge/module-list 指针 + SKILL-修改点第 12 轮；真实 SKILL.md 不动，转正待整体确认）
 
+### 2026-08-29｜第 13 轮：知识库三层重组——文本/视觉/插图/其它（方案已确认，开发中）
+
+- 需求：用户给出知识库重组方案（针对现 13 维度平铺结构）：**三层结构**——L1 大方面 = **文本 / 视觉 / 插图 / 其它**；L2 大方面的细化 = 文本（内容类型——不同类型文案如何写 / 文案——不同位置文案如何写 / 合规）、视觉（模块——不同模块的组件资产如何生成 / 风格——不同风格如何填充组件模板）、插图（如何将一个图片、视频插入组件）、其它（封面 / 可读性）；L3 每个文件 = 细化方向上的一个点。**发布、复盘等运营内容不放入本知识库**。
+- 改动点（经用户确认的三项决策）：①**范围**：先在 `test/knowledge/` 建立全量重组镜像，真实知识库 `skills/wechat-mp-bootstrap/knowledge/` 不动，转正待整体确认；②**排除维度处置**：选题 topic(5)/定位 positioning(4)/发布 publish(5)/增长 growth(4)/复盘 review(5)/历史归档 legacy(18) 共 41 文件移出 knowledge/，转正时另建归档目录 `ops-knowledge/`，本轮先出迁移清单；③**插图维度**：结构 + 补点——现有 img-* 4 文件按"如何插入组件"定位改写，视频插入为新内容（提纲先给用户确认后写入）。
+- 具体执行：在范围内容（type 14 / copy 25 / compliance 6 / module 44 / style 29 / image 4 / cover 5 / readable 5）按新三层树归位——文本/内容类型 ← type、文本/文案 ← copy（+test 草稿 copy-subheading）、文本/合规 ← compliance、视觉/模块 ← module（badge/band/bubble/card/divider/list/steps 7 个同名条目以 test/ 八节结构草稿版取代真实旧版，另 +module-subheading、module-inline-deco 新草稿）、视觉/风格 ← style、插图 ← image（改写）、其它/封面 ← cover、其它/可读性 ← readable；新 `00-GUIDE.md`（三层路由总表）+ 每个 L2 方向 `00-索引.md`（旧根级 index-* 退役）；镜像目录名用中文（文本/视觉/插图/其它 + 细化名），点文件名沿用英文前缀。
+- 验收标准：①镜像树与预期清单完全一致——自动校验脚本全绿（在范围文件 100% 归位、无缺无重、排除维度文件零进入、索引↔文件互检通过）；②8 个组件条目确为草稿版、其余复制文件与真实库源逐字节一致（哈希比对）；③新 00-GUIDE / 00-索引可直接路由到每个点；④插图改写完成 + 视频插入点（提纲确认后）落盘；⑤真实知识库与 SKILL.md 未动；⑥test/README + SKILL-修改点 + PROGRESS 双文件同步。
+- 状态：✅ 完成（镜像自检全绿：在范围文件 100% 归位无缺无重、复制文件哈希 0 差异、排除维度零进入（00-GUIDE 同名误报已核实）、9 方向 00-索引↔文件互检 0 失败）；img-* 链条化 + img-insert 落盘；插图/视频方向提纲经用户确认后 video-prepare / video-insert + 00-索引 落盘（镜像 151 文件）；真实库未动，转正待整体确认。
+
 ---
 
 （后续轮次在此追加：`### YYYY-MM-DD｜第 N 轮：<标题>`，含需求描述 / 改动点 / 验收标准 / 状态）

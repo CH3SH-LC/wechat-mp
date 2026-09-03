@@ -49,3 +49,17 @@
 5. 新增 `node render-inline-demo.mjs` + `verify-inline-deco.mjs` — 行内装饰 before/after 对比 + 独立验收（资产级 probe/紧裁/锚点 + 375px 壳基线对齐）
 6. `node scan-kb-v10.mjs` — 知识库全库残留扫描（新条目零 emoji/零渐变/零开发术语）
 7. 全绿 → 重新 define + update wxmp-1（Host+Client 同包）→ `cordis_inspect_self` 确认 currentPackageId 切换 + 双半区齐全
+
+## 第 13 轮新增修改点（知识库三层重组——文本/视觉/插图/其它）
+
+> 本轮的 SKILL.md 代码本身不改，改的是**知识库结构**（转正步骤详见 `test/knowledge/迁移说明.md`）。
+
+| # | 位置 | 改什么 |
+|---|---|---|
+| 13-1 | knowledge/ 目录结构 | 13 维度平铺 → 三层：`文本/`（内容类型/文案/合规）、`视觉/`（模块/风格）、`插图/`（图片/视频）、`其它/`（封面/可读性）；根级 index-*.md 退役 → 各方向内 00-索引.md；00-GUIDE.md 改为三层路由总表 |
+| 13-2 | knowledge/ 排除维度 | topic / positioning / publish / growth / review / legacy 共 41 文件移出 → `skills/wechat-mp-bootstrap/ops-knowledge/`（新归档目录），knowledge/ 内留归档指针 |
+| 13-3 | knowledge 条目替换/新增 | module-badge/band/bubble/card/divider/list/steps 用 test 八节草稿版替换真实旧版；module-subheading、module-inline-deco 入 视觉/模块；copy-subheading 入 文本/文案；design-logic-components.md 定位根级"先读" |
+| 13-4 | knowledge/image 维度 | image/ → 插图/图片/：img-* 4 文件定位链条化（获取→授权→处理→插入→替代）+ 新增 img-insert.md；legacy/05 引用移除、交叉行改新路径 |
+| 13-5 | 插图/视频（新方向） | video-prepare.md / video-insert.md + 00-索引（提纲 2026-08-29 确认，已落盘 test/knowledge/插图/视频/） |
+| 13-6 | SKILL.md「知识库（先读再写）」节 | 知识库路径/结构描述同步三层（转正时按镜像 00-GUIDE 改） |
+| 13-7 | 配套文件 | `agent.cordis.yml` persona「知识调用指南」旧 legacy 编号引用（07-design-text 等）→ 改三层路径；`dev/scripts/scan-kb-v10.mjs` 目录假设 13 维度 → 三层；README/REQUIREMENTS 同步 |
