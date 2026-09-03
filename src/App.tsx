@@ -7,6 +7,7 @@ import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
+import { clearDraft, fmtTime, loadDraft, saveDraft } from './lib/draft'
 import './App.css'
 
 let idSeq = 1
@@ -37,11 +38,56 @@ export default function App() {
   const [mode, setMode] = useState<Mode>('auto')
   const [style, setStyle] = useState<Style>('auto')
   const [kbCount, setKbCount] = useState<number | null>(null)
+  const [savedAt, setSavedAt] = useState('')
 
   // 知识库懒加载：首屏后异步载入，显示条目数
   useEffect(() => {
     ensureKnowledgeLoaded().then((e) => setKbCount(e.length)).catch(() => setKbCount(0))
   }, [])
+
+  // 启动恢复会话存档（桌面 draft.json / 浏览器 localStorage）
+  useEffect(() => {
+    let alive = true
+    loadDraft().then(({ data }) => {
+      if (!alive || !data || !data.messages.length) return
+      setMsgs(data.messages)
+      if (data.mode === 'text' || data.mode === 'promo') setMode(data.mode)
+      if (
+        data.style === 'campus' || data.style === 'tech' || data.style === 'guochao' ||
+        data.style === 'japanese' || data.style === 'minimal' || data.style === 'business' ||
+        data.style === 'handbook'
+      ) {
+        setStyle(data.style as Style)
+      }
+      const last = [...data.messages].reverse().find((m) => m.role === 'assistant')
+      if (last) {
+        const r = extractHtml(last.content)
+        if (r) {
+          setHtml(r.html)
+          setQuality(checkHtml(r.html))
+        }
+      }
+      setSavedAt(fmtTime(data.updatedAt))
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  // 变更自动存档（防抖 700ms）
+  useEffect(() => {
+    if (!msgs.length) return
+    const timer = window.setTimeout(() => {
+      saveDraft({
+        v: 1,
+        updatedAt: new Date().toISOString(),
+        mode,
+        style,
+        messages: msgs,
+      }).then(() => setSavedAt(fmtTime(new Date().toISOString())))
+    }, 700)
+    return () => window.clearTimeout(timer)
+  }, [msgs, mode, style])
 
   const busyRef = useRef(false)
   const draftRef = useRef('')
@@ -134,12 +180,20 @@ export default function App() {
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
-    // 流结束后跑一次质量检查
+    // 流结束后跑一次质量检查，并立即存档
     const final = extractHtml(draftRef.current)
     if (final) {
       setHtml(final.html)
       setQuality(checkHtml(final.html))
     }
+    const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq, role: 'assistant', content: draftRef.current }]
+    saveDraft({
+      v: 1,
+      updatedAt: new Date().toISOString(),
+      mode,
+      style,
+      messages: saveMsgs,
+    }).then(() => setSavedAt(fmtTime(new Date().toISOString())))
   }
 
   const stop = () => {
@@ -154,6 +208,8 @@ export default function App() {
     setHtml(null)
     setQuality(null)
     setNote('')
+    setSavedAt('')
+    void clearDraft()
   }
 
   const status = inTauri() ? 'DeepSeek 桌面' : '模拟模式（浏览器）'
@@ -167,6 +223,7 @@ export default function App() {
         </div>
         <div className="topbar-meta">
           <span>{kbCount === null ? '知识库加载中…' : `知识库 ${kbCount} 条目 · 三层结构`}</span>
+          {savedAt && <span className="hint">已自动保存 {savedAt}</span>}
           <span className="hint">底座：极简智能体（persona + 知识检索 + 流式对话）</span>
         </div>
       </header>

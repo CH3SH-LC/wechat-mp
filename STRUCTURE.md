@@ -33,7 +33,8 @@ wechat-mp-desktop/
 │   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（含违规演示样本）
 │   │   ├── extract.ts     # 从回复中提取 ```html 围栏
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
-│   │   └── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
+│   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
+│   │   └── draft.ts       # 会话存档：Tauri→save/load_draft / 浏览器→localStorage
 │   └── knowledge/         # 知识语料 149 文件（三层：文本/视觉/插图/其它 + 00-GUIDE/design-logic）
 │       ├── 00-GUIDE.md    # 三层路由总表
 │       ├── design-logic-components.md
@@ -45,9 +46,10 @@ wechat-mp-desktop/
     ├── icons/             # 应用图标
     └── src/
         ├── main.rs        # 入口（调 lib::run）
-        ├── lib.rs         # Builder + chat_stream / export_html 命令注册
-        ├── chat.rs        # LLM 客户端：密钥解析(env/credentials)、SSE 流式、事件推送、单测+live 冒烟
-        └── export.rs      # 导出 HTML 到 文档/wechat-mp-exports/（文件名消毒，4 单测）
+        ├── lib.rs         # Builder + chat_stream / export_html / save_draft / load_draft 注册
+        ├── chat.rs        # LLM 客户端：密钥解析(env/credentials)、SSE 流式、事件推送、单测+live 冒烟/整篇抽样
+        ├── export.rs      # 导出 HTML（文档/wechat-mp-workspace/exports/，文件名消毒，4 单测）
+        └── draft.rs       # 会话存档（文档/wechat-mp-workspace/draft.json，损坏容错，3 单测）
 
 ## 当前核心事实
 - 运行时：Node 24 / Rust 1.95；包管理器：pnpm 11（onlyBuiltDependencies esbuild）

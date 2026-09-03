@@ -78,6 +78,36 @@ try {
   failed++
 }
 
+// S1.6 会话恢复：等防抖存档 → 刷新 → 消息与预览仍在 → 清空 → 本地存储清空
+try {
+  await page.waitForTimeout(1100)
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForFunction(
+    () => {
+      const t = document.querySelector('.msg-assistant-text')
+      return !!t && t.textContent.includes('</section>')
+    },
+    { timeout: 20000 },
+  )
+  const userCount = await page.locator('.msg-user').count()
+  const frame = page.frames().find((f) => f !== page.mainFrame())
+  const body = frame ? await frame.locator('body').innerText() : ''
+  const savedTag = await page.locator('.topbar-meta .hint').first().innerText().catch(() => '')
+  const restoreOk = userCount >= 1 && body.trim().length > 40 && savedTag.includes('已自动保存')
+  console.log(`  ${restoreOk ? 'PASS' : 'FAIL'} - S1.6 restore after reload (userMsgs=${userCount}, body=${body.length})`)
+  if (!restoreOk) failed++
+
+  await page.locator('.mini', { hasText: '清空' }).click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  const stored = await page.evaluate(() => localStorage.getItem('wxmp-draft-v1'))
+  const clearOk = stored === null
+  console.log(`  ${clearOk ? 'PASS' : 'FAIL'} - S1.6 clear wipes storage`)
+  if (!clearOk) failed++
+} catch (e) {
+  console.log('  FAIL - S1.6 restore/clear error:', String(e).slice(0, 200))
+  failed++
+}
+
 const s2 = await runScenario(
   'fail',
   () => page.locator('.chip', { hasText: '违规输出检测' }).click(),

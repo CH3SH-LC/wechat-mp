@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn default_export_dir() -> Result<PathBuf, String> {
-    let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map_err(|_| "无法定位用户目录".to_string())?;
-    Ok(PathBuf::from(home).join("Documents").join("wechat-mp-exports"))
+    crate::draft::exports_dir()
 }
 
 fn sanitize_name(raw: &str) -> String {

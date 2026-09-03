@@ -7,6 +7,26 @@
 
 ## 2026-09-04
 
+### [New Feature] 第 4 轮：会话自动存档/恢复 + 工作区目录统一 + 真实模型整篇抽样
+
+需求 / 变更原因：
+桌面创作要"断电不丢稿"：对话自动存档并在启动恢复；导出与存档统一到一个工作区目录；并对真实模型整篇输出做合规抽样（此前只冒烟过短回复）。
+
+实现：
+- src-tauri/src/draft.rs：Draft/DraftMsg 结构 + save_draft_to/load_draft_from（损坏存档改名 draft.json.corrupt 容错）+ save_draft/load_draft 命令（3 单测）
+- 工作区统一：Documents/wechat-mp-workspace/{draft.json, exports/}（export.rs default_export_dir 改为 delegation 到 draft::exports_dir）
+- src/lib/draft.ts：双通道存档（Tauri invoke / 浏览器 localStorage wxmp-draft-v1）+ fmtTime
+- App：启动恢复（消息/模式/风格/预览与质量条）、变更防抖 700ms 自动存档、流结束立即存档、顶栏"已自动保存 HH:mm"、清空同时清存档
+- chat.rs 新增 live_article_sample（#[ignore] 真实整篇生成 + 软断言）
+
+验证：
+- cargo test 13/13（draft 3 项：roundtrip/缺失 None/损坏容错）
+- E2E 四场景全绿：S1 质量通过 / S1.5 导出下载 / S1.6 刷新恢复（userMsgs=1 预览恢复 + 顶栏已自动保存）→ 清空清存储 / S2 违规检出 4 项
+- live_article_sample：LIVE ARTICLE len=3753 issues=[]（零 gradient/shadow/style/emoji）
+- pnpm build exit 0（主包 237.7kB）；窗口 2:46:17 自动重启含 save_draft/load_draft 命令
+
+---
+
 ### [New Feature] 第 3 轮：导出 HTML 文件 + 知识库懒加载减包
 
 需求 / 变更原因：

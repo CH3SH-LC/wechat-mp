@@ -186,4 +186,45 @@ mod tests {
         assert!(!reply.trim().is_empty());
         println!("LIVE REPLY: {reply}");
     }
+
+    #[tokio::test]
+    #[ignore = "需要真实 DeepSeek API 与密钥"]
+    async fn live_article_sample() {
+        // 真实模型整篇输出抽样：按 persona 关键规则直接产出推文 HTML
+        let key = resolve_api_key().expect("应能解析到密钥");
+        let system = "你是公众号推文创作专家。间距：块距16px/行高1.75。审美铁律：零emoji零图标字符、零linear-gradient、零box-shadow、低饱和纯色+细边框；不要<style>/<script>/<html>/<body>标签，全部内联样式；正文15-16px 深灰。只输出一个```html代码块。";
+        let user = "写一篇咖啡店新店开业的宣传类推文，日系暖色调，500字左右，直接写";
+        let reply = stream_chat(
+            &key,
+            vec![
+                ChatMsg { role: "system".into(), content: system.into() },
+                ChatMsg { role: "user".into(), content: user.into() },
+            ],
+            |_| {},
+        )
+        .await
+        .expect("整篇生成应成功");
+        let body = reply.trim();
+        assert!(body.len() > 300, "回复过短: {}", body.len());
+        assert!(body.contains("<section") || body.contains("<div"), "缺少结构标签");
+        let mut issues = Vec::new();
+        if body.contains("linear-gradient") {
+            issues.push("gradient");
+        }
+        if body.contains("box-shadow") {
+            issues.push("shadow");
+        }
+        if body.contains("<style") {
+            issues.push("style-tag");
+        }
+        let emoji = body.chars().filter(|c| {
+            let cp = *c as u32;
+            (0x1F000..=0x1FAFF).contains(&cp) || matches!(cp, 0x2705 | 0x26A0 | 0x2B50)
+        }).count();
+        if emoji > 0 {
+            issues.push("emoji");
+        }
+        println!("LIVE ARTICLE: len={}, sections={}, issues={:?}", body.len(), body.matches("<section").count(), issues);
+        println!("LIVE HEAD: {}", body.chars().take(90).collect::<String>());
+    }
 }
