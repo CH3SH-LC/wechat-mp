@@ -231,49 +231,98 @@ try {
   failed++
 }
 
-// S9 需求澄清卡（req-clarify 落地）：模糊请求挂卡 → 确认后生成；直接写 → 带默认注直行
+// S9 通用对话（第 12 轮）：无卡片；创作模糊 → 对话反问 → 回答成文；直接写 → 不问直出；
+// 闲聊 → 自然回复且不产出预览；反问后说"算了" → 取消回对话不生成
 try {
   await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForSelector('textarea', { timeout: 20000 })
 
-  // 9a 模糊请求：出现澄清卡，不触发流式
-  await page.locator('textarea').fill('帮我写一篇推文，主题是新书上市')
-  await page.locator('textarea').press('Enter')
-  await page.waitForSelector('.clarify-card', { timeout: 10000 })
-  const cardText = await page.locator('.clarify-card').innerText()
-  const cardOk = cardText.includes('类型') && cardText.includes('字数') && cardText.includes('确认并生成')
-  console.log(`  ${cardOk ? 'PASS' : 'FAIL'} - S9a clarify card shown for vague request`)
-  if (!cardOk) failed++
-  const noStreamYet = (await page.locator('.typing').count()) === 0
-  console.log(`  ${noStreamYet ? 'PASS' : 'FAIL'} - S9a no generation before confirm`)
-  if (!noStreamYet) failed++
+  const ensureEmpty = async () => {
+    if ((await page.locator('.msg-user').count()) > 0) {
+      await page.locator('.mini', { hasText: '清空' }).click()
+      await page.waitForSelector('.chat-empty', { timeout: 10000 })
+    }
+  }
+  const sendLine = async (text) => {
+    await page.locator('textarea').fill(text)
+    await page.locator('textarea').press('Enter')
+  }
+  const waitTurn = async () => {
+    await page.waitForSelector('.typing', { timeout: 10000 }).catch(() => {})
+    await waitStreamDone()
+  }
+  const lastAssistantText = () => page.locator('.msg-assistant-text').last().innerText()
 
-  // 点选 日系 + 适中，确认后生成
-  await page.locator('.clarify-opts .chip', { hasText: '日系' }).click()
-  await page.locator('.clarify-opts .chip', { hasText: '适中' }).click()
-  await page.locator('.clarify-foot .btn-send').click()
-  await waitStreamDone()
-  const userA = await page.locator('.msg-user').last().innerText()
-  const annotOk = userA.includes('需求确认') && userA.includes('日系')
-  console.log(`  ${annotOk ? 'PASS' : 'FAIL'} - S9a confirm generates with annotation`)
-  if (!annotOk) failed++
-
-  // 9b 直接写：不弹卡，直行并附需求默认注
-  await page.locator('.mini', { hasText: '清空' }).click()
-  await page.waitForSelector('.chat-empty', { timeout: 10000 })
-  await page.locator('textarea').fill('写一篇咖啡店开业宣传，日系风，800字左右，直接写')
-  await page.locator('textarea').press('Enter')
-  await page.waitForTimeout(600)
   const noCard = (await page.locator('.clarify-card').count()) === 0
-  console.log(`  ${noCard ? 'PASS' : 'FAIL'} - S9b direct-write skips clarify card`)
+  console.log(`  ${noCard ? 'PASS' : 'FAIL'} - S9 clarify card removed from UI`)
   if (!noCard) failed++
-  await waitStreamDone()
-  const userB = await page.locator('.msg-user').last().innerText()
-  const noteB = userB.includes('（需求') && userB.includes('口语化')
-  console.log(`  ${noteB ? 'PASS' : 'FAIL'} - S9b direct-write carries assumption note`)
-  if (!noteB) failed++
+
+  // 9a 模糊创作请求：模型先在对话里反问（无 HTML/预览），回答后直接成文
+  await ensureEmpty()
+  await sendLine('帮我写一篇推文，主题是新书上市')
+  await waitTurn()
+  const q1 = await lastAssistantText()
+  const asked = q1.includes('？') && !q1.includes('已生成推文')
+  console.log(`  ${asked ? 'PASS' : 'FAIL'} - S9a vague create -> agent asks in chat (${q1.slice(0, 26)}…)`)
+  if (!asked) failed++
+  const noPreviewYet =
+    (await page.locator('.quality-strip').count()) === 0 && (await page.locator('.preview-body iframe').count()) === 0
+  console.log(`  ${noPreviewYet ? 'PASS' : 'FAIL'} - S9a no article/preview before answer`)
+  if (!noPreviewYet) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S9a-question.png` })
+
+  await sendLine('日系风格，800字左右')
+  await waitTurn()
+  await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
+  const nUserA = await page.locator('.msg-user').count()
+  const aOk = nUserA === 2 && (await page.locator('.msg-assistant').count()) === 2
+  console.log(`  ${aOk ? 'PASS' : 'FAIL'} - S9a answer -> article generated (users=${nUserA})`)
+  if (!aOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S9a-article.png` })
+
+  // 9b 直接写：不问，直出推文
+  await ensureEmpty()
+  await sendLine('写一篇咖啡店开业宣传，日系风，800字左右，直接写')
+  await waitTurn()
+  const bText = await lastAssistantText()
+  const noAsk = !bText.includes('？')
+  console.log(`  ${noAsk ? 'PASS' : 'FAIL'} - S9b direct-write no question (${bText.slice(0, 20)}…)`)
+  if (!noAsk) failed++
+  await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
+  const nUserB = await page.locator('.msg-user').count()
+  console.log(`  ${nUserB === 1 ? 'PASS' : 'FAIL'} - S9b direct-write one-turn article (users=${nUserB})`)
+  if (nUserB !== 1) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S9b.png` })
+
+  // 9c 闲聊：正常对话回复，不产出推文预览
+  await ensureEmpty()
+  await sendLine('你好')
+  await waitTurn()
+  const cText = await lastAssistantText()
+  const chatOk = cText.startsWith('你好') && !cText.includes('已生成推文')
+  console.log(`  ${chatOk ? 'PASS' : 'FAIL'} - S9c casual chat answered naturally (${cText.slice(0, 20)}…)`)
+  if (!chatOk) failed++
+  const noArticleC = (await page.locator('.quality-strip').count()) === 0
+  console.log(`  ${noArticleC ? 'PASS' : 'FAIL'} - S9c chat produces no article preview`)
+  if (!noArticleC) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S9c.png` })
+
+  // 9d 反问后取消：说"算了"→ 回对话，不生成
+  await sendLine('帮我写一篇推文，主题是新书上市')
+  await waitTurn()
+  const q2 = await lastAssistantText()
+  const asked2 = q2.includes('？')
+  console.log(`  ${asked2 ? 'PASS' : 'FAIL'} - S9d vague again asks (${q2.slice(0, 20)}…)`)
+  if (!asked2) failed++
+  await sendLine('算了')
+  await waitTurn()
+  const dText = await lastAssistantText()
+  const cancelOk = dText.includes('先不写') && (await page.locator('.quality-strip').count()) === 0
+  console.log(`  ${cancelOk ? 'PASS' : 'FAIL'} - S9d cancel after question -> no article (${dText.slice(0, 20)}…)`)
+  if (!cancelOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S9d.png` })
 } catch (e) {
-  console.log('  FAIL - S9 clarify error:', String(e).slice(0, 200))
+  console.log('  FAIL - S9 conversational error:', String(e).slice(0, 200))
   failed++
 }
 

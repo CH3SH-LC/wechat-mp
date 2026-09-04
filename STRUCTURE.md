@@ -1,6 +1,6 @@
 # wechat-mp-desktop 项目结构
 
-> 最后更新：2026-08-29
+> 最后更新：2026-09-05
 > 新增、删除、重命名文件或目录时必须同步更新本文件。
 
 ---
@@ -20,20 +20,19 @@ wechat-mp-desktop/
 ├── public/                # 静态资源（空占位）
 ├── scripts/
 │   └── verify-ui.mjs      # E2E 冒烟：点示例→流式→375px 预览断言+截图
-├── docs/information/     # 需求报告（req-clarify 落盘，2026-09-04-context-rail-clean-chat.md）
+├── docs/information/     # 需求报告（req-clarify 落盘：…-context-rail-clean-chat.md、2026-09-05-conversational-agent.md）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开）+ 澄清卡 + 模式/风格 + 输入
-│   │   ├── ClarifyCard.tsx# 需求澄清卡：分维度选项补齐，确认后生成（req-clarify 落地）
+│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开）+ 模式/风格 + 输入（通用对话路由入口）
 │   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
-│   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）
-│   │   ├── needs.ts       # 需求评估（类型/风格/字数/调性/配图）+ 需求确认/默认注（req-clarify）
+│   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）+ buildChatSystem 通用对话人设
+│   │   ├── needs.ts       # 请求分类（isCreateRequest/isCancel/isDemoTopic）+ 需求评估 evaluate（模拟端反问判定）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
 │   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（含违规演示样本）
 │   │   ├── extract.ts     # HTML 提取 + splitAssistant（气泡净化拆分）

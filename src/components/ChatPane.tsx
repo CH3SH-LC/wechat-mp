@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import { MOCK_TOPICS } from '../lib/chat'
 import { splitAssistant } from '../lib/extract'
-import { ClarifySelections } from '../lib/needs'
-import ClarifyCard from './ClarifyCard'
 
 export interface DisplayMsg {
   id: number
@@ -21,9 +19,6 @@ interface Props {
   style: Style
   onModeChange: (m: Mode) => void
   onStyleChange: (s: Style) => void
-  pendingClarify: { text: string; missing: (keyof ClarifySelections)[] } | null
-  onClarifyConfirm: (s: ClarifySelections) => void
-  onClarifySkip: () => void
 }
 
 export type Mode = 'auto' | 'text' | 'promo'
@@ -47,9 +42,11 @@ const STYLES: { v: Style; label: string }[] = [
 ]
 
 const QUICK_PROMPTS = [
+  '帮我写一篇推文，主题是新书上市',
   '写一篇新生入学典礼的宣传类推文，校园风，直接写',
   '写一篇咖啡店新品上新的宣传推文，日系风，直接写',
   '写一篇软件使用教程的干货文开头与三个分点，直接写',
+  '公众号推文怎么起标题？',
 ]
 
 export default function ChatPane({
@@ -63,9 +60,6 @@ export default function ChatPane({
   style,
   onModeChange,
   onStyleChange,
-  pendingClarify,
-  onClarifyConfirm,
-  onClarifySkip,
 }: Props) {
   const [input, setInput] = useState('')
   const [openSrc, setOpenSrc] = useState<ReadonlySet<number>>(new Set())
@@ -81,7 +75,7 @@ export default function ChatPane({
 
   const send = () => {
     const t = input.trim()
-    if (!t || busy || pendingClarify) return
+    if (!t || busy) return
     setInput('')
     onSend(t)
   }
@@ -90,7 +84,7 @@ export default function ChatPane({
     <div className="chat-pane">
       <div className="chat-head">
         <span className="dot" />
-        AI 对话生成
+        AI 对话
         <span className={`badge ${status.includes('模拟') ? 'badge-warn' : 'badge-ok'}`}>{status}</span>
       </div>
 
@@ -126,17 +120,9 @@ export default function ChatPane({
       </div>
 
       <div className="chat-body">
-        {pendingClarify && (
-          <ClarifyCard
-            text={pendingClarify.text}
-            missing={pendingClarify.missing}
-            onConfirm={onClarifyConfirm}
-            onSkip={onClarifySkip}
-          />
-        )}
-        {msgs.length === 0 && !pendingClarify && (
+        {msgs.length === 0 && (
           <div className="chat-empty">
-            <p>输入主题，AI 直接产出微信合法 HTML 推文。</p>
+            <p>像用通用助手一样正常对话：闲聊、写作答疑都行；说「写一篇…推文」就为你创作，信息不够时 AI 会先在对话里问你。</p>
             <div className="chips">
               {QUICK_PROMPTS.map((p) => (
                 <button key={p} className="chip" disabled={busy} onClick={() => onSend(p)}>
@@ -192,7 +178,7 @@ export default function ChatPane({
             </div>
           )
         })}
-        {busy && <div className="typing">正在生成…</div>}
+        {busy && <div className="typing">正在思考…</div>}
         {knowledgeNote && <div className="knowledge-note">知识命中: {knowledgeNote}</div>}
       </div>
 
@@ -200,7 +186,7 @@ export default function ChatPane({
         <textarea
           value={input}
           rows={2}
-          placeholder="例如：写一篇毕业季情感类推文，手账风，直接写…（Enter 发送，Shift+Enter 换行）"
+          placeholder="和 AI 正常对话，或说「写一篇 XX 推文」直接生成…（Enter 发送，Shift+Enter 换行）"
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {

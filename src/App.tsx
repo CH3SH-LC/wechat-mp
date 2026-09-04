@@ -4,12 +4,12 @@ import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import SettingsPanel from './components/SettingsPanel'
 import SessionRail from './components/SessionRail'
-import { buildSystemPrompt } from './lib/persona'
+import { PERSONA_RULES, buildChatSystem, buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
-import { ClarifySelections, assumptionNote, describeSelections, evaluate } from './lib/needs'
+import { isCancel, isCreateRequest, isDemoTopic } from './lib/needs'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
@@ -35,31 +35,6 @@ function decoratePrompt(text: string, mode: Mode, style: Style): string {
   return out
 }
 
-// 组装"需求确认/默认"注（req-clarify：确认合同与显式假设）
-function annotatePrompt(
-  text: string,
-  known: ClarifySelections,
-  base: { type: string | null; style: string | null; words: string | null; tone: string | null; image: boolean | null },
-): string {
-  const merged: ClarifySelections = {
-    type: known.type && known.type !== 'auto' ? known.type : null,
-    style: known.style && known.style !== 'auto' ? known.style : null,
-    words: known.words || null,
-    tone: known.tone || null,
-    image: known.image === null || known.image === undefined ? null : known.image,
-  }
-  const baseAssess = {
-    type: merged.type ?? base.type,
-    style: merged.style ?? base.style,
-    words: merged.words ?? base.words,
-    tone: merged.tone ?? base.tone,
-    image: merged.image ?? base.image,
-  }
-  const note = [...new Set([...describeSelections(merged), ...assumptionNote(baseAssess)])]
-  if (!note.length) return text
-  return `${text}\n（需求${known.type || known.style || known.words || known.tone || known.image !== null ? '确认' : '默认'}：${note.join('；')}）`
-}
-
 export default function App() {
   const [msgs, setMsgs] = useState<DisplayMsg[]>([])
   const [busy, setBusy] = useState(false)
@@ -72,9 +47,6 @@ export default function App() {
   const [savedAt, setSavedAt] = useState('')
   const [showSettings, setShowSettings] = useState(false)
 
-  // 需求澄清卡（req-clarify 落地）：待澄清请求与缺失维度
-  const [pendingClarify, setPendingClarify] = useState<{ text: string; missing: (keyof ClarifySelections)[] } | null>(null)
-
   // 会话栏：默认按窗口宽度展开（≤1120px 折叠），顶栏「会话」按钮为折叠开关
   const [railOpen, setRailOpen] = useState<boolean>(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1120))
 
@@ -86,6 +58,9 @@ export default function App() {
   const draftRef = useRef('')
   const stopRef = useRef<{ cancel: () => void } | null>(null)
   const msgsRef = useRef<DisplayMsg[]>([])
+  // expectRef：上一轮是创作请求但模型尚未产出推文（如先反问澄清），
+  // 下一条用户消息仍按创作上下文处理，直到产出推文或用户取消
+  const expectRef = useRef(false)
 
   useEffect(() => {
     msgsRef.current = msgs
@@ -97,6 +72,7 @@ export default function App() {
   }
 
   const applySession = (item: SessionItem) => {
+    expectRef.current = false
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
       .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
@@ -123,12 +99,12 @@ export default function App() {
   }
 
   const clearAllChat = () => {
+    expectRef.current = false
     setMsgs([])
     setHtml(null)
     setQuality(null)
     setNote('')
     setSavedAt('')
-    setPendingClarify(null)
   }
 
   // 启动：加载会话列表与当前会话（首次自动建会话；旧单会话自动迁移）
@@ -218,37 +194,49 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 需求澄清分流（req-clarify）----------
-  const runGenerate = async (prompt: string) => {
-    if (busyRef.current) return
-    const userText = decoratePrompt(prompt, mode, style)
-    const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content: userText }
+  // ---------- 对话路由：创作 / 通用对话（第 12 轮）----------
+  // kind='gen'：创作模式（persona + 知识，产出 ```html 推文，模型可先反问澄清）
+  // kind='chat'：通用对话（对话人设，正常聊天，不产出推文）
+  const turn = async (kind: 'gen' | 'chat', raw: string): Promise<boolean> => {
+    if (busyRef.current) return false
+    const content = kind === 'gen' ? decoratePrompt(raw, mode, style) : raw
+    const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
-    setHtml(null)
-    setQuality(null)
-
-    const r = await retrieve(prompt + (style !== 'auto' ? STYLE_PHRASE[style] : ''))
-    setNote(
-      r.hits.length
-        ? r.hits.slice(0, 8).join(' / ')
-        : r.picks
-            .map((p) => p.path.replace(/^.*\/([^/]+)$/, '$1'))
-            .slice(0, 8)
-            .join(' / '),
-    )
-
-    const payload: ChatMsg[] = [
-      { role: 'system', content: buildSystemPrompt(r.picks) },
-      ...history
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      { role: 'user', content: userText },
-    ]
+    if (kind === 'gen') {
+      setHtml(null)
+      setQuality(null)
+    }
 
     busyRef.current = true
     setBusy(true)
     draftRef.current = ''
+
+    let system = ''
+    try {
+      const hint = kind === 'gen' && style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
+      const r = await retrieve(hint)
+      setNote(
+        r.hits.length
+          ? r.hits.slice(0, 8).join(' / ')
+          : r.picks
+              .map((p) => p.path.replace(/^.*\/([^/]+)$/, '$1'))
+              .slice(0, 8)
+              .join(' / '),
+      )
+      system = kind === 'gen' ? buildSystemPrompt(r.picks) : buildChatSystem(r.picks)
+    } catch {
+      // 知识库加载失败不影响对话：退回无人设提示的原始 persona
+      system = kind === 'gen' ? PERSONA_RULES : buildChatSystem([])
+    }
+
+    const payload: ChatMsg[] = [
+      { role: 'system', content: system },
+      ...history
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      { role: 'user', content },
+    ]
 
     try {
       if (inTauri()) {
@@ -260,13 +248,14 @@ export default function App() {
       }
     } catch (err) {
       fail(err)
-      return
+      return false
     }
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
     // 流结束：终检 + 立即存档到当前会话
     const final = extractHtml(draftRef.current)
+    const hadHtml = final !== null
     if (final) {
       setHtml(final.html)
       setQuality(checkHtml(final.html))
@@ -275,36 +264,31 @@ export default function App() {
       const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
       persistNow(currentId, saveMsgs, mode, style)
     }
+    return hadHtml
   }
 
+  // 路由：创作请求（明确"写/生成推文"或演示话题）→ 创作模式；
+  // 其余（闲聊/答疑）→ 通用对话。创作模式下模型未产出推文（先反问）时，
+  // 下一条消息仍走创作模式；用户回答后模型直接产出，或说"算了"取消回对话。
   const send = async (text: string) => {
-    if (busyRef.current || pendingClarify) return
-    const ev = evaluate(text)
-    if (ev.needsClarify) {
-      // 缺 ≥2 项且未说"直接写"：挂澄清卡，暂不生成
-      setPendingClarify({ text, missing: ev.missing })
+    const t = text.trim()
+    if (!t || busyRef.current) return
+    if (expectRef.current) {
+      if (isCancel(t)) {
+        expectRef.current = false
+        await turn('chat', t)
+        return
+      }
+      const had = await turn('gen', t)
+      expectRef.current = !had
       return
     }
-    // 直接生成路径：仍按 req-clarify"直接做也标注假设"，缺项附默认注
-    const known: ClarifySelections = { type: ev.assessment.type, style: ev.assessment.style, words: ev.assessment.words, tone: ev.assessment.tone, image: ev.assessment.image }
-    await runGenerate(annotatePrompt(text, known, ev.assessment))
-  }
-
-  const confirmClarify = (sel: ClarifySelections) => {
-    if (!pendingClarify || busyRef.current) return
-    const p = pendingClarify
-    setPendingClarify(null)
-    const ev = evaluate(p.text)
-    void runGenerate(annotatePrompt(p.text, sel, ev.assessment))
-  }
-
-  const skipClarify = () => {
-    if (!pendingClarify || busyRef.current) return
-    const p = pendingClarify
-    setPendingClarify(null)
-    const ev = evaluate(p.text)
-    const known: ClarifySelections = { type: null, style: null, words: null, tone: null, image: null }
-    void runGenerate(annotatePrompt(p.text, known, ev.assessment))
+    if (isDemoTopic(t) || isCreateRequest(t)) {
+      const had = await turn('gen', t)
+      expectRef.current = !had
+      return
+    }
+    await turn('chat', t)
   }
 
   const stop = () => {
@@ -406,9 +390,6 @@ export default function App() {
           style={style}
           onModeChange={setMode}
           onStyleChange={setStyle}
-          pendingClarify={pendingClarify}
-          onClarifyConfirm={confirmClarify}
-          onClarifySkip={skipClarify}
         />
         <PreviewPane html={html} quality={quality} onClear={clear} />
       </main>

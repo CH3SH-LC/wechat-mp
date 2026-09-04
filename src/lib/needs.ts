@@ -1,19 +1,11 @@
-// needs.ts —— 需求评估（req-clarify 思路在推文创作场景的落地）
-// 清晰度维度：类型 / 风格 / 字数 / 调性 / 配图。
-// 缺 ≥2 项且无"直接写/直接生成/别问"指令 → 进入澄清卡；否则直接生成并附需求默认注。
+// needs.ts —— 请求分类与需求评估
+// 第 12 轮起：请求先路由为「创作请求 / 通用对话」两类；创作信息不足时由模型在对话流里反问，
+// 本地不再弹任何卡片（ClarifyCard 已退役）。evaluate 仍供模拟端判断"本条是否需要反问"。
 
 export interface NeedsAssessment {
   type: string | null
   style: string | null
   words: string | null // 'short' | 'mid' | 'long'
-  tone: string | null
-  image: boolean | null
-}
-
-export interface ClarifySelections {
-  type: string | null
-  style: string | null
-  words: string | null
   tone: string | null
   image: boolean | null
 }
@@ -45,44 +37,6 @@ const STYLE_WORDS: [string, string][] = [
   ['插画', 'illustration'],
 ]
 
-const TYPE_LABELS: { v: string; label: string }[] = [
-  { v: 'tutorial', label: '干货教程' },
-  { v: 'news', label: '新闻资讯' },
-  { v: 'emotion', label: '情感随笔' },
-  { v: 'soft', label: '产品软文' },
-  { v: 'promo', label: '活动促销' },
-  { v: 'brand', label: '品牌故事' },
-  { v: 'person', label: '人物故事' },
-  { v: 'list', label: '盘点清单' },
-  { v: 'science', label: '科普测评' },
-  { v: 'announcement', label: '公告通知' },
-  { v: 'serial', label: '连载栏目' },
-]
-
-const STYLE_OPTIONS: { v: string; label: string }[] = [
-  { v: 'auto', label: '风格自动' },
-  { v: 'campus', label: '校园' },
-  { v: 'tech', label: '科技' },
-  { v: 'guochao', label: '国潮' },
-  { v: 'japanese', label: '日系' },
-  { v: 'minimal', label: '极简' },
-  { v: 'business', label: '商务' },
-  { v: 'handbook', label: '手账' },
-  { v: 'forest', label: '森系' },
-]
-
-const WORDS_OPTIONS: { v: string; label: string }[] = [
-  { v: 'short', label: '简短（500 字上下）' },
-  { v: 'mid', label: '适中（800-1200 字）' },
-  { v: 'long', label: '较长（1500-2000 字）' },
-]
-
-const TONE_OPTIONS: { v: string; label: string }[] = [
-  { v: 'oral', label: '口语化' },
-  { v: 'formal', label: '正式克制' },
-  { v: 'vivid', label: '活泼生动' },
-]
-
 export function assess(text: string): NeedsAssessment {
   const type = TYPE_WORDS.find(([w]) => text.includes(w))?.[1] ?? null
   const style = STYLE_WORDS.find(([w]) => text.includes(w))?.[1] ?? null
@@ -91,15 +45,15 @@ export function assess(text: string): NeedsAssessment {
   if (mWord) {
     const n = Number(mWord[1])
     words = n <= 600 ? 'short' : n <= 1300 ? 'mid' : 'long'
-  } else if (/长文|长一点/.test(text)) {
+  } else if (/长文|长一点|长篇/.test(text)) {
     words = 'long'
-  } else if (/短一点|短文/.test(text)) {
+  } else if (/短一点|短文|别太长|太长了|简短/.test(text)) {
     words = 'short'
   }
   const tone = text.includes('正式') || text.includes('稳重') ? 'formal'
     : text.includes('活泼') || text.includes('生动') || text.includes('轻松') ? 'vivid'
     : text.includes('口语') ? 'oral' : null
-  const image = /配图|图片|插图|放图/.test(text) ? true : null
+  const image = /配图|配个图|配张图|图片|插图|放图/.test(text) ? true : null
   return { type, style, words, tone, image }
 }
 
@@ -129,28 +83,25 @@ export function evaluate(text: string): AssessResult {
   return { needsClarify, missing, assessment: a }
 }
 
-const TYPE_LABEL_MAP = new Map(TYPE_LABELS.map((t) => [t.v, t.label]))
-const STYLE_LABEL_MAP = new Map(STYLE_OPTIONS.map((s) => [s.v, s.label]))
+// ---------- 第 12 轮：创作 / 对话路由 ----------
 
-export function describeSelections(s: ClarifySelections): string[] {
-  const parts: string[] = []
-  if (s.type) parts.push(`类型：${TYPE_LABEL_MAP.get(s.type) ?? s.type}`)
-  if (s.style) parts.push(`风格：${STYLE_LABEL_MAP.get(s.style) ?? s.style}`)
-  if (s.words) parts.push(`字数：${WORDS_OPTIONS.find((w) => w.v === s.words)?.label ?? s.words}`)
-  if (s.tone) parts.push(`调性：${TONE_OPTIONS.find((t) => t.v === s.tone)?.label ?? s.tone}`)
-  if (s.image) parts.push('需要配图位')
-  return parts
+// 创作动词 + 目标名词（如"写一篇咖啡店开业宣传"）
+const CREATE_VERB_NOUN = /(?:写|生成|创作|起草|拟|编|来|出|做|发|整|敲)(?:一|个|篇|段|条|点|份|些)?\s*(?:篇|段)?\s*(?:推文|公众号文章|公众号文案|文案|软文|宣传(?:文|稿|文案)?|图文|文章|稿子?|公告|通知|开业(?:文|宣传)?|招生|预告|干货(?:文|帖)?|教程|测评|盘点|资讯|指南|内容)/
+// 祈使式创作（"来一篇""写个"）
+const CREATE_IMPERATIVE = /(?:来一篇|来段|写一篇|写个|写一段|写段|生成一篇|生成个|出一篇|做一篇|整一篇|发一篇|编一篇)/
+// 帮我/给我 + 创作动词（排除"帮我写个标题/名字"这类问答）
+const CREATE_HELP = /(?:帮我|给我|请)[^。\n，,]{0,14}(?:写|生成|创作)(?!标题|名字|名称)/
+
+export function isCreateRequest(text: string): boolean {
+  return (
+    CREATE_VERB_NOUN.test(text) ||
+    CREATE_IMPERATIVE.test(text) ||
+    CREATE_HELP.test(text) ||
+    (text.includes('推文') && /(?:写|生成|创作)/.test(text))
+  )
 }
 
-// 直接生成路径的"需求默认"标注（req-clarify：直接做也标注假设）
-export function assumptionNote(a: NeedsAssessment): string[] {
-  const parts: string[] = []
-  if (!a.type) parts.push('类型：自动（按内容判断）')
-  if (!a.style) parts.push('风格：自动')
-  if (!a.words) parts.push('字数：800-1200 字上下')
-  if (!a.tone) parts.push('调性：口语化')
-  if (a.image === null) parts.push('配图：不配图')
-  return parts
+// 对话中放弃/取消（用于反问等待态下的取消路由）
+export function isCancel(text: string): boolean {
+  return /^(?:算了|那算了|不用了|先不用|先不写|不写了|别写了|取消)/.test(text)
 }
-
-export { TYPE_LABELS, STYLE_OPTIONS, WORDS_OPTIONS, TONE_OPTIONS }
