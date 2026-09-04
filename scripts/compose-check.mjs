@@ -3,7 +3,32 @@
 import { composeMarkdown, svgElementCount } from '../src/lib/compose.ts'
 import { writeFileSync } from 'fs'
 
+const FLAG_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
+<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
+<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
+<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
+<circle cx="640" cy="52" r="5" fill="#ffffff"/>
+<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
+<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
+<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
+</svg>`
+
+const FLOWER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260" fill="none">
+<path d="M150 250 C140 180 120 140 90 110" stroke="#5f8d8a" stroke-width="4" fill="none"/>
+<path d="M150 250 C165 190 195 150 230 130" stroke="#5f8d8a" stroke-width="4" fill="none"/>
+<circle cx="90" cy="104" r="16" fill="#e8b48a"/>
+<circle cx="236" cy="124" r="14" fill="#d9a35f"/>
+<circle cx="150" cy="150" r="20" fill="#c96f4a"/>
+<path d="M120 130 q-26 -8 -34 -30 q28 2 40 18z" fill="#8fb8a4"/>
+<path d="M188 170 q24 -14 44 -6 q-10 24 -38 18z" fill="#8fb8a4"/>
+<circle cx="90" cy="104" r="6" fill="#f2c76e"/>
+</svg>`
+
 const SAMPLE = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
+
+::: art wide 晨光里的旗帜
+${FLAG_SVG}
+:::
 
 九月第一天，典礼如约而至。这篇清单把当天安排一次看明白。
 
@@ -15,8 +40,16 @@ const SAMPLE = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操
 - 9:50 班级班会：典礼后各班回教室，班主任交代入学安排
 :::
 
+::: art inline 节奏与小花
+${FLOWER_SVG}
+:::
+
 > [!KEY] 记得带
 > 录取通知书与身份证、水杯与防晒（户外排队用）
+
+::: art inline 行囊与准备
+${FLOWER_SVG}
+:::
 
 ## 你需要准备
 
@@ -24,25 +57,21 @@ const SAMPLE = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操
 - 手机调静音，典礼中保持安静
 - 带一件薄外套，室内空调较凉
 
+::: art inline 书本与开始
+${FLOWER_SVG}
+:::
+
 ::: band 斜纹
 - 典礼后各班回教室开班会，记得把这份时间表转给同班同学。
+:::
+
+::: art wide 花带收尾
+${FLOWER_SVG}
 :::
 
 [[title:新的开始|box]]
 
 第一堂课从典礼开始。愿你们在这里的每一天，都有新的收获。
-
-::: art wide 朝阳与旗帜横幅
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
-<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
-<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
-<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
-<circle cx="640" cy="52" r="5" fill="#ffffff"/>
-<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
-<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
-<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
-</svg>
-:::
 
 [[badge:新生指南]] [[badge:开学典礼]]`
 
@@ -67,9 +96,15 @@ check('wrapper present', r.html.startsWith('<section style="padding:4px 16px'))
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
-check('art collected (1 wide)', r.arts.length === 1 && r.arts[0].wide === true, `arts=${r.arts.length}`)
+check('art collected 5 (2 wide)', r.arts.length === 5 && r.arts.filter((a) => a.wide).length === 2, `arts=${r.arts.length}`)
 check('art placeholder in html', r.html.includes('@@ART0@@'))
 check('art wide img style', r.html.includes('width:100%;height:auto;display:block;margin:12px 0'))
+
+// 1a) 素材用量警告：0 处与不足 4 处均提示
+const zero = composeMarkdown('## 标题\n\n正文段落，没有任何素材。', { mode: 'text' })
+check('zero-art warning', zero.warnings.some((w) => w.includes('未包含美术素材')))
+const low = composeMarkdown('::: art inline 一\n' + FLOWER_SVG + '\n:::\n\n::: art inline 二\n' + FLOWER_SVG + '\n:::\n\n正文。', { mode: 'text' })
+check('low-art (2) warning', low.arts.length === 2 && low.warnings.some((w) => w.includes('素材用量偏低')))
 
 // 1b) 素材元素计数：样本 ≥6；劣质素材（<6）被拦截
 const artSvg = r.arts[0]?.svg || ''

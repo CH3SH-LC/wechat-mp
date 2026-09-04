@@ -91,8 +91,8 @@ try {
   console.log(`  ${composed ? 'PASS' : 'FAIL'} - S1.8 compose rendered in preview (${bodyTxt.length} chars)`)
   if (!composed) failed++
   const artImgs = frame ? await frame.locator('img[src^="data:image/"]').count() : 0
-  console.log(`  ${artImgs >= 1 ? 'PASS' : 'FAIL'} - S1.8 art svg rendered to data image (${artImgs})`)
-  if (artImgs < 1) failed++
+  console.log(`  ${artImgs >= 4 ? 'PASS' : 'FAIL'} - S1.8 five art assets rendered to data images (${artImgs})`)
+  if (artImgs < 4) failed++
 } catch (e) {
   console.log('  FAIL - S1.8 compose render error:', String(e).slice(0, 200))
   failed++

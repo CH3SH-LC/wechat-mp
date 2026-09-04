@@ -24,8 +24,34 @@ export interface MockTopic {
   html?: string // 直通演示样本（违规输出检测等）
 }
 
-// v2 语法正文样例（第 14 轮：创作回复协议 = ```v2 围栏正文，由 composeMarkdown 渲染；第 15 轮含 ::: art 素材）
+// 演示素材 SVG（第 16 轮：组件装饰全覆盖，一篇 5 处素材；图形元素均 ≥6）
+const FLAG_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
+<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
+<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
+<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
+<circle cx="640" cy="52" r="5" fill="#ffffff"/>
+<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
+<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
+<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
+</svg>`
+
+const FLOWER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260" fill="none">
+<path d="M150 250 C140 180 120 140 90 110" stroke="#5f8d8a" stroke-width="4" fill="none"/>
+<path d="M150 250 C165 190 195 150 230 130" stroke="#5f8d8a" stroke-width="4" fill="none"/>
+<circle cx="90" cy="104" r="16" fill="#e8b48a"/>
+<circle cx="236" cy="124" r="14" fill="#d9a35f"/>
+<circle cx="150" cy="150" r="20" fill="#c96f4a"/>
+<path d="M120 130 q-26 -8 -34 -30 q28 2 40 18z" fill="#8fb8a4"/>
+<path d="M188 170 q24 -14 44 -6 q-10 24 -38 18z" fill="#8fb8a4"/>
+<circle cx="90" cy="104" r="6" fill="#f2c76e"/>
+</svg>`
+
+// v2 语法正文样例（第 16 轮：组件装饰全覆盖——banner/小节/气泡/分隔均配素材，共 5 处）
 const SAMPLE_V2 = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
+
+::: art wide 晨光里的旗帜
+${FLAG_SVG}
+:::
 
 九月第一天，典礼如约而至。这篇清单把当天安排一次看明白。
 
@@ -37,8 +63,16 @@ const SAMPLE_V2 = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区
 - 9:50 班级班会：典礼后各班回教室，班主任交代入学安排
 :::
 
+::: art inline 节奏与小花
+${FLOWER_SVG}
+:::
+
 > [!KEY] 记得带
 > 录取通知书与身份证、水杯与防晒（户外排队用）
+
+::: art inline 行囊与准备
+${FLOWER_SVG}
+:::
 
 ## 你需要准备
 
@@ -46,20 +80,16 @@ const SAMPLE_V2 = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区
 - 手机调静音，典礼中保持安静
 - 带一件薄外套，室内空调较凉
 
+::: art inline 书本与开始
+${FLOWER_SVG}
+:::
+
 ::: band 斜纹
 - 典礼后各班回教室开班会，记得把这份时间表转给同班同学。
 :::
 
-::: art wide 朝阳与旗帜横幅
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
-<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
-<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
-<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
-<circle cx="640" cy="52" r="5" fill="#ffffff"/>
-<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
-<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
-<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
-</svg>
+::: art wide 花带收尾
+${FLOWER_SVG}
 :::
 
 [[title:新的开始|box]]

@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-05
+- [Change] 第 16 轮：素材用量升级——组件装饰全覆盖（用户："量太少，每个组件都必须使用美术素材"；1 问确认口径）——persona 铁律 v2（每篇 5-8 处、banner/小节/气泡/分隔/容器装饰位全覆盖、单屏 ≤1）；compose 引擎 0/<4 处用量警告；mock ×5 素材；chat.rs max_tokens 32000（推理吃光 16k 实测）；E2E 33 项全绿（S1.8 five art assets）；真实模型 live 6 处素材全达标 0 警告
 - [New Feature] 第 15 轮：现场生成美术素材（回应"为什么没素材了"）——::: art 容器：模型按知识库现场绘制 SVG，引擎校验元素 ≥6 与 viewBox，canvas 渲染 PNG data URI 内嵌预览/导出；persona 强制每篇 ≥1 素材；E2E 32 项全绿（S1.8 素材渲染 data 图）；真实模型 live 咖啡题材 SVG 15 元素 0 警告
 - [New Feature] 第 14 轮：移植 DSH 完整创作工艺（方案 B，用户选）——compose.ts 转写 wechat-mp 转换器（v2 语法→微信合法 HTML，DESIGNS 双色系/间距 v5/平面化 v10/art 移除警告）；persona 改输出 ```v2 围栏正文；```v2→compose→预览+质量检查，```html 直通保留；会话恢复重放；修复 reasoning max 无 max_tokens 推理吃光预算（补 16000）；E2E 31 项全绿（新 S1.8 compose 渲染断言）；真实模型 live 产出 900 字 v2 正文渲染 0 警告
 - [Change] 第 13 轮：与 DSH 全面对齐（差异检查驱动）——Rust 默认模型 deepseek-chat→deepseek-v4-flash + 请求体 reasoning_effort max（实测兼容）；删除 App 本地创作/对话路由与 expectRef，persona 统一为对话+创作一体、模型自主判断（闲聊/答疑/反问/取消）；needs 降级仅供模拟端近似；E2E 28 项全绿 S9a-d 语义保持；live 冒烟 + 整篇抽样（v4-flash 16.7s 6919 字 0 issues）

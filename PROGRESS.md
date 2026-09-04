@@ -97,6 +97,28 @@
 
 ---
 
+## 2026-09-05
+
+### [Change] 第 16 轮：素材用量升级——组件装饰全覆盖（每篇 5-8 处、单屏 ≤1）
+
+背景 / 变更原因：
+用户反馈「强制使用美术素材不够，量太少，每个组件都必须使用美术素材」。经 1 问确认口径 = 组件装饰全覆盖：所有组件装饰位用素材（banner 配主题插画、每个 ## 小节标题下配小插画、气泡邻接 inline 素材、换场分隔花饰、容器按需），单篇 5-8 处、单屏 ≤1。
+
+实现：
+- persona 美术素材铁律 v2：素材用量 5-8 处/篇（短篇 ≥4）+ 组件全覆盖映射 + 每处 SVG 元素 ≥6 + 意象呼应 + 单屏 ≤1
+- compose.ts：素材用量校验——arts 0 处 →「未包含美术素材」警告；<4 处 →「素材用量偏低」警告（展示在预览区）
+- chat.ts mock 样例扩到 5 处素材（FLAG/FLOWER 两变体交替：banner 宽幅、小节 inline×3、收尾宽幅）
+- chat.rs：max_tokens 16000 → 32000（实测 reasoning_effort max 下复杂创作推理会吃光 16k 预算致正文为空；32000 为 API 接受上限内）
+- compose-check/E2E 断言更新（zero-art/low-art 警告、S1.8 five art assets rendered）
+
+验证：
+- pnpm build exit 0；compose-check 30 项全绿
+- E2E 33 项全绿零浏览器错误（重跑确认；S1.8 five art assets rendered to data images=5；S1.5 导出 195KB 含 5 张内嵌 PNG；S9a-d/S2 语义保持）
+- 真实模型 live：日系咖啡开业 5876 字正文，**6 处素材**（目标 5-8；元素 8-13 全 ≥6；banner 暖帘/小节拉花/豆子旅程/托盘四季/手冲壶/收尾横幅），compose 渲染 promo 767 字 0 警告；产物 compose-live-art5.html
+- cargo 17/17（Rust 仅 max_tokens 数值调整）
+
+---
+
 ## 2026-09-04
 
 ### [New Feature] 第 11 轮：结构化需求澄清卡——桌面端体现 req-clarify 能力

@@ -22,7 +22,7 @@ wechat-mp-desktop/
 │   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright）
 │   ├── compose-check.mjs  # composeMarkdown 转换器 22 项断言（node 直跑 TS）
 │   └── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
-├── docs/information/     # 需求报告（…context-rail-clean-chat.md、conversational-agent.md、align-dsh.md、compose-port.md、2026-09-05-art-gen.md）
+├── docs/information/     # 需求报告（…conversational-agent.md、align-dsh.md、compose-port.md、art-gen.md、2026-09-05-art-coverage.md）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢

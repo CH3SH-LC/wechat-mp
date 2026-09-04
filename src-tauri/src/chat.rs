@@ -102,7 +102,7 @@ async fn stream_chat(
         "model": cfg.model,
         "stream": true,
         "reasoning_effort": "max",
-        "max_tokens": 16000,
+        "max_tokens": 32000,
         "messages": messages,
     });
     let res = client

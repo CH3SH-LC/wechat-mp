@@ -655,5 +655,11 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ').trim()
   if (html2.length >= 20000) warnings.push('正文超过 20000 字符限制（当前约 ' + html2.length + '），微信会拒绝保存')
+  // 素材用量校验（第 16 轮：组件装饰全覆盖——数量下限提示，persona 负责产出）
+  if (arts.length === 0) {
+    warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
+  } else if (arts.length < 4) {
+    warnings.push('素材用量偏低（当前 ' + arts.length + ' 处，建议 5-8 处并覆盖各组件装饰位）')
+  }
   return { html: html2, plainText, images, arts, warnings, mode: modeKey, modeLabel: d.label }
 }
