@@ -6,7 +6,8 @@ import SettingsPanel from './components/SettingsPanel'
 import SessionRail from './components/SessionRail'
 import { KnowledgePick, buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
-import { extractHtml } from './lib/extract'
+import { extractHtml, splitAssistant } from './lib/extract'
+import { composeMarkdown } from './lib/compose'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
@@ -34,6 +35,18 @@ function decoratePrompt(text: string, mode: Mode, style: Style): string {
   return out
 }
 
+// 把助手文本解析为可预览 HTML（第 14 轮）：```html 直通；```v2 正文经 compose 渲染；无围栏返回 null
+function resolvePreview(raw: string, mode: Mode): { html: string; warnings: string[] } | null {
+  const direct = extractHtml(raw)
+  if (direct) return { html: direct.html, warnings: [] }
+  const { v2 } = splitAssistant(raw)
+  if (v2) {
+    const r = composeMarkdown(v2, { mode })
+    return { html: r.html, warnings: r.warnings }
+  }
+  return null
+}
+
 export default function App() {
   const [msgs, setMsgs] = useState<DisplayMsg[]>([])
   const [busy, setBusy] = useState(false)
@@ -44,6 +57,7 @@ export default function App() {
   const [style, setStyle] = useState<Style>('auto')
   const [kbCount, setKbCount] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState('')
+  const [warnings, setWarnings] = useState<string[]>([])
   const [showSettings, setShowSettings] = useState(false)
 
   // 会话栏：默认按窗口宽度展开（≤1120px 折叠），顶栏「会话」按钮为折叠开关
@@ -81,14 +95,21 @@ export default function App() {
     else setStyle('auto')
     const last = [...mapped].reverse().find((m) => m.role === 'assistant')
     if (last) {
-      const r = extractHtml(last.content)
-      if (r) {
-        setHtml(r.html)
-        setQuality(checkHtml(r.html))
+      const m = VALID_MODES.includes(item.mode as Mode) ? (item.mode as Mode) : 'auto'
+      const c = resolvePreview(last.content, m)
+      if (c) {
+        setHtml(c.html)
+        setQuality(checkHtml(c.html))
+        setWarnings(c.warnings)
+      } else {
+        setHtml(null)
+        setQuality(null)
+        setWarnings([])
       }
     } else {
       setHtml(null)
       setQuality(null)
+      setWarnings([])
     }
     setSavedAt(fmtTime(item.updatedAt))
   }
@@ -98,6 +119,7 @@ export default function App() {
     setHtml(null)
     setQuality(null)
     setNote('')
+    setWarnings([])
     setSavedAt('')
   }
 
@@ -164,8 +186,12 @@ export default function App() {
       }
       return copy
     })
-    const r = extractHtml(draft)
-    if (r) setHtml(r.html)
+    // 流中实时预览：```html 直通或 ```v2 围栏闭合即 compose（纯文本对话不触碰预览）
+    const c = resolvePreview(draft, mode)
+    if (c) {
+      setHtml(c.html)
+      if (c.warnings.length) setWarnings(c.warnings)
+    }
   }
 
   const fail = (err: unknown) => {
@@ -241,11 +267,12 @@ export default function App() {
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
-    // 流结束：回复含推文 HTML 则更新预览并终检；纯对话不触碰预览
-    const final = extractHtml(draftRef.current)
+    // 流结束：含 ```html 直通或 ```v2 正文 → compose 预览并终检；纯对话不触碰预览
+    const final = resolvePreview(draftRef.current, mode)
     if (final) {
       setHtml(final.html)
       setQuality(checkHtml(final.html))
+      setWarnings(final.warnings)
     }
     if (currentId) {
       const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
@@ -359,7 +386,7 @@ export default function App() {
           onModeChange={setMode}
           onStyleChange={setStyle}
         />
-        <PreviewPane html={html} quality={quality} onClear={clear} />
+        <PreviewPane html={html} quality={quality} warnings={warnings} onClear={clear} />
       </main>
     </div>
   )

@@ -156,9 +156,10 @@ export default function ChatPane({
               </div>
             )
           }
-          // assistant：只展示围栏外说明文字；源码收进可展开查看器
-          const { prose, code } = splitAssistant(m.content)
-          const showPlaceholder = !prose && !busy && code !== null
+          // assistant：只展示围栏外说明文字；正文（v2）或直通 HTML 收进可展开查看器
+          const { prose, code, v2 } = splitAssistant(m.content)
+          const src = code !== null ? code : v2
+          const showPlaceholder = !prose && !busy && src !== null
           const streamingEmpty = busy && !prose && !m.content
           return (
             <div key={m.id} className="msg msg-assistant">
@@ -166,12 +167,12 @@ export default function ChatPane({
                 <pre className="msg-assistant-text">
                   {prose || (showPlaceholder ? '已生成推文，见右侧预览。' : streamingEmpty ? '…' : '')}
                 </pre>
-                {code !== null && (
+                {src !== null && (
                   <div className="src-area">
                     <button className="src-toggle" onClick={() => toggleSrc(m.id)}>
-                      {openSrc.has(m.id) ? '收起 HTML 源码' : '查看 HTML 源码'}
+                      {openSrc.has(m.id) ? (code !== null ? '收起 HTML 源码' : '收起正文') : code !== null ? '查看 HTML 源码' : '查看正文'}
                     </button>
-                    {openSrc.has(m.id) && <pre className="src-view">{code}</pre>}
+                    {openSrc.has(m.id) && <pre className="src-view">{src}</pre>}
                   </div>
                 )}
               </div>

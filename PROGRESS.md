@@ -48,6 +48,32 @@
 
 ---
 
+## 2026-09-05
+
+### [New Feature] 第 14 轮：移植 DSH 完整创作工艺——v2 语法 → HTML 确定性转换器（方案 B）
+
+背景 / 变更原因：
+用户质疑「为什么现在产物的质量还留在最初的版本？我 test 内更新的大量内容都去哪里了」。差异检查结论：知识文件零丢失（桌面 149 文件与 test 三层镜像逐字节一致，仅差 2 个开发文档），根因是消费侧——persona 创作协议仍是最初精简版，test 的 47 模块/30 风格/27 文案知识从未进入生成流程。1 问确认方案 B：移植 DSH 完整工艺（wechat-mp preset SKILL.md Host 源码的 compose 转换器）。
+
+实现：
+- src/lib/compose.ts（新）：转写 SKILL.md markdownToWechatHtml 核心（DESIGNS text/promo 双色系、inline/paraBlock/bubble/divider/heading/quote/card/steps/banner/cols/imgrow/imgcard/timeline/band/frame/list/table/code/title/lace、detectMode、主循环、art:// 移除+警告、本地图/表格/20000 字符警告、wrapper+plainText），桌面无微信资产 → artUrls 恒空
+- 创作协议：persona 改为「输出 ```v2 围栏正文（Markdown+v2 语法），本地排版引擎渲染为微信合法内联 HTML」，语法表 = v2 全集；不再直接写 HTML
+- extract.ts：splitAssistant 返回 { prose, code(html), v2 }，识别围栏语言；```html 直通通道保留（违规演示/旧会话）
+- App：resolvePreview（html 直通 or v2 compose）；流中 v2 围栏闭合即实时预览；流末终检质量；applySession 恢复时对最后 v2 正文重放 compose；warnings state 展示在预览（art:///本地图/表格提示）
+- PreviewPane：body padding 归零（compose wrapper 自带 16px 页边距）+ compose-warn 样式
+- ChatPane：源码区按内容显示「查看正文（v2）」或「查看 HTML 源码」
+- chat.ts：mock 成文改为 v2 语法正文样例（校园宣传，参照 dev/artifacts/10lian-tuiwen.md 风格）；BAD 演示仍 html 直通
+- chat.rs：请求体补 max_tokens 16000（实测 reasoning_effort max 下推理会吃光默认预算导致正文为空）
+- scripts/compose-check.mjs（22 项断言）+ compose-cli.mjs（命令行渲染）
+
+验证：
+- pnpm build exit 0；compose-check 22/22（模式检测/banner/steps/band/badge/title/气泡/art 移除/本地图与表格警告/文字类结构）
+- E2E 31 项全绿零浏览器错误（S1.7 源码区=v2 正文、新增 S1.8 compose 渲染断言：预览含 banner 标题/小节/气泡文本；S1.5 导出 7485B 为 compose HTML；S9a-d 语义保持；S2 直通检出）
+- 真实模型 live：v4-flash 按 v2 协议产出 900 字日系风正文（cols/steps/band/KEY 气泡/引用/badge 全语法）→ compose 渲染 promo 755 纯文字、8188B、0 警告
+- cargo 17/17 + live 冒烟；产物 compose-live.html/compose-sample.html 落 verify-artifacts
+
+---
+
 ## 2026-09-04
 
 ### [New Feature] 第 11 轮：结构化需求澄清卡——桌面端体现 req-clarify 能力

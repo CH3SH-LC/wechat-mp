@@ -11,6 +11,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-05｜第 14 轮：移植 DSH 完整创作工艺——v2 语法 → HTML 确定性转换器（方案 B）
+- 需求：用户质疑「为什么现在产物的质量还留在最初的版本？我 test 内更新的大量内容都去哪里了」。检查结论：知识文件零丢失（桌面 149 与 test 151 仅差 2 个开发文档，哈希全同，同步于 09/02 重组当天）；根因是消费侧——桌面 persona 创作协议仍是第 1 轮精简版（基础 HTML 语法十行），test 的 47 模块/30 风格/27 文案知识从未进入生成流程。用户选方案 **B：移植 DSH 完整工艺**——把 wechat-mp 预设（SKILL.md Host 源码）的 compose 转换器（v2 排版语法 → 微信合法内联 HTML，DESIGNS text/promo 双色系 + 间距 v5 + 平面化 v10）移植到桌面端，创作协议改为模型产出 v2 语法正文、前端确定性转 HTML。
+- 改动点：①新建 src/lib/compose.ts（转写 SKILL.md markdownToWechatHtml 核心：inline/bubble/divider/heading/quote/card/steps/banner/cols/imgrow/imgcard/timeline/band/frame/list/table/code/title/lace + detectMode + art:// 移除警告；纯 TS 无微信依赖，桌面版无资产 → art:// 引用移除并警告）；②persona 创作协议改为输出 ```v2 围栏正文（Markdown + v2 语法表，由转换器渲染），不再直接写 HTML；知识节选保留；③前端协议：```v2 围栏 → compose → 375px 预览 + 质量检查；```html 围栏仍支持直通（保留违规演示与旧会话）；气泡显示说明文字 + 可展开查看正文；会话恢复时对最后 v2 正文重放 compose；④模式控件传给 compose（auto/text/promo）；⑤模拟端成文改为 v2 正文样例（参照 dev/artifacts/10lian-tuiwen.md）；⑥验收基线：全语法样例经 compose 输出与 DSH syntax-text/promo.html 结构同源（关键块级断言），E2E 回归 + 真实 live 生成对比。
+- 验收标准：pnpm build exit 0；E2E 全绿（S1 预览为 compose 产物且质量通过、S2 违规演示直通检出、S9a-d 语义保持）；compose 单测（node 直接跑？前端无测试框架 → 以 E2E 断言 + 样例基线为准）；文档同步 + 提交；release 重建。
+- 状态：✅ 完成（compose.ts 移植 DSH 转换器 22 项脚本检查全过；persona 改 v2 协议；```v2 围栏→compose→预览+质量检查，```html 直通保留；会话恢复 v2 重放；compose-warn 展示 art:///本地图/表格/超长警告；修复 reasoning max 下无 max_tokens 导致推理吃光预算的隐患（body 加 max_tokens 16000）；E2E 31 项全绿零浏览器错误（新增 S1.8 compose 渲染断言）；真实模型 live 验证：v4-flash 按 v2 协议产出 900 字日系正文 → compose 渲染 755 纯文字 0 警告；cargo 17/17 + live 冒烟；release 重建含本功能）
+
 ### 2026-09-05｜第 13 轮：与 DSH 全面对齐——模型/推理配置 + 模型自主对话（检查驱动）
 - 需求：用户问「为什么和我用在 deepseek harness 里的差这么多」，检查定位三大差异：①模型配置——DSH 用 deepseek-v4-flash + reasoningEffort max，桌面端默认 deepseek-chat 且请求体无推理参数（同 key 实测 v4-flash 带内部推理、输出更自然）；②对话行为——DSH 模型完全自主，桌面端第 12 轮仍是本地正则路由 + expectRef 状态机；③人设/流程——DSH 预设 persona 对话与创作一体。用户确认「全面对齐优化」。
 - 改动点：①Rust chat.rs 默认模型 deepseek-chat → deepseek-v4-flash，请求体带推理参数（兼容策略实测后定，如仅 v4 系发送）；resolve_config 相关单测同步；②前端设置默认模型同步 v4-flash；③persona 统一为「对话+创作一体」人设（模型自主判断闲聊/答疑/创作、创作模糊时自然反问、产出走 ```html 协议），App 删除本地创作/对话路由与 expectRef 状态机；needs.ts 分类器降级仅供模拟端近似模型判定；④chat.ts 模拟端按「创作意图 or 上一条反问过」自主近似；⑤知识库结构不动（第 13 轮 wechat-mp 设计已排除发布/复盘类，desktop 三层即创作知识面）。

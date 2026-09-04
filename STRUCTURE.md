@@ -19,8 +19,10 @@ wechat-mp-desktop/
 ├── vite.config.ts         # Vite 配置（端口 1420 strictPort，Tauri 专用）
 ├── public/                # 静态资源（空占位）
 ├── scripts/
-│   └── verify-ui.mjs      # E2E 冒烟：点示例→流式→375px 预览断言+截图
-├── docs/information/     # 需求报告（req-clarify 落盘：…-context-rail-clean-chat.md、2026-09-05-conversational-agent.md）
+│   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright）
+│   ├── compose-check.mjs  # composeMarkdown 转换器 22 项断言（node 直跑 TS）
+│   └── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
+├── docs/information/     # 需求报告（…context-rail-clean-chat.md、conversational-agent.md、align-dsh.md、2026-09-05-compose-port.md）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
@@ -31,11 +33,12 @@ wechat-mp-desktop/
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
-│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体、模型自主判断；间距/v10 硬规范+输出协议+知识拼装）
+│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH wechat-mp compose，DESIGNS 双色系）
+│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体、模型自主判断；创作输出 ```v2 语法正文协议 + 知识拼装）
 │   │   ├── needs.ts       # 请求启发式（供浏览器模拟端近似模型自主判定：isCreateRequest/isCancel/evaluate）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
-│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（含违规演示样本）
-│   │   ├── extract.ts     # HTML 提取 + splitAssistant（气泡净化拆分）
+│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（v2 正文样例 + 违规直通演示）
+│   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2)
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
 │   │   ├── sessions.ts    # 多会话：Tauri→sessions 命令 / 浏览器→localStorage（含旧键迁移）

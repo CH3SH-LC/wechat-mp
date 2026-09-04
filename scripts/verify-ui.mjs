@@ -61,7 +61,7 @@ for (const [name, ok] of s1.checks) {
   if (!ok) failed++
 }
 
-// S1.7 对话流净化：气泡无代码文本；「查看 HTML 源码」可展开/收起
+// S1.7 对话流净化：气泡无代码文本；「查看正文」可展开 v2 语法正文/收起
 try {
   const bubble = await page.locator('.msg-assistant-text').last().innerText()
   const clean = !bubble.includes('```') && !bubble.includes('<section')
@@ -70,8 +70,8 @@ try {
   await page.locator('.src-toggle').first().click()
   await page.waitForSelector('.src-view', { timeout: 10000 })
   const src = await page.locator('.src-view').first().innerText()
-  const srcOk = src.includes('<section')
-  console.log(`  ${srcOk ? 'PASS' : 'FAIL'} - S1.7 source expand shows html (${src.length} chars)`)
+  const srcOk = src.includes('[[banner') && src.includes('::: steps')
+  console.log(`  ${srcOk ? 'PASS' : 'FAIL'} - S1.7 source expand shows v2 body (${src.length} chars)`)
   if (!srcOk) failed++
   await page.locator('.src-toggle').first().click()
   await page.waitForTimeout(200)
@@ -80,6 +80,18 @@ try {
   if (!collapsed) failed++
 } catch (e) {
   console.log('  FAIL - S1.7 clean bubble error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S1.8 compose 确定性渲染：v2 正文被排版引擎渲染进 375px 预览
+try {
+  const frame = page.frames().find((f) => f !== page.mainFrame())
+  const bodyTxt = frame ? await frame.locator('body').innerText() : ''
+  const composed = bodyTxt.includes('新生开学典礼') && bodyTxt.includes('典礼流程') && bodyTxt.includes('记得带')
+  console.log(`  ${composed ? 'PASS' : 'FAIL'} - S1.8 compose rendered in preview (${bodyTxt.length} chars)`)
+  if (!composed) failed++
+} catch (e) {
+  console.log('  FAIL - S1.8 compose render error:', String(e).slice(0, 200))
   failed++
 }
 

@@ -5,6 +5,7 @@ import { exportHtml } from '../lib/exportHtml'
 interface Props {
   html: string | null
   quality: QualityResult | null
+  warnings?: string[]
   onClear: () => void
 }
 
@@ -16,7 +17,7 @@ function wrapSrcDoc(html: string): string {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
   html,body{margin:0;padding:0;background:#ffffff;}
-  body{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;width:375px;max-width:100%;margin:0 auto;padding:14px 16px 40px;box-sizing:border-box;}
+  body{font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;width:375px;max-width:100%;margin:0 auto;padding:0 0 40px;box-sizing:border-box;}
 </style>
 </head>
 <body>
@@ -25,7 +26,7 @@ ${html}
 </html>`
 }
 
-export default function PreviewPane({ html, quality, onClear }: Props) {
+export default function PreviewPane({ html, quality, warnings = [], onClear }: Props) {
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [exportMsg, setExportMsg] = useState('')
@@ -70,6 +71,13 @@ export default function PreviewPane({ html, quality, onClear }: Props) {
       </div>
 
       {exportMsg && <div className="export-msg">{exportMsg}</div>}
+      {warnings.length > 0 && (
+        <div className="compose-warn">
+          {warnings.slice(0, 3).map((w, i) => (
+            <div key={i}>{w}</div>
+          ))}
+        </div>
+      )}
 
       {html && quality && (
         <div className={`quality-strip ${quality.ok ? 'q-ok' : 'q-fail'}`}>
