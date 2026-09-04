@@ -231,6 +231,52 @@ try {
   failed++
 }
 
+// S9 需求澄清卡（req-clarify 落地）：模糊请求挂卡 → 确认后生成；直接写 → 带默认注直行
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('textarea', { timeout: 20000 })
+
+  // 9a 模糊请求：出现澄清卡，不触发流式
+  await page.locator('textarea').fill('帮我写一篇推文，主题是新书上市')
+  await page.locator('textarea').press('Enter')
+  await page.waitForSelector('.clarify-card', { timeout: 10000 })
+  const cardText = await page.locator('.clarify-card').innerText()
+  const cardOk = cardText.includes('类型') && cardText.includes('字数') && cardText.includes('确认并生成')
+  console.log(`  ${cardOk ? 'PASS' : 'FAIL'} - S9a clarify card shown for vague request`)
+  if (!cardOk) failed++
+  const noStreamYet = (await page.locator('.typing').count()) === 0
+  console.log(`  ${noStreamYet ? 'PASS' : 'FAIL'} - S9a no generation before confirm`)
+  if (!noStreamYet) failed++
+
+  // 点选 日系 + 适中，确认后生成
+  await page.locator('.clarify-opts .chip', { hasText: '日系' }).click()
+  await page.locator('.clarify-opts .chip', { hasText: '适中' }).click()
+  await page.locator('.clarify-foot .btn-send').click()
+  await waitStreamDone()
+  const userA = await page.locator('.msg-user').last().innerText()
+  const annotOk = userA.includes('需求确认') && userA.includes('日系')
+  console.log(`  ${annotOk ? 'PASS' : 'FAIL'} - S9a confirm generates with annotation`)
+  if (!annotOk) failed++
+
+  // 9b 直接写：不弹卡，直行并附需求默认注
+  await page.locator('.mini', { hasText: '清空' }).click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  await page.locator('textarea').fill('写一篇咖啡店开业宣传，日系风，800字左右，直接写')
+  await page.locator('textarea').press('Enter')
+  await page.waitForTimeout(600)
+  const noCard = (await page.locator('.clarify-card').count()) === 0
+  console.log(`  ${noCard ? 'PASS' : 'FAIL'} - S9b direct-write skips clarify card`)
+  if (!noCard) failed++
+  await waitStreamDone()
+  const userB = await page.locator('.msg-user').last().innerText()
+  const noteB = userB.includes('（需求') && userB.includes('口语化')
+  console.log(`  ${noteB ? 'PASS' : 'FAIL'} - S9b direct-write carries assumption note`)
+  if (!noteB) failed++
+} catch (e) {
+  console.log('  FAIL - S9 clarify error:', String(e).slice(0, 200))
+  failed++
+}
+
 if (errors.length) {
   console.log('browser errors:', errors.slice(0, 5))
   failed++

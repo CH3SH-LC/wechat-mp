@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { MOCK_TOPICS } from '../lib/chat'
 import { splitAssistant } from '../lib/extract'
+import { ClarifySelections } from '../lib/needs'
+import ClarifyCard from './ClarifyCard'
 
 export interface DisplayMsg {
   id: number
@@ -19,6 +21,9 @@ interface Props {
   style: Style
   onModeChange: (m: Mode) => void
   onStyleChange: (s: Style) => void
+  pendingClarify: { text: string; missing: (keyof ClarifySelections)[] } | null
+  onClarifyConfirm: (s: ClarifySelections) => void
+  onClarifySkip: () => void
 }
 
 export type Mode = 'auto' | 'text' | 'promo'
@@ -58,6 +63,9 @@ export default function ChatPane({
   style,
   onModeChange,
   onStyleChange,
+  pendingClarify,
+  onClarifyConfirm,
+  onClarifySkip,
 }: Props) {
   const [input, setInput] = useState('')
   const [openSrc, setOpenSrc] = useState<ReadonlySet<number>>(new Set())
@@ -73,7 +81,7 @@ export default function ChatPane({
 
   const send = () => {
     const t = input.trim()
-    if (!t || busy) return
+    if (!t || busy || pendingClarify) return
     setInput('')
     onSend(t)
   }
@@ -118,7 +126,15 @@ export default function ChatPane({
       </div>
 
       <div className="chat-body">
-        {msgs.length === 0 && (
+        {pendingClarify && (
+          <ClarifyCard
+            text={pendingClarify.text}
+            missing={pendingClarify.missing}
+            onConfirm={onClarifyConfirm}
+            onSkip={onClarifySkip}
+          />
+        )}
+        {msgs.length === 0 && !pendingClarify && (
           <div className="chat-empty">
             <p>输入主题，AI 直接产出微信合法 HTML 推文。</p>
             <div className="chips">

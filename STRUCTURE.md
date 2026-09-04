@@ -26,15 +26,17 @@ wechat-mp-desktop/
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化：仅说明文字+查看 HTML 源码展开）+ 模式/风格 + 输入
+│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开）+ 澄清卡 + 模式/风格 + 输入
+│   │   ├── ClarifyCard.tsx# 需求澄清卡：分维度选项补齐，确认后生成（req-clarify 落地）
 │   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
 │   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）
+│   │   ├── needs.ts       # 需求评估（类型/风格/字数/调性/配图）+ 需求确认/默认注（req-clarify）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
 │   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（含违规演示样本）
-│   │   ├── extract.ts     # 从回复中提取 ```html 围栏
+│   │   ├── extract.ts     # HTML 提取 + splitAssistant（气泡净化拆分）
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
 │   │   ├── sessions.ts    # 多会话：Tauri→sessions 命令 / 浏览器→localStorage（含旧键迁移）

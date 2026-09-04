@@ -9,6 +9,7 @@ import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
+import { ClarifySelections, assumptionNote, describeSelections, evaluate } from './lib/needs'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
@@ -34,6 +35,31 @@ function decoratePrompt(text: string, mode: Mode, style: Style): string {
   return out
 }
 
+// 组装"需求确认/默认"注（req-clarify：确认合同与显式假设）
+function annotatePrompt(
+  text: string,
+  known: ClarifySelections,
+  base: { type: string | null; style: string | null; words: string | null; tone: string | null; image: boolean | null },
+): string {
+  const merged: ClarifySelections = {
+    type: known.type && known.type !== 'auto' ? known.type : null,
+    style: known.style && known.style !== 'auto' ? known.style : null,
+    words: known.words || null,
+    tone: known.tone || null,
+    image: known.image === null || known.image === undefined ? null : known.image,
+  }
+  const baseAssess = {
+    type: merged.type ?? base.type,
+    style: merged.style ?? base.style,
+    words: merged.words ?? base.words,
+    tone: merged.tone ?? base.tone,
+    image: merged.image ?? base.image,
+  }
+  const note = [...new Set([...describeSelections(merged), ...assumptionNote(baseAssess)])]
+  if (!note.length) return text
+  return `${text}\n（需求${known.type || known.style || known.words || known.tone || known.image !== null ? '确认' : '默认'}：${note.join('；')}）`
+}
+
 export default function App() {
   const [msgs, setMsgs] = useState<DisplayMsg[]>([])
   const [busy, setBusy] = useState(false)
@@ -45,6 +71,9 @@ export default function App() {
   const [kbCount, setKbCount] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+
+  // 需求澄清卡（req-clarify 落地）：待澄清请求与缺失维度
+  const [pendingClarify, setPendingClarify] = useState<{ text: string; missing: (keyof ClarifySelections)[] } | null>(null)
 
   // 会话栏：默认按窗口宽度展开（≤1120px 折叠），顶栏「会话」按钮为折叠开关
   const [railOpen, setRailOpen] = useState<boolean>(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1120))
@@ -71,6 +100,9 @@ export default function App() {
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
       .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
+    // 避免恢复后的消息 id 与 idSeq 计数器冲突（React key 唯一性）
+    const maxId = mapped.reduce((acc, m) => Math.max(acc, m.id), 0)
+    if (maxId >= idSeq) idSeq = maxId + 1
     setMsgs(mapped)
     if (VALID_MODES.includes(item.mode as Mode)) setMode(item.mode as Mode)
     else setMode('auto')
@@ -96,6 +128,7 @@ export default function App() {
     setQuality(null)
     setNote('')
     setSavedAt('')
+    setPendingClarify(null)
   }
 
   // 启动：加载会话列表与当前会话（首次自动建会话；旧单会话自动迁移）
@@ -185,16 +218,17 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const send = async (text: string) => {
+  // ---------- 需求澄清分流（req-clarify）----------
+  const runGenerate = async (prompt: string) => {
     if (busyRef.current) return
-    const userText = decoratePrompt(text, mode, style)
+    const userText = decoratePrompt(prompt, mode, style)
     const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content: userText }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
     setHtml(null)
     setQuality(null)
 
-    const r = await retrieve(text + (style !== 'auto' ? STYLE_PHRASE[style] : ''))
+    const r = await retrieve(prompt + (style !== 'auto' ? STYLE_PHRASE[style] : ''))
     setNote(
       r.hits.length
         ? r.hits.slice(0, 8).join(' / ')
@@ -241,6 +275,36 @@ export default function App() {
       const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
       persistNow(currentId, saveMsgs, mode, style)
     }
+  }
+
+  const send = async (text: string) => {
+    if (busyRef.current || pendingClarify) return
+    const ev = evaluate(text)
+    if (ev.needsClarify) {
+      // 缺 ≥2 项且未说"直接写"：挂澄清卡，暂不生成
+      setPendingClarify({ text, missing: ev.missing })
+      return
+    }
+    // 直接生成路径：仍按 req-clarify"直接做也标注假设"，缺项附默认注
+    const known: ClarifySelections = { type: ev.assessment.type, style: ev.assessment.style, words: ev.assessment.words, tone: ev.assessment.tone, image: ev.assessment.image }
+    await runGenerate(annotatePrompt(text, known, ev.assessment))
+  }
+
+  const confirmClarify = (sel: ClarifySelections) => {
+    if (!pendingClarify || busyRef.current) return
+    const p = pendingClarify
+    setPendingClarify(null)
+    const ev = evaluate(p.text)
+    void runGenerate(annotatePrompt(p.text, sel, ev.assessment))
+  }
+
+  const skipClarify = () => {
+    if (!pendingClarify || busyRef.current) return
+    const p = pendingClarify
+    setPendingClarify(null)
+    const ev = evaluate(p.text)
+    const known: ClarifySelections = { type: null, style: null, words: null, tone: null, image: null }
+    void runGenerate(annotatePrompt(p.text, known, ev.assessment))
   }
 
   const stop = () => {
@@ -342,6 +406,9 @@ export default function App() {
           style={style}
           onModeChange={setMode}
           onStyleChange={setStyle}
+          pendingClarify={pendingClarify}
+          onClarifyConfirm={confirmClarify}
+          onClarifySkip={skipClarify}
         />
         <PreviewPane html={html} quality={quality} onClear={clear} />
       </main>
