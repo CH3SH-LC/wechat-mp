@@ -160,6 +160,25 @@ body {
 }
 
 .topbar-settings { border-color: var(--accent); color: var(--accent); }
+.sess-btn { border-color: var(--border); color: var(--text); font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 会话菜单 ---------- */
+.session-panel {
+  width: 430px; max-width: 94vw; background: #fff; border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(20, 30, 45, 0.25); overflow: hidden;
+}
+.session-list { max-height: 50vh; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.session-empty { color: var(--sub); font-size: 13px; text-align: center; padding: 18px; }
+.sess-row {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.sess-row:hover { border-color: var(--accent); }
+.sess-row.sess-active { border-color: var(--accent); background: #eef3fb; }
+.sess-main { flex: 1; min-width: 0; }
+.sess-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-meta { font-size: 11px; color: var(--sub); margin-top: 2px; }
+.sess-del { flex: 0 0 auto; }
 
 /* ---------- 设置面板 ---------- */
 .settings-overlay {

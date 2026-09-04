@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn default_export_dir() -> Result<PathBuf, String> {
-    crate::draft::exports_dir()
+    crate::sessions::exports_dir()
 }
 
 fn sanitize_name(raw: &str) -> String {

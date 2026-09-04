@@ -27,7 +27,8 @@ wechat-mp-desktop/
 │   ├── components/
 │   │   ├── ChatPane.tsx   # 左栏：消息流 + 快速示例 + 模式/风格控制条 + 输入行
 │   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
-│   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
+│   │   ├── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
+│   │   └── SessionMenu.tsx   # 会话弹层：列表/新建/删除/当前高亮（多上下文切换）
 │   ├── lib/
 │   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
@@ -35,7 +36,7 @@ wechat-mp-desktop/
 │   │   ├── extract.ts     # 从回复中提取 ```html 围栏
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
-│   │   ├── draft.ts       # 会话存档：Tauri→save/load_draft / 浏览器→localStorage
+│   │   ├── sessions.ts    # 多会话：Tauri→sessions 命令 / 浏览器→localStorage（含旧键迁移）
 │   │   └── settings.ts    # API 设置：Tauri→save/load_settings / 浏览器→localStorage
 │   └── knowledge/         # 知识语料 149 文件（三层：文本/视觉/插图/其它 + 00-GUIDE/design-logic）
 │       ├── 00-GUIDE.md    # 三层路由总表
@@ -48,10 +49,10 @@ wechat-mp-desktop/
     ├── icons/             # 应用图标
     └── src/
         ├── main.rs        # 入口（调 lib::run）
-        ├── lib.rs         # Builder + 6 命令注册（chat/export/draft/settings）
+        ├── lib.rs         # Builder + 10 命令注册（chat/export/sessions/settings）
         ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式、事件推送、单测+live
         ├── export.rs      # 导出 HTML（workspace/exports/，文件名消毒，4 单测）
-        ├── draft.rs       # 会话存档（workspace/draft.json，损坏容错，3 单测）
+        ├── sessions.rs    # 多会话（workspace/sessions/<id>.json + state.json；旧 draft 迁移；5 单测）
         └── settings.rs    # API 设置（workspace/settings.json，损坏→默认，2 单测）
 
 ## 当前核心事实

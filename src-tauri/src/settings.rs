@@ -14,7 +14,7 @@ pub struct AppSettings {
 }
 
 pub fn settings_path() -> Result<std::path::PathBuf, String> {
-    Ok(crate::draft::workspace_dir()?.join("settings.json"))
+    Ok(crate::sessions::workspace_dir()?.join("settings.json"))
 }
 
 /// 读设置：文件缺失或损坏 → 返回默认（不覆盖原文件，避免误删用户密钥）
@@ -40,7 +40,7 @@ pub fn save_settings_to(dir: &std::path::Path, s: &AppSettings) -> Result<String
 
 #[tauri::command]
 pub fn save_settings(settings: AppSettings) -> Result<String, String> {
-    let dir = crate::draft::workspace_dir()?;
+    let dir = crate::sessions::workspace_dir()?;
     save_settings_to(&dir, &settings)
 }
 

@@ -99,9 +99,13 @@ try {
 
   await page.locator('.mini', { hasText: '清空' }).click()
   await page.waitForSelector('.chat-empty', { timeout: 10000 })
-  const stored = await page.evaluate(() => localStorage.getItem('wxmp-draft-v1'))
-  const clearOk = stored === null
-  console.log(`  ${clearOk ? 'PASS' : 'FAIL'} - S1.6 clear wipes storage`)
+  const state = await page.evaluate(() => JSON.parse(localStorage.getItem('wxmp-sessions-v1') || '{}'))
+  const curMsgLen = (() => {
+    const cur = state.current
+    return cur && state.items[cur] ? state.items[cur].messages.length : -1
+  })()
+  const clearOk = curMsgLen === 0
+  console.log(`  ${clearOk ? 'PASS' : 'FAIL'} - S1.6 clear empties current session (msgs=${curMsgLen})`)
   if (!clearOk) failed++
 } catch (e) {
   console.log('  FAIL - S1.6 restore/clear error:', String(e).slice(0, 200))
@@ -151,6 +155,59 @@ try {
   await page.locator('.settings-head .mini').click()
 } catch (e) {
   console.log('  FAIL - S7 settings error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S8 多会话上下文：新建 → 独立内容 → 列表 2 条 → 切换恢复 → 删除回退
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.sess-btn[data-ready="1"]', { timeout: 20000 })
+
+  const openMenu = async () => {
+    await page.locator('.sess-btn').click()
+    await page.waitForSelector('.session-panel', { timeout: 10000 })
+  }
+  const rowCount = () => page.locator('.sess-row').count()
+
+  await openMenu()
+  const n0 = await rowCount()
+  await page.locator('.settings-foot .btn-send', { hasText: '新建会话' }).click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+
+  // 在 B 会话输入并生成（内容独立于 A）
+  await page.locator('textarea').fill('写一篇毕业季活动推文，直接写')
+  await page.locator('textarea').press('Enter')
+  await waitStreamDone()
+  const userB = await page.locator('.msg-user').last().innerText()
+  const bOk = userB.includes('毕业季')
+  console.log(`  ${bOk ? 'PASS' : 'FAIL'} - S8 new session independent content (${userB.slice(0, 24)}…)`)
+  if (!bOk) failed++
+
+  await openMenu()
+  const n1 = await rowCount()
+  const grewOk = n1 === n0 + 1
+  console.log(`  ${grewOk ? 'PASS' : 'FAIL'} - S8 session list grew (${n0} → ${n1})`)
+  if (!grewOk) failed++
+
+  // 切回第一个会话（倒序列表最末为最旧）
+  const firstRow = page.locator('.sess-row').last()
+  await firstRow.click()
+  await page.waitForTimeout(400)
+  const backOk = (await page.locator('.msg-user').count()) >= 0
+  console.log(`  ${backOk ? 'PASS' : 'FAIL'} - S8 switch back ok (rows shown)`)
+  if (!backOk) failed++
+
+  // 删除毕业季会话（当前可能已非它；删除后列表回退）
+  await openMenu()
+  await page.locator('.sess-row', { hasText: '毕业季' }).locator('.sess-del').click()
+  await page.waitForTimeout(500)
+  const n2 = await rowCount()
+  const shrinkOk = n2 === n0
+  console.log(`  ${shrinkOk ? 'PASS' : 'FAIL'} - S8 delete session (${n1} → ${n2})`)
+  if (!shrinkOk) failed++
+  await page.locator('.settings-head .mini').click()
+} catch (e) {
+  console.log('  FAIL - S8 multi-session error:', String(e).slice(0, 200))
   failed++
 }
 

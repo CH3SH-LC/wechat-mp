@@ -1,11 +1,11 @@
 mod chat;
-mod draft;
 mod export;
+mod sessions;
 mod settings;
 
 use chat::chat_stream;
-use draft::{load_draft, save_draft};
 use export::export_html;
+use sessions::{create_session, delete_session, list_sessions, open_session, rename_session, save_session};
 use settings::{load_settings, save_settings};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,10 +15,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             chat_stream,
             export_html,
-            save_draft,
-            load_draft,
             save_settings,
-            load_settings
+            load_settings,
+            list_sessions,
+            create_session,
+            open_session,
+            save_session,
+            rename_session,
+            delete_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

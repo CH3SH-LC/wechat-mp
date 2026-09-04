@@ -7,6 +7,24 @@
 
 ## 2026-09-04
 
+### [New Feature] 第 9 轮：多会话上下文窗口（像 DSH 的会话切换）
+
+需求 / 变更原因：
+用户反馈"没有项目的概念/上下文的概念，需要像 dsh 那样有不同的上下文窗口"——每会话独立上下文（历史/内容/模式/风格），新建/切换/删除/自动保存/启动恢复；旧单会话 draft.json 自动迁移首个会话（不丢稿）。
+
+实现：
+- Rust draft.rs → sessions.rs：workspace/sessions/<id>.json + state.json 当前指针；sessions_dir/state 注入 base 可测；标题规则（首条 user 消息 ≤16 字 / 自定义保留）；旧 draft.json 自动迁移（rename .migrated）；命令 list/create/open/save/rename/delete_session（10 命令总量）；export/settings 引用改 sessions::workspace_dir
+- 前端 draft.ts → sessions.ts（Tauri invoke / localStorage wxmp-sessions-v1，旧 wxmp-draft-v1 迁移）；SessionMenu 组件（列表/新建/删除/当前高亮）；App 状态机 currentId（防抖自动保存绑定当前会话 + 流结束即存 + 切换先存后开 + 删除回退 + 清空=清当前内容）；顶栏「会话 · 标题」入口 + data-ready 就绪标记
+- 修 dev StrictMode 双跑：bootRef 互斥 + 移除 alive 门控（cleanup 先于异步完成导致引导丢失）
+
+验证：
+- cargo test 17/17（sessions 4：create/list/roundtrip、标题规则、删除回退当前、legacy 迁移）
+- pnpm build exit 0（主包 244.5kB）
+- E2E 全绿：S1/S1.5/S1.6(新语义 清空=空当前会话)/S2/S7/**S8 多会话**（1→2 新建独立内容 毕业季 → 列表增长 → 切换 → 删 2→1 回退）
+- release 重建含本功能
+
+---
+
 ### [Build] 第 8 轮：发布刷新——全功能 release 重建 + 安装闭环复验
 
 需求 / 变更原因：

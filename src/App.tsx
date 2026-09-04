@@ -3,12 +3,13 @@ import { listen } from '@tauri-apps/api/event'
 import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import SettingsPanel from './components/SettingsPanel'
+import SessionMenu from './components/SessionMenu'
 import { buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
-import { clearDraft, fmtTime, loadDraft, saveDraft } from './lib/draft'
+import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
 let idSeq = 1
@@ -22,6 +23,9 @@ const STYLE_PHRASE: Record<Exclude<Style, 'auto'>, string> = {
   business: '商务',
   handbook: '手账',
 }
+
+const VALID_MODES: Mode[] = ['auto', 'text', 'promo']
+const VALID_STYLES: Style[] = ['auto', 'campus', 'tech', 'guochao', 'japanese', 'minimal', 'business', 'handbook']
 
 function decoratePrompt(text: string, mode: Mode, style: Style): string {
   let out = text
@@ -41,55 +45,11 @@ export default function App() {
   const [kbCount, setKbCount] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState('')
   const [showSettings, setShowSettings] = useState(false)
+  const [showSessions, setShowSessions] = useState(false)
 
-  // 知识库懒加载：首屏后异步载入，显示条目数
-  useEffect(() => {
-    ensureKnowledgeLoaded().then((e) => setKbCount(e.length)).catch(() => setKbCount(0))
-  }, [])
-
-  // 启动恢复会话存档（桌面 draft.json / 浏览器 localStorage）
-  useEffect(() => {
-    let alive = true
-    loadDraft().then(({ data }) => {
-      if (!alive || !data || !data.messages.length) return
-      setMsgs(data.messages)
-      if (data.mode === 'text' || data.mode === 'promo') setMode(data.mode)
-      if (
-        data.style === 'campus' || data.style === 'tech' || data.style === 'guochao' ||
-        data.style === 'japanese' || data.style === 'minimal' || data.style === 'business' ||
-        data.style === 'handbook'
-      ) {
-        setStyle(data.style as Style)
-      }
-      const last = [...data.messages].reverse().find((m) => m.role === 'assistant')
-      if (last) {
-        const r = extractHtml(last.content)
-        if (r) {
-          setHtml(r.html)
-          setQuality(checkHtml(r.html))
-        }
-      }
-      setSavedAt(fmtTime(data.updatedAt))
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  // 变更自动存档（防抖 700ms）
-  useEffect(() => {
-    if (!msgs.length) return
-    const timer = window.setTimeout(() => {
-      saveDraft({
-        v: 1,
-        updatedAt: new Date().toISOString(),
-        mode,
-        style,
-        messages: msgs,
-      }).then(() => setSavedAt(fmtTime(new Date().toISOString())))
-    }, 700)
-    return () => window.clearTimeout(timer)
-  }, [msgs, mode, style])
+  // 多会话状态
+  const [currentId, setCurrentId] = useState<string | null>(null)
+  const [sessionItems, setSessionItems] = useState<SessionMetaL[]>([])
 
   const busyRef = useRef(false)
   const draftRef = useRef('')
@@ -100,6 +60,93 @@ export default function App() {
     msgsRef.current = msgs
   }, [msgs])
 
+  // ---------- 会话工具 ----------
+  const refreshItems = () => {
+    listSessions().then((r) => setSessionItems(r.items))
+  }
+
+  const applySession = (item: SessionItem) => {
+    const mapped: DisplayMsg[] = item.messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
+      .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
+    setMsgs(mapped)
+    if (VALID_MODES.includes(item.mode as Mode)) setMode(item.mode as Mode)
+    else setMode('auto')
+    if (VALID_STYLES.includes(item.style as Style)) setStyle(item.style as Style)
+    else setStyle('auto')
+    const last = [...mapped].reverse().find((m) => m.role === 'assistant')
+    if (last) {
+      const r = extractHtml(last.content)
+      if (r) {
+        setHtml(r.html)
+        setQuality(checkHtml(r.html))
+      }
+    } else {
+      setHtml(null)
+      setQuality(null)
+    }
+    setSavedAt(fmtTime(item.updatedAt))
+  }
+
+  const clearAllChat = () => {
+    setMsgs([])
+    setHtml(null)
+    setQuality(null)
+    setNote('')
+    setSavedAt('')
+  }
+
+  // 启动：加载会话列表与当前会话（首次自动建会话；旧单会话自动迁移）
+  // bootRef 互斥防 StrictMode 双跑；不设 alive 门控（cleanup 会先于异步完成执行）
+  const bootRef = useRef(false)
+  useEffect(() => {
+    if (bootRef.current) return
+    bootRef.current = true
+    ;(async () => {
+      let r = await listSessions()
+      if (!r.items.length) {
+        const id = await createSession()
+        r = { items: [{ id, title: '新对话', updatedAt: '', count: 0 }], current: id }
+      }
+      setSessionItems(r.items)
+      const cur = r.current ?? r.items[0].id
+      setCurrentId(cur)
+      const item = await openSession(cur)
+      if (item) {
+        applySession(item)
+        refreshItems()
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 知识库懒加载
+  useEffect(() => {
+    ensureKnowledgeLoaded().then((e) => setKbCount(e.length)).catch(() => setKbCount(0))
+  }, [])
+
+  // 变更自动存档（防抖 700ms，绑定当前会话）
+  useEffect(() => {
+    if (!currentId || !msgs.length) return
+    const id = currentId
+    const timer = window.setTimeout(() => {
+      saveSession(id, { mode, style, messages: msgs }).then(() => {
+        setSavedAt(fmtTime(new Date().toISOString()))
+        refreshItems()
+      })
+    }, 700)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msgs, mode, style, currentId])
+
+  const persistNow = (id: string, messages: DisplayMsg[], m: Mode, s: Style) => {
+    saveSession(id, { mode: m, style: s, messages }).then(() => {
+      setSavedAt(fmtTime(new Date().toISOString()))
+      refreshItems()
+    })
+  }
+
+  // ---------- 对话 ----------
   const updateAssistant = (draft: string) => {
     draftRef.current = draft
     setMsgs((prev) => {
@@ -182,20 +229,16 @@ export default function App() {
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
-    // 流结束后跑一次质量检查，并立即存档
+    // 流结束：终检 + 立即存档到当前会话
     const final = extractHtml(draftRef.current)
     if (final) {
       setHtml(final.html)
       setQuality(checkHtml(final.html))
     }
-    const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq, role: 'assistant', content: draftRef.current }]
-    saveDraft({
-      v: 1,
-      updatedAt: new Date().toISOString(),
-      mode,
-      style,
-      messages: saveMsgs,
-    }).then(() => setSavedAt(fmtTime(new Date().toISOString())))
+    if (currentId) {
+      const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
+      persistNow(currentId, saveMsgs, mode, style)
+    }
   }
 
   const stop = () => {
@@ -205,16 +248,59 @@ export default function App() {
     setBusy(false)
   }
 
+  // ---------- 会话操作 ----------
+  const newSession = async () => {
+    if (busyRef.current || showSessions) setShowSessions(false)
+    if (busyRef.current) return
+    const id = await createSession()
+    if (!id) return
+    clearAllChat()
+    setCurrentId(id)
+    setShowSessions(false)
+    refreshItems()
+  }
+
+  const switchSession = async (id: string) => {
+    if (busyRef.current || id === currentId) {
+      setShowSessions(false)
+      return
+    }
+    if (currentId) persistNow(currentId, msgsRef.current, mode, style)
+    const item = await openSession(id)
+    if (item) {
+      clearAllChat()
+      applySession(item)
+      setCurrentId(id)
+    }
+    setShowSessions(false)
+    refreshItems()
+  }
+
+  const removeSession = async (id: string) => {
+    const r = await deleteSession(id)
+    setSessionItems(r.items)
+    if (r.current && r.current !== currentId) {
+      const item = await openSession(r.current)
+      clearAllChat()
+      if (item) applySession(item)
+      setCurrentId(r.current)
+    } else if (!r.current) {
+      clearAllChat()
+      const nid = await createSession()
+      setCurrentId(nid)
+    }
+    refreshItems()
+  }
+
+  // 清空 = 清空当前会话内容（保留会话，标题回到默认）
   const clear = () => {
-    setMsgs([])
-    setHtml(null)
-    setQuality(null)
-    setNote('')
-    setSavedAt('')
-    void clearDraft()
+    if (busyRef.current) return
+    clearAllChat()
+    if (currentId) persistNow(currentId, [], mode, style)
   }
 
   const status = inTauri() ? 'DeepSeek 桌面' : '模拟模式（浏览器）'
+  const currentTitle = sessionItems.find((m) => m.id === currentId)?.title ?? '新对话'
 
   return (
     <div className="app">
@@ -222,16 +308,28 @@ export default function App() {
         <div className="brand">
           <span className="logo" />
           公众号推文助手
+          <button className="mini sess-btn" data-ready={currentId ? 1 : 0} onClick={() => setShowSessions(true)}>
+            会话 · {currentTitle.length > 10 ? currentTitle.slice(0, 10) + '…' : currentTitle}
+          </button>
         </div>
         <div className="topbar-meta">
           <span>{kbCount === null ? '知识库加载中…' : `知识库 ${kbCount} 条目 · 三层结构`}</span>
           {savedAt && <span className="hint">已自动保存 {savedAt}</span>}
-          <span className="hint">底座：极简智能体（persona + 知识检索 + 流式对话）</span>
           <button className="mini topbar-settings" onClick={() => setShowSettings(true)}>
             设置
           </button>
         </div>
       </header>
+      {showSessions && (
+        <SessionMenu
+          items={sessionItems}
+          currentId={currentId}
+          onNew={() => void newSession()}
+          onOpen={(id) => void switchSession(id)}
+          onDelete={(id) => void removeSession(id)}
+          onClose={() => setShowSessions(false)}
+        />
+      )}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
       <main className="workspace">
         <ChatPane

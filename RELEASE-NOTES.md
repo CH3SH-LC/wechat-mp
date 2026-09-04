@@ -16,8 +16,10 @@
 3. 质量检查：v10 铁律客户端检查（零 emoji/零图标字符、无 style/script/文档级标签、
    无 linear-gradient/box-shadow、无外链图、无硬性宽度），通过/问题清单展示。
 4. 导出：复制 HTML / 导出文件到 `文档/wechat-mp-workspace/exports/`。
-5. 会话存档：自动保存并启动恢复（`文档/wechat-mp-workspace/draft.json`，
-   浏览器模式用 localStorage）；「清空」= 新对话。
+5. 会话存档：多会话上下文（像 DSH 的会话窗口）——每个会话独立对话历史与内容，
+   顶栏「会话」可新建/切换/删除，自动保存并启动恢复；旧单会话存档自动迁移为首个会话。
+   文件在 `文档/wechat-mp-workspace/sessions/<id>.json` + state.json（浏览器模式 localStorage）；
+   「清空」= 清空当前会话内容。
 6. 知识库懒加载：主包 <240KB（gzip <80KB），149 条目按需加载。
 
 ## 运行方式
