@@ -74,6 +74,29 @@
 
 ---
 
+## 2026-09-05
+
+### [New Feature] 第 15 轮：现场生成美术素材——按知识库每次创作 SVG + 强制使用 + 结构 ≥6
+
+背景 / 变更原因：
+用户问「为什么现在没有生成素材了？我希望根据知识库每次现场生成需要的 svg 素材；强制规定要使用美术素材，且每个 svg 内部结构不得少于 6」。根因：第 14 轮按 DSH"未上传即移除"把 art:// 移除（桌面无微信上传）。方案：桌面本地素材管线——模型按知识库（module-art-assets 规范 + 风格色板）现场绘制 SVG，引擎校验元素 ≥6 后 canvas 渲染 PNG data URI 内嵌（自包含，微信后台粘贴可转存）。
+
+实现：
+- src/lib/compose.ts：新增 `::: art [wide|inline] 说明` 容器——原样收集 SVG 内容，校验带 viewBox 且图形元素 ≥6（svgElementCount：circle/rect/ellipse/line/path/polygon/polyline，剥离 defs/渐变/注释），达标输出 @@ARTn@@ 占位并收集 arts，不达标输出占位文本 + 警告；段落合并 break 条件补 art
+- src/lib/artRender.ts（新）：svgToPngDataUri（canvas 2x → PNG data URI；尺寸超界/canvas 失败回退 svg data URI）+ renderArtPlaceholders（@@ARTn@@ 逐位替换）
+- App：resolvePreview 返回 arts；流中/流末/会话恢复异步渲染替换（artSeqRef 序号防旧渲染覆盖）；质量检查针对渲染后 HTML（data 图不触发外链检查）
+- persona：美术素材铁律（每篇必须 ≥1 素材；现场绘制 SVG：viewBox 建议 750x220/300x300、图形元素 ≥6、植物/自然/器物意象、零文字零 emoji、透明底、低饱和同色系 ≤4 色按知识色板、SVG 内允许轻量明暗渐变、每屏 ≤1、wide/inline 用法示例）
+- chat.ts mock 样例加 art 块（朝阳旗帜横幅 SVG 7 元素）；compose-check/compose-cli 增 art 断言与摘要
+- E2E S1.8 增"素材渲染为 data 图片"断言
+
+验证：
+- pnpm build exit 0；compose-check 全绿（art 收集/占位/元素计数/weak svg 拦截/inline 居中）
+- E2E 32 项全绿零浏览器错误（S1.8 art svg rendered to data image=1；S1.5 导出 64KB 含 data PNG；S9a-d/S2 语义保持）
+- 真实模型 live：v4-flash 产出 2606 字日系咖啡开业 v2 正文，素材块"日式手冲与一颗豆子的香气"SVG（渐变陶杯/拉花涡纹/蒸汽/豆子）15 图形元素 ≥6，compose 渲染 promo 603 字 0 警告
+- cargo 17/17（Rust 零改动）；产物 compose-live-art.html 落 verify-artifacts
+
+---
+
 ## 2026-09-04
 
 ### [New Feature] 第 11 轮：结构化需求澄清卡——桌面端体现 req-clarify 能力

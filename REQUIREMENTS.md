@@ -11,6 +11,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-05｜第 15 轮：现场生成美术素材——按知识库每次创作 SVG 素材 + 强制使用 + 结构 ≥6
+- 需求：用户问「为什么现在没有生成素材了？我希望能够根据知识库，每次现场生成需要的 svg 素材；另外，强制规定要使用美术素材，且每个 svg 内部结构不得少于 6」。根因：第 14 轮移植按 DSH"未上传即移除"把 art:// 移除（桌面无微信上传通道）。方案：桌面本地素材管线——模型在 v2 正文里按知识库（module-art-assets 规范 + 风格条目）**现场绘制 SVG**，新语法 `::: art [wide|inline] 说明` + SVG 原始内容 + `:::`；引擎校验 SVG 元素数 ≥6（circle/rect/ellipse/line/path/polygon/polyline/image 合计）与 viewBox 存在；达标 → 前端 canvas 渲染 PNG（2x）→ data URI 内嵌预览与导出（自包含，微信后台粘贴可转存）；不达标 → 占位 + 警告。persona 硬规则：每篇创作必须使用 ≥1 个美术素材；素材须植物/自然类、按知识库色板、零文字零 emoji、密度每屏 ≤1。
+- 改动点：compose.ts 增 `::: art` 容器（原样收集 SVG、元素计数校验、宽/居中两种展示规格、arts 收集与占位警告）；artRender.ts（SVG→PNG data URI，canvas 2x，失败回退 svg data URI）；App 异步渲染替换 @@ARTn@@（流中/终检/会话恢复一致，防竞态）；persona 语法表与硬规则；mock 样例含 art 块；compose-check 增校验断言；E2E 断言预览出现渲染 PNG。
+- 验收标准：pnpm build exit 0；compose-check 全绿（新增 art ≥6 通过/<6 占位警告/arts 收集）；E2E 全绿（S1.8 预览含 data:image/png 素材图 + 质量通过）；真实模型 live 产出含素材 v2 正文并渲染；cargo 回归；文档同步 + 提交；release 重建。
+- 状态：✅ 完成（compose.ts 增 ::: art 容器：SVG 原样收集、svgElementCount 校验（circle/rect/ellipse/line/path/polygon/polyline ≥6 且带 viewBox），达标输出 @@ARTn@@ 占位 + arts 收集，不达标占位文本+警告；artRender.ts canvas 2x 渲染 PNG data URI（失败回退 svg data URI）；App 流中/终检/会话恢复异步渲染替换（artSeqRef 防竞态）；persona 素材铁律：每篇 ≥1 素材、现场绘制 SVG、元素 ≥6、植物器物意象、零文字 emoji、低饱和 ≤4 色、每屏 ≤1；E2E 32 项全绿（S1.8 art svg rendered to data image）；compose-check 新增 art 断言全过；真实模型 live：日式手冲素材 SVG 15 元素 0 警告；cargo 17/17；release 重建含本功能）
+
 ### 2026-09-05｜第 14 轮：移植 DSH 完整创作工艺——v2 语法 → HTML 确定性转换器（方案 B）
 - 需求：用户质疑「为什么现在产物的质量还留在最初的版本？我 test 内更新的大量内容都去哪里了」。检查结论：知识文件零丢失（桌面 149 与 test 151 仅差 2 个开发文档，哈希全同，同步于 09/02 重组当天）；根因是消费侧——桌面 persona 创作协议仍是第 1 轮精简版（基础 HTML 语法十行），test 的 47 模块/30 风格/27 文案知识从未进入生成流程。用户选方案 **B：移植 DSH 完整工艺**——把 wechat-mp 预设（SKILL.md Host 源码）的 compose 转换器（v2 排版语法 → 微信合法内联 HTML，DESIGNS text/promo 双色系 + 间距 v5 + 平面化 v10）移植到桌面端，创作协议改为模型产出 v2 语法正文、前端确定性转 HTML。
 - 改动点：①新建 src/lib/compose.ts（转写 SKILL.md markdownToWechatHtml 核心：inline/bubble/divider/heading/quote/card/steps/banner/cols/imgrow/imgcard/timeline/band/frame/list/table/code/title/lace + detectMode + art:// 移除警告；纯 TS 无微信依赖，桌面版无资产 → art:// 引用移除并警告）；②persona 创作协议改为输出 ```v2 围栏正文（Markdown + v2 语法表，由转换器渲染），不再直接写 HTML；知识节选保留；③前端协议：```v2 围栏 → compose → 375px 预览 + 质量检查；```html 围栏仍支持直通（保留违规演示与旧会话）；气泡显示说明文字 + 可展开查看正文；会话恢复时对最后 v2 正文重放 compose；④模式控件传给 compose（auto/text/promo）；⑤模拟端成文改为 v2 正文样例（参照 dev/artifacts/10lian-tuiwen.md）；⑥验收基线：全语法样例经 compose 输出与 DSH syntax-text/promo.html 结构同源（关键块级断言），E2E 回归 + 真实 live 生成对比。

@@ -1,6 +1,6 @@
-// compose-check.mjs —— composeMarkdown 转换器校验（第 14 轮）
+// compose-check.mjs —— composeMarkdown 转换器校验（第 14/15 轮）
 // 用法：node scripts/compose-check.mjs [outDir]
-import { composeMarkdown } from '../src/lib/compose.ts'
+import { composeMarkdown, svgElementCount } from '../src/lib/compose.ts'
 import { writeFileSync } from 'fs'
 
 const SAMPLE = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
@@ -32,6 +32,18 @@ const SAMPLE = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操
 
 第一堂课从典礼开始。愿你们在这里的每一天，都有新的收获。
 
+::: art wide 朝阳与旗帜横幅
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
+<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
+<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
+<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
+<circle cx="640" cy="52" r="5" fill="#ffffff"/>
+<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
+<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
+<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
+</svg>
+:::
+
 [[badge:新生指南]] [[badge:开学典礼]]`
 
 let failed = 0
@@ -55,6 +67,19 @@ check('wrapper present', r.html.startsWith('<section style="padding:4px 16px'))
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
+check('art collected (1 wide)', r.arts.length === 1 && r.arts[0].wide === true, `arts=${r.arts.length}`)
+check('art placeholder in html', r.html.includes('@@ART0@@'))
+check('art wide img style', r.html.includes('width:100%;height:auto;display:block;margin:12px 0'))
+
+// 1b) 素材元素计数：样本 ≥6；劣质素材（<6）被拦截
+const artSvg = r.arts[0]?.svg || ''
+check('sample svg elements >= 6', svgElementCount(artSvg) >= 6, `elements=${svgElementCount(artSvg)}`)
+const weak = composeMarkdown('::: art inline 劣质装饰\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="#ccc"/></svg>\n:::\n\n正文。', { mode: 'text' })
+check('weak svg (1 elem) blocked', weak.arts.length === 0 && weak.warnings.some((w) => w.includes('美术素材未达标')))
+check('weak svg no placeholder img', !weak.html.includes('@@ART') && weak.html.includes('未达标已略过'))
+const inlineMd = '::: art inline 小装饰\n' + artSvg + '\n:::\n\n正文。'
+const inl = composeMarkdown(inlineMd, { mode: 'text' })
+check('inline art centered <=56%', inl.arts.length === 1 && inl.arts[0].wide === false && inl.html.includes('max-width:56%'))
 
 // 2) 文字类：显式 text；h2 无编号；列表为 ul
 const t = composeMarkdown('# 标题\n\n正文第一段。\n\n## 小节\n\n- 甲\n- 乙\n\n> 引用一句话。', { mode: 'text' })

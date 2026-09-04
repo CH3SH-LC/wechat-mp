@@ -24,7 +24,7 @@ export interface MockTopic {
   html?: string // 直通演示样本（违规输出检测等）
 }
 
-// v2 语法正文样例（第 14 轮：创作回复协议 = ```v2 围栏正文，由 composeMarkdown 渲染）
+// v2 语法正文样例（第 14 轮：创作回复协议 = ```v2 围栏正文，由 composeMarkdown 渲染；第 15 轮含 ::: art 素材）
 const SAMPLE_V2 = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
 
 九月第一天，典礼如约而至。这篇清单把当天安排一次看明白。
@@ -48,6 +48,18 @@ const SAMPLE_V2 = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区
 
 ::: band 斜纹
 - 典礼后各班回教室开班会，记得把这份时间表转给同班同学。
+:::
+
+::: art wide 朝阳与旗帜横幅
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
+<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
+<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
+<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
+<circle cx="640" cy="52" r="5" fill="#ffffff"/>
+<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
+<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
+<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
+</svg>
 :::
 
 [[title:新的开始|box]]

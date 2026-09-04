@@ -371,13 +371,29 @@ export interface ComposeImage {
   alt: string
 }
 
+export interface ArtSpec {
+  svg: string
+  alt: string
+  wide: boolean // true=整行全宽；false=居中 ≤56%（行内装饰）
+}
+
 export interface ComposeResult {
   html: string
   plainText: string
   images: ComposeImage[]
+  arts: ArtSpec[]
   warnings: string[]
   mode: 'text' | 'promo'
   modeLabel: string
+}
+
+// 统计 SVG 的图形元素数（circle/rect/ellipse/line/path/polygon/polyline/image；剥离 defs/渐变/注释）
+export function svgElementCount(svg: string): number {
+  const body = String(svg || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<(defs|clipPath|mask|filter|linearGradient|radialGradient|pattern|stop|style|desc|title|metadata)[\s\S]*?<\/\1>/gi, '')
+  const m = body.match(/<(circle|rect|ellipse|line|path|polygon|polyline|image)\b/gi)
+  return m ? m.length : 0
 }
 
 export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResult {
@@ -388,6 +404,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const artUrls: Record<string, string> = {}
   const warnings: string[] = []
   const images: ComposeImage[] = []
+  const arts: ArtSpec[] = []
   const lines = String(md || '').split(/\r?\n/)
   const out: string[] = []
   let i = 0
@@ -459,6 +476,36 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
 
     // 花边分隔线 [[lace]]
     if (/^\[\[lace\]\]$/.test(line)) { out.push(laceDivider(d)); i++; continue }
+
+    // 美术素材 ::: art [wide|inline] 说明（第 15 轮：原样收集 SVG，图形元素 ≥6 才渲染）
+    const artC = line.match(/^:::\s*art(?:\s+(wide|inline))?\s*(.*)$/)
+    if (artC) {
+      const wide = artC[1] === 'wide'
+      const alt = artC[2].trim() || '美术素材'
+      i++
+      const rawLines: string[] = []
+      while (i < lines.length && lines[i].trim() !== ':::') {
+        rawLines.push(lines[i])
+        i++
+      }
+      i++
+      const svgRaw = rawLines.join('\n').trim()
+      const svgM = /<svg\b[^>]*viewBox="[^"]*"[\s\S]*<\/svg>/i.exec(svgRaw)
+      const n = svgM ? svgElementCount(svgM[0]) : 0
+      if (svgM && n >= 6) {
+        const idx = arts.length
+        arts.push({ svg: svgM[0], alt, wide })
+        const imgStyle = wide
+          ? 'width:100%;height:auto;display:block;margin:12px 0;border-radius:8px'
+          : 'max-width:56%;height:auto;display:inline-block;vertical-align:middle;border-radius:8px'
+        const imgTag = '<img src="@@ART' + idx + '@@" alt="' + escapeHtml(alt) + '" style="' + imgStyle + '" />'
+        out.push(wide ? imgTag : '<section style="text-align:center;margin:12px 0">' + imgTag + '</section>')
+      } else {
+        warnings.push('美术素材未达标（需为带 viewBox 的 SVG 且图形元素 ≥6 个），已用占位文本替换')
+        out.push(P(d) + '（此处原为美术素材「' + escapeHtml(alt) + '」，未达标已略过）' + '</p>')
+      }
+      continue
+    }
 
     // 容器 ::: card / ::: steps / ::: cols / ::: imgrow / ::: imgcard / ::: timeline / ::: band / ::: frame
     const cont = line.match(/^:::\s*(card|steps|cols|imgrow|imgcard|timeline|band|frame)\s*(.*)$/)
@@ -572,7 +619,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       const l = lines[i].trim()
       if (l === '' || /^(#{1,6})\s/.test(l) || /^(-{3,}|\*{3,}|_{3,}|~{3,})$/.test(l) || l.startsWith('```') ||
         l.startsWith('>') || /^\s*[-*+]\s+/.test(l) || /^\s*\d+\.\s+/.test(l) || l.startsWith('|') ||
-        /^:::\s*(card|steps|cols|imgrow|imgcard|timeline|band|frame)/.test(l) || l === ':::' || /^(\[\[banner:|\[\[title:)/.test(l)) break
+        /^:::\s*(card|steps|cols|imgrow|imgcard|timeline|band|frame|art)/.test(l) || l === ':::' || /^(\[\[banner:|\[\[title:)/.test(l)) break
       para.push(inline(escapeHtml(l), d))
       i++
     }
@@ -608,5 +655,5 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ').trim()
   if (html2.length >= 20000) warnings.push('正文超过 20000 字符限制（当前约 ' + html2.length + '），微信会拒绝保存')
-  return { html: html2, plainText, images, warnings, mode: modeKey, modeLabel: d.label }
+  return { html: html2, plainText, images, arts, warnings, mode: modeKey, modeLabel: d.label }
 }

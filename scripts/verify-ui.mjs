@@ -83,13 +83,16 @@ try {
   failed++
 }
 
-// S1.8 compose 确定性渲染：v2 正文被排版引擎渲染进 375px 预览
+// S1.8 compose 确定性渲染：v2 正文被排版引擎渲染进 375px 预览；美术素材渲染为 data 图片
 try {
   const frame = page.frames().find((f) => f !== page.mainFrame())
   const bodyTxt = frame ? await frame.locator('body').innerText() : ''
   const composed = bodyTxt.includes('新生开学典礼') && bodyTxt.includes('典礼流程') && bodyTxt.includes('记得带')
   console.log(`  ${composed ? 'PASS' : 'FAIL'} - S1.8 compose rendered in preview (${bodyTxt.length} chars)`)
   if (!composed) failed++
+  const artImgs = frame ? await frame.locator('img[src^="data:image/"]').count() : 0
+  console.log(`  ${artImgs >= 1 ? 'PASS' : 'FAIL'} - S1.8 art svg rendered to data image (${artImgs})`)
+  if (artImgs < 1) failed++
 } catch (e) {
   console.log('  FAIL - S1.8 compose render error:', String(e).slice(0, 200))
   failed++

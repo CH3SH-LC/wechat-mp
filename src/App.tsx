@@ -8,6 +8,7 @@ import { KnowledgePick, buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml, splitAssistant } from './lib/extract'
 import { composeMarkdown } from './lib/compose'
+import { renderArtPlaceholders } from './lib/artRender'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
@@ -35,14 +36,15 @@ function decoratePrompt(text: string, mode: Mode, style: Style): string {
   return out
 }
 
-// 把助手文本解析为可预览 HTML（第 14 轮）：```html 直通；```v2 正文经 compose 渲染；无围栏返回 null
-function resolvePreview(raw: string, mode: Mode): { html: string; warnings: string[] } | null {
+// 把助手文本解析为可预览 HTML（第 14/15 轮）：```html 直通；```v2 正文经 compose 渲染；无围栏返回 null
+// arts：compose 收集的 SVG 美术素材（需由调用方渲染替换 @@ARTn@@ 占位）
+function resolvePreview(raw: string, mode: Mode): { html: string; warnings: string[]; arts: { svg: string; alt: string; wide: boolean }[] } | null {
   const direct = extractHtml(raw)
-  if (direct) return { html: direct.html, warnings: [] }
+  if (direct) return { html: direct.html, warnings: [], arts: [] }
   const { v2 } = splitAssistant(raw)
   if (v2) {
     const r = composeMarkdown(v2, { mode })
-    return { html: r.html, warnings: r.warnings }
+    return { html: r.html, warnings: r.warnings, arts: r.arts }
   }
   return null
 }
@@ -71,6 +73,8 @@ export default function App() {
   const draftRef = useRef('')
   const stopRef = useRef<{ cancel: () => void } | null>(null)
   const msgsRef = useRef<DisplayMsg[]>([])
+  // artSeqRef：素材异步渲染序号，防止旧渲染结果覆盖新预览
+  const artSeqRef = useRef(0)
 
   useEffect(() => {
     msgsRef.current = msgs
@@ -81,7 +85,7 @@ export default function App() {
     listSessions().then((r) => setSessionItems(r.items))
   }
 
-  const applySession = (item: SessionItem) => {
+  const applySession = async (item: SessionItem) => {
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
       .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
@@ -98,9 +102,13 @@ export default function App() {
       const m = VALID_MODES.includes(item.mode as Mode) ? (item.mode as Mode) : 'auto'
       const c = resolvePreview(last.content, m)
       if (c) {
-        setHtml(c.html)
-        setQuality(checkHtml(c.html))
-        setWarnings(c.warnings)
+        const seq = ++artSeqRef.current
+        const html2 = c.arts.length ? await renderArtPlaceholders(c.html, c.arts) : c.html
+        if (artSeqRef.current === seq) {
+          setHtml(html2)
+          setQuality(checkHtml(html2))
+          setWarnings(c.warnings)
+        }
       } else {
         setHtml(null)
         setQuality(null)
@@ -140,7 +148,7 @@ export default function App() {
       setCurrentId(cur)
       const item = await openSession(cur)
       if (item) {
-        applySession(item)
+        await applySession(item)
         refreshItems()
       }
     })()
@@ -186,10 +194,17 @@ export default function App() {
       }
       return copy
     })
-    // 流中实时预览：```html 直通或 ```v2 围栏闭合即 compose（纯文本对话不触碰预览）
+    // 流中实时预览：```html 直通或 ```v2 围栏闭合即 compose；素材异步渲染（序号防覆盖）
     const c = resolvePreview(draft, mode)
     if (c) {
-      setHtml(c.html)
+      const seq = ++artSeqRef.current
+      if (c.arts.length) {
+        void renderArtPlaceholders(c.html, c.arts).then((html2) => {
+          if (artSeqRef.current === seq) setHtml(html2)
+        })
+      } else {
+        setHtml(c.html)
+      }
       if (c.warnings.length) setWarnings(c.warnings)
     }
   }
@@ -267,12 +282,16 @@ export default function App() {
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
-    // 流结束：含 ```html 直通或 ```v2 正文 → compose 预览并终检；纯对话不触碰预览
+    // 流结束：含 ```html 直通或 ```v2 正文 → compose 预览（素材渲染完成）并终检；纯对话不触碰预览
     const final = resolvePreview(draftRef.current, mode)
     if (final) {
-      setHtml(final.html)
-      setQuality(checkHtml(final.html))
-      setWarnings(final.warnings)
+      const seq = ++artSeqRef.current
+      const html2 = final.arts.length ? await renderArtPlaceholders(final.html, final.arts) : final.html
+      if (artSeqRef.current === seq) {
+        setHtml(html2)
+        setQuality(checkHtml(html2))
+        setWarnings(final.warnings)
+      }
     }
     if (currentId) {
       const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
@@ -309,7 +328,7 @@ export default function App() {
     const item = await openSession(id)
     if (item) {
       clearAllChat()
-      applySession(item)
+      await applySession(item)
       setCurrentId(id)
     }
     refreshItems()
@@ -321,7 +340,7 @@ export default function App() {
     if (r.current && r.current !== currentId) {
       const item = await openSession(r.current)
       clearAllChat()
-      if (item) applySession(item)
+      if (item) await applySession(item)
       setCurrentId(r.current)
     } else if (!r.current) {
       clearAllChat()

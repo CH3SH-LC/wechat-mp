@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-05
+- [New Feature] 第 15 轮：现场生成美术素材（回应"为什么没素材了"）——::: art 容器：模型按知识库现场绘制 SVG，引擎校验元素 ≥6 与 viewBox，canvas 渲染 PNG data URI 内嵌预览/导出；persona 强制每篇 ≥1 素材；E2E 32 项全绿（S1.8 素材渲染 data 图）；真实模型 live 咖啡题材 SVG 15 元素 0 警告
 - [New Feature] 第 14 轮：移植 DSH 完整创作工艺（方案 B，用户选）——compose.ts 转写 wechat-mp 转换器（v2 语法→微信合法 HTML，DESIGNS 双色系/间距 v5/平面化 v10/art 移除警告）；persona 改输出 ```v2 围栏正文；```v2→compose→预览+质量检查，```html 直通保留；会话恢复重放；修复 reasoning max 无 max_tokens 推理吃光预算（补 16000）；E2E 31 项全绿（新 S1.8 compose 渲染断言）；真实模型 live 产出 900 字 v2 正文渲染 0 警告
 - [Change] 第 13 轮：与 DSH 全面对齐（差异检查驱动）——Rust 默认模型 deepseek-chat→deepseek-v4-flash + 请求体 reasoning_effort max（实测兼容）；删除 App 本地创作/对话路由与 expectRef，persona 统一为对话+创作一体、模型自主判断（闲聊/答疑/反问/取消）；needs 降级仅供模拟端近似；E2E 28 项全绿 S9a-d 语义保持；live 冒烟 + 整篇抽样（v4-flash 16.7s 6919 字 0 issues）
 - [Change] 第 12 轮：通用对话模式（用户否决固定澄清卡）——删除 ClarifyCard 与挂卡分流；请求路由为「创作/对话」两类：明确写推文才进入创作（信息不足由 AI 在对话里自然反问、回答后直接产出；"算了"取消），闲聊/答疑走通用对话人设正常聊天；需求默认注改为模型正文前一句话说明；模拟端三类回复；E2E 28 项全绿含 S9a 反问成文/S9b 直接写/S9c 闲聊/S9d 反问后取消；Rust 零改动
