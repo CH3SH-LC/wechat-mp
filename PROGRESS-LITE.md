@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-04
+- [Change] 第 10 轮：常驻会话栏 + 对话流净化（需求报告驱动）——SessionRail 左侧栏（顶栏按钮=折叠开关，SessionMenu 退役）；气泡只显说明文字（splitAssistant），HTML 收进「查看 HTML 源码」展开（默认收起）；E2E 全绿含新 S1.7 三项断言 + S8 侧栏 1→2→1；Rust 零改动
 - [New Feature] 第 9 轮：多会话上下文窗口（像 DSH）——sessions.rs（sessions/<id>.json + state.json，旧 draft.json 自动迁移不丢稿）+ 会话菜单（新建/切换/删除/当前高亮）+ App currentId 状态机（自动保存绑定当前会话）；修 StrictMode 双跑引导；Rust 17/17；E2E 全绿含 S8 1→2→1；release 重建
 - [Build] 第 8 轮：全功能 release 重建（含 1-7 轮功能，32s）+ 安装闭环复验（装/启/卸 exit 0）；清理 dead_code；cargo 16/16 无警告——最终交付产物 setup.exe
 - [New Feature] 第 7 轮：应用内 API 设置——顶栏设置面板（Key 掩码/端点/模型，settings.json/localStorage），密钥解析 env>设置>~/.dsh 兼容回退（pick_key 纯函数）；Rust 16/16；E2E 七场景全绿含 S7 保存→刷新持久→恢复默认

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { MOCK_TOPICS } from '../lib/chat'
+import { splitAssistant } from '../lib/extract'
 
 export interface DisplayMsg {
   id: number
@@ -59,6 +60,16 @@ export default function ChatPane({
   onStyleChange,
 }: Props) {
   const [input, setInput] = useState('')
+  const [openSrc, setOpenSrc] = useState<ReadonlySet<number>>(new Set())
+
+  const toggleSrc = (id: number) => {
+    setOpenSrc((prev) => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
+  }
 
   const send = () => {
     const t = input.trim()
@@ -128,17 +139,43 @@ export default function ChatPane({
           </div>
         )}
 
-        {msgs.map((m) => (
-          <div key={m.id} className={`msg msg-${m.role}`}>
-            {m.role === 'user' ? (
-              <pre className="msg-user-text">{m.content}</pre>
-            ) : m.role === 'error' ? (
-              <div className="msg-error">{m.content}</div>
-            ) : (
-              <pre className="msg-assistant-text">{m.content || (busy ? '…' : '')}</pre>
-            )}
-          </div>
-        ))}
+        {msgs.map((m) => {
+          if (m.role === 'user') {
+            return (
+              <div key={m.id} className="msg msg-user">
+                <pre className="msg-user-text">{m.content}</pre>
+              </div>
+            )
+          }
+          if (m.role === 'error') {
+            return (
+              <div key={m.id} className="msg msg-error">
+                {m.content}
+              </div>
+            )
+          }
+          // assistant：只展示围栏外说明文字；源码收进可展开查看器
+          const { prose, code } = splitAssistant(m.content)
+          const showPlaceholder = !prose && !busy && code !== null
+          const streamingEmpty = busy && !prose && !m.content
+          return (
+            <div key={m.id} className="msg msg-assistant">
+              <div className="assistant-box">
+                <pre className="msg-assistant-text">
+                  {prose || (showPlaceholder ? '已生成推文，见右侧预览。' : streamingEmpty ? '…' : '')}
+                </pre>
+                {code !== null && (
+                  <div className="src-area">
+                    <button className="src-toggle" onClick={() => toggleSrc(m.id)}>
+                      {openSrc.has(m.id) ? '收起 HTML 源码' : '查看 HTML 源码'}
+                    </button>
+                    {openSrc.has(m.id) && <pre className="src-view">{code}</pre>}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
         {busy && <div className="typing">正在生成…</div>}
         {knowledgeNote && <div className="knowledge-note">知识命中: {knowledgeNote}</div>}
       </div>

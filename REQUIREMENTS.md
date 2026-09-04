@@ -11,6 +11,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-04｜第 10 轮：界面体验修正——常驻会话栏 + 对话流净化（报告已确认）
+- 需求：按需求报告 `docs/information/2026-09-04-context-rail-clean-chat.md`（方案 A）——①会话上下文改为**左侧常驻栏**（列表常驻、新建/切换/删除一步直达、当前高亮；顶栏「会话」按钮保留为折叠开关；≤1120px 初始折叠）；②**对话流净化**：助手气泡只显示 ```html 围栏外的说明文字（无说明则显示"已生成推文，见右侧预览"），HTML 不进气泡；每条助手消息提供「查看 HTML 源码」点击展开（默认收起、独立展开态）。
+- 改动点：新建 components/SessionRail.tsx（顶栏弹层 SessionMenu 退役删除）；ChatPane 消息渲染拆分（lib/extract.ts 增 splitAssistant）；App 三栏布局 + railOpen 状态；CSS；E2E 选择器迁移与新增断言。
+- 验收标准：气泡不含 ```html 与代码文本（E2E 断言）；点击「查看 HTML 源码」展开含 <section> 源码、再点收起；会话栏新建/切换/删除/高亮通过（S8 迁移）；pnpm build exit 0；Rust 零改动；文档同步 + 提交。
+- 状态：✅ 完成（E2E 全绿：S1.7 气泡净化无代码文本/展开源码 1936 字符含 <section>/收起；S8 侧栏 1→2→1；S1-S7 全回归；pnpm build exit 0；SessionRail 三栏常驻、顶栏按钮折叠开关；SessionMenu 退役；报告 docs/information/… 已确认落盘）
+
 ### 2026-09-04｜第 9 轮：多会话上下文窗口（像 DSH 的会话/上下文切换）（开发中）
 - 需求：用户反馈"没有项目的概念/上下文的概念，需要像 dsh 那样有不同的上下文窗口"——每个会话 = 独立上下文（独立消息历史/生成内容/模式/风格），支持：新建会话、会话列表切换、删除会话、当前会话自动保存与启动恢复；旧单会话 draft.json 自动迁移为第一个会话（不丢稿）。
 - 改动点：Rust 单会话 draft.rs → 多会话 sessions.rs（workspace/sessions/<id>.json + state.json 当前会话指针，旧 draft.json 自动迁移）；前端 draft.ts → sessions.ts；会话菜单 UI（顶栏「会话」下拉：列表/新建/删除/当前高亮）；App 状态机 currentId（自动保存绑定当前会话）。

@@ -20,15 +20,16 @@ wechat-mp-desktop/
 ├── public/                # 静态资源（空占位）
 ├── scripts/
 │   └── verify-ui.mjs      # E2E 冒烟：点示例→流式→375px 预览断言+截图
+├── docs/information/     # 需求报告（req-clarify 落盘，2026-09-04-context-rail-clean-chat.md）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左栏：消息流 + 快速示例 + 模式/风格控制条 + 输入行
+│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化：仅说明文字+查看 HTML 源码展开）+ 模式/风格 + 输入
 │   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
-│   │   ├── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
-│   │   └── SessionMenu.tsx   # 会话弹层：列表/新建/删除/当前高亮（多上下文切换）
+│   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
+│   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
 │   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）

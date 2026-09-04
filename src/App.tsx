@@ -3,7 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import SettingsPanel from './components/SettingsPanel'
-import SessionMenu from './components/SessionMenu'
+import SessionRail from './components/SessionRail'
 import { buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
@@ -45,7 +45,9 @@ export default function App() {
   const [kbCount, setKbCount] = useState<number | null>(null)
   const [savedAt, setSavedAt] = useState('')
   const [showSettings, setShowSettings] = useState(false)
-  const [showSessions, setShowSessions] = useState(false)
+
+  // 会话栏：默认按窗口宽度展开（≤1120px 折叠），顶栏「会话」按钮为折叠开关
+  const [railOpen, setRailOpen] = useState<boolean>(() => (typeof window === 'undefined' ? true : window.innerWidth >= 1120))
 
   // 多会话状态
   const [currentId, setCurrentId] = useState<string | null>(null)
@@ -250,21 +252,16 @@ export default function App() {
 
   // ---------- 会话操作 ----------
   const newSession = async () => {
-    if (busyRef.current || showSessions) setShowSessions(false)
     if (busyRef.current) return
     const id = await createSession()
     if (!id) return
     clearAllChat()
     setCurrentId(id)
-    setShowSessions(false)
     refreshItems()
   }
 
   const switchSession = async (id: string) => {
-    if (busyRef.current || id === currentId) {
-      setShowSessions(false)
-      return
-    }
+    if (busyRef.current || id === currentId) return
     if (currentId) persistNow(currentId, msgsRef.current, mode, style)
     const item = await openSession(id)
     if (item) {
@@ -272,7 +269,6 @@ export default function App() {
       applySession(item)
       setCurrentId(id)
     }
-    setShowSessions(false)
     refreshItems()
   }
 
@@ -300,7 +296,6 @@ export default function App() {
   }
 
   const status = inTauri() ? 'DeepSeek 桌面' : '模拟模式（浏览器）'
-  const currentTitle = sessionItems.find((m) => m.id === currentId)?.title ?? '新对话'
 
   return (
     <div className="app">
@@ -308,8 +303,13 @@ export default function App() {
         <div className="brand">
           <span className="logo" />
           公众号推文助手
-          <button className="mini sess-btn" data-ready={currentId ? 1 : 0} onClick={() => setShowSessions(true)}>
-            会话 · {currentTitle.length > 10 ? currentTitle.slice(0, 10) + '…' : currentTitle}
+          <button
+            className="mini sess-btn"
+            data-ready={currentId ? 1 : 0}
+            data-open={railOpen ? 1 : 0}
+            onClick={() => setRailOpen((v) => !v)}
+          >
+            {railOpen ? '收起会话栏' : '展开会话栏'}
           </button>
         </div>
         <div className="topbar-meta">
@@ -320,18 +320,17 @@ export default function App() {
           </button>
         </div>
       </header>
-      {showSessions && (
-        <SessionMenu
-          items={sessionItems}
-          currentId={currentId}
-          onNew={() => void newSession()}
-          onOpen={(id) => void switchSession(id)}
-          onDelete={(id) => void removeSession(id)}
-          onClose={() => setShowSessions(false)}
-        />
-      )}
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-      <main className="workspace">
+      <main className={`workspace ${railOpen ? 'rail-on' : 'rail-off'}`}>
+        {railOpen && (
+          <SessionRail
+            items={sessionItems}
+            currentId={currentId}
+            onNew={() => void newSession()}
+            onOpen={(id) => void switchSession(id)}
+            onDelete={(id) => void removeSession(id)}
+          />
+        )}
         <ChatPane
           msgs={msgs}
           busy={busy}

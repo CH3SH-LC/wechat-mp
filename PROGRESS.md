@@ -7,6 +7,23 @@
 
 ## 2026-09-04
 
+### [Change] 第 10 轮：界面体验修正——常驻会话栏 + 对话流净化（需求报告驱动）
+
+背景 / 变更原因：
+用户批评两点：①生成的代码被用户看到（气泡整段显示 ```html 原文）；②未澄清需求就开干。经 myworkflow-req-clarify 两轮澄清（上下文形态=常驻会话栏；代码展示=默认隐藏可展开），报告 `docs/information/2026-09-04-context-rail-clean-chat.md` 经用户"通过"后实施（方案 A）。
+
+实现：
+- SessionRail.tsx：左侧常驻会话栏（列表/新建/切换/删除/当前高亮），顶栏「会话」按钮改为折叠开关（收起/展开会话栏），≤1120px 初始折叠；SessionMenu 弹层退役删除
+- 对话流净化：ChatPane 按 splitAssistant（lib/extract.ts 新增）只渲染 ```html 围栏外说明文字；无说明显示"已生成推文，见右侧预览"；每条助手消息带「查看 HTML 源码」展开区（默认收起、独立展开态，流中不显示按钮）
+- App 三栏布局（rail-on/rail-off grid）；CSS（session-rail/src-area/src-view 等）
+- E2E：S1.7 新增断言（气泡无代码文本/展开含源码/收起）、waitStreamDone/S1.6/S8 迁移到净化与侧栏语义
+
+验证：
+- pnpm build exit 0；E2E 全绿（S1 通过 / S1.7 三项 / S1.5 导出 / S1.6 恢复+清空 / S2 检出 / S7 设置 / S8 侧栏 1→2→1）
+- Rust 零改动（会话存储沿用第 9 轮）
+
+---
+
 ### [New Feature] 第 9 轮：多会话上下文窗口（像 DSH 的会话切换）
 
 需求 / 变更原因：

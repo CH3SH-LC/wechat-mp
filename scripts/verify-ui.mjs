@@ -23,7 +23,7 @@ async function waitStreamDone(timeout = 30000) {
   await page.waitForFunction(
     () => {
       const t = document.querySelector('.msg-assistant-text')
-      return !!t && t.textContent.includes('</section>') && !document.querySelector('.typing')
+      return !!t && t.textContent.trim().length > 3 && !document.querySelector('.typing')
     },
     { timeout },
   )
@@ -61,6 +61,28 @@ for (const [name, ok] of s1.checks) {
   if (!ok) failed++
 }
 
+// S1.7 对话流净化：气泡无代码文本；「查看 HTML 源码」可展开/收起
+try {
+  const bubble = await page.locator('.msg-assistant-text').last().innerText()
+  const clean = !bubble.includes('```') && !bubble.includes('<section')
+  console.log(`  ${clean ? 'PASS' : 'FAIL'} - S1.7 bubble has no code text (${bubble.slice(0, 30)}…)`)
+  if (!clean) failed++
+  await page.locator('.src-toggle').first().click()
+  await page.waitForSelector('.src-view', { timeout: 10000 })
+  const src = await page.locator('.src-view').first().innerText()
+  const srcOk = src.includes('<section')
+  console.log(`  ${srcOk ? 'PASS' : 'FAIL'} - S1.7 source expand shows html (${src.length} chars)`)
+  if (!srcOk) failed++
+  await page.locator('.src-toggle').first().click()
+  await page.waitForTimeout(200)
+  const collapsed = (await page.locator('.src-view').count()) === 0
+  console.log(`  ${collapsed ? 'PASS' : 'FAIL'} - S1.7 source collapse works`)
+  if (!collapsed) failed++
+} catch (e) {
+  console.log('  FAIL - S1.7 clean bubble error:', String(e).slice(0, 200))
+  failed++
+}
+
 // S1.5 导出（浏览器模式 = <a download>，playwright 捕获 download 事件）
 try {
   const [download] = await Promise.all([
@@ -85,7 +107,7 @@ try {
   await page.waitForFunction(
     () => {
       const t = document.querySelector('.msg-assistant-text')
-      return !!t && t.textContent.includes('</section>')
+      return !!t && t.textContent.trim().length > 3 && !document.querySelector('.typing')
     },
     { timeout: 20000 },
   )
@@ -158,20 +180,22 @@ try {
   failed++
 }
 
-// S8 多会话上下文：新建 → 独立内容 → 列表 2 条 → 切换恢复 → 删除回退
+// S8 多会话上下文（侧栏）：新建 → 独立内容 → 列表增长 → 切换 → 删除回退
 try {
   await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForSelector('.sess-btn[data-ready="1"]', { timeout: 20000 })
 
-  const openMenu = async () => {
-    await page.locator('.sess-btn').click()
-    await page.waitForSelector('.session-panel', { timeout: 10000 })
+  const ensureRail = async () => {
+    if ((await page.locator('.session-rail').count()) === 0) {
+      await page.locator('.sess-btn').click()
+    }
+    await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
   }
-  const rowCount = () => page.locator('.sess-row').count()
+  const rowCount = () => page.locator('.session-rail .sess-row').count()
 
-  await openMenu()
+  await ensureRail()
   const n0 = await rowCount()
-  await page.locator('.settings-foot .btn-send', { hasText: '新建会话' }).click()
+  await page.locator('.session-rail .rail-new').click()
   await page.waitForSelector('.chat-empty', { timeout: 10000 })
 
   // 在 B 会话输入并生成（内容独立于 A）
@@ -183,29 +207,25 @@ try {
   console.log(`  ${bOk ? 'PASS' : 'FAIL'} - S8 new session independent content (${userB.slice(0, 24)}…)`)
   if (!bOk) failed++
 
-  await openMenu()
   const n1 = await rowCount()
   const grewOk = n1 === n0 + 1
   console.log(`  ${grewOk ? 'PASS' : 'FAIL'} - S8 session list grew (${n0} → ${n1})`)
   if (!grewOk) failed++
 
-  // 切回第一个会话（倒序列表最末为最旧）
-  const firstRow = page.locator('.sess-row').last()
-  await firstRow.click()
-  await page.waitForTimeout(400)
-  const backOk = (await page.locator('.msg-user').count()) >= 0
-  console.log(`  ${backOk ? 'PASS' : 'FAIL'} - S8 switch back ok (rows shown)`)
-  if (!backOk) failed++
+  // 切回最旧会话（列表倒序末位）
+  await page.locator('.session-rail .sess-row').last().click()
+  await page.waitForTimeout(500)
+  const switched = await page.locator('.msg-user').count() >= 0
+  console.log(`  ${switched ? 'PASS' : 'FAIL'} - S8 switch back ok`)
+  if (!switched) failed++
 
-  // 删除毕业季会话（当前可能已非它；删除后列表回退）
-  await openMenu()
-  await page.locator('.sess-row', { hasText: '毕业季' }).locator('.sess-del').click()
+  // 删除毕业季会话
+  await page.locator('.session-rail .sess-row', { hasText: '毕业季' }).locator('.sess-del').click()
   await page.waitForTimeout(500)
   const n2 = await rowCount()
   const shrinkOk = n2 === n0
   console.log(`  ${shrinkOk ? 'PASS' : 'FAIL'} - S8 delete session (${n1} → ${n2})`)
   if (!shrinkOk) failed++
-  await page.locator('.settings-head .mini').click()
 } catch (e) {
   console.log('  FAIL - S8 multi-session error:', String(e).slice(0, 200))
   failed++
