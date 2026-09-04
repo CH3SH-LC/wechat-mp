@@ -1,6 +1,6 @@
 // chat.ts —— 对话通道：Tauri 下走 Rust 流式 LLM；浏览器(纯 vite)下走本地模拟
 import { invoke } from '@tauri-apps/api/core'
-import { evaluate } from './needs'
+import { evaluate, isCancel, isCreateRequest, isDemoTopic } from './needs'
 
 export interface ChatMsg {
   role: 'system' | 'user' | 'assistant'
@@ -51,7 +51,7 @@ export const MOCK_BAD: MockTopic = {
   html: BAD_HTML,
 }
 
-// 模拟文案（第 12 轮：对话模式 / 反问澄清 / 成文三类）
+// 模拟文案（浏览器演示：闲聊 / 反问澄清 / 成文 / 取消）
 const CLARIFY_QUESTION = '好的，先确认一下再写：这篇推文你希望是什么类型（比如活动宣传还是资讯介绍）？想要什么风格？大概多少字？需要配图吗？回复我后马上出稿。'
 const CANCEL_REPLY = '好的，那先不写了。需要的时候随时告诉我主题就行。'
 const CHAT_GREET = '你好，我是公众号推文助手。你可以像用通用助手一样和我聊天：问公众号写作的问题、聊选题想法都行；明确说「写一篇…推文」，我就帮你产出可直接发布的推文并实时预览。'
@@ -62,7 +62,9 @@ export interface StreamHandle {
   cancel: () => void
 }
 
-// 模拟流式：按"系统提示是否带对话模式标记 + 上一条助手是否反问过 + 需求评估"选择回复形态
+// 模拟流式：近似"模型自主判断"（第 13 轮起 App 不再本地路由，模拟端用启发式近似）：
+// 上一条助手反问过且本条非取消 → 视为创作回答直接成文；取消 → 停止；
+// 演示/创作意图 → 按需求充分度反问或成文；其余 → 闲聊文案。
 export function sendChatMock(
   messages: ChatMsg[],
   onDelta: (delta: string) => void,
@@ -70,26 +72,26 @@ export function sendChatMock(
 ): StreamHandle {
   const user = [...messages].reverse().find((m) => m.role === 'user')
   const u = user?.content ?? ''
-  const isChat = messages.some((m) => m.role === 'system' && m.content.includes('对话模式'))
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+  const asked = lastAssistant?.content.includes('？') ?? false
+  const article = `好的，按宣传类 + 校园风直接产出（375px 微信排版，零 emoji 零渐变）：\n\n\`\`\`html\n${SAMPLE_HTML}\n\`\`\``
+  const badArticle = `好的，按要求演示违规输出：\n\n\`\`\`html\n${MOCK_BAD.html}\n\`\`\``
   let full: string
-  if (isChat) {
+  if (isCancel(u)) {
+    full = CANCEL_REPLY
+  } else if (asked) {
+    // 对上一条澄清问题的回答：直接进入创作
+    full = article
+  } else if (isDemoTopic(u) || u.includes('违规')) {
+    full = badArticle
+  } else if (isCreateRequest(u)) {
+    full = evaluate(u).needsClarify ? CLARIFY_QUESTION : article
+  } else {
     full = /你好|嗨|hello|在吗|hi/i.test(u)
       ? CHAT_GREET
-      : /算了|不用了|先不写|不写了|别写了/.test(u)
-        ? CANCEL_REPLY
-        : /[?？]|怎么|如何|什么|为什么|吗/.test(u)
-          ? CHAT_QA
-          : CHAT_DEFAULT
-  } else {
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-    const alreadyAsked = lastAssistant?.content.includes('？') ?? false
-    const bad = u.includes('违规')
-    const vague = !bad && !alreadyAsked && evaluate(u).needsClarify
-    full = bad
-      ? `好的，按要求演示违规输出：\n\n\`\`\`html\n${MOCK_BAD.html}\n\`\`\``
-      : vague
-        ? CLARIFY_QUESTION
-        : `好的，按宣传类 + 校园风直接产出（375px 微信排版，零 emoji 零渐变）：\n\n\`\`\`html\n${SAMPLE_HTML}\n\`\`\``
+      : /[?？]|怎么|如何|什么|为什么|吗/.test(u)
+        ? CHAT_QA
+        : CHAT_DEFAULT
   }
   let i = 0
   const timer = window.setInterval(() => {

@@ -10,6 +10,6 @@ pnpm dev          # 纯浏览器模式（本地模拟对话，演示双栏链路
 pnpm tauri dev    # 桌面模式（Rust 流式调用 DeepSeek）
 ```
 
-密钥：环境变量 `DEEPSEEK_API_KEY`；未设置时自动读取 `~/.dsh/.credentials.yaml` 的 `DEEPSEEK_API_KEY`。端点/模型可用 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 覆盖（默认 `https://api.deepseek.com`、`deepseek-chat`）。
+密钥：环境变量 `DEEPSEEK_API_KEY`；未设置时自动读取 `~/.dsh/.credentials.yaml` 的 `DEEPSEEK_API_KEY`。端点/模型可用 `DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL` 覆盖（默认 `https://api.deepseek.com`、`deepseek-v4-flash`，请求带 `reasoning_effort: max`，与 DeepSeek Harness 使用配置一致）。
 
 知识库：`src/knowledge/`（三层结构：文本/视觉/插图/其它，149 个条目）随前端打包，对话前按主题检索节选注入提示词。

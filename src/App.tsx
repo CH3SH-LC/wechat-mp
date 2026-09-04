@@ -4,12 +4,11 @@ import ChatPane, { DisplayMsg, Mode, Style } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import SettingsPanel from './components/SettingsPanel'
 import SessionRail from './components/SessionRail'
-import { PERSONA_RULES, buildChatSystem, buildSystemPrompt } from './lib/persona'
+import { KnowledgePick, buildSystemPrompt } from './lib/persona'
 import { ensureKnowledgeLoaded, retrieve } from './lib/retrieval'
 import { extractHtml } from './lib/extract'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
-import { isCancel, isCreateRequest, isDemoTopic } from './lib/needs'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
@@ -58,9 +57,6 @@ export default function App() {
   const draftRef = useRef('')
   const stopRef = useRef<{ cancel: () => void } | null>(null)
   const msgsRef = useRef<DisplayMsg[]>([])
-  // expectRef：上一轮是创作请求但模型尚未产出推文（如先反问澄清），
-  // 下一条用户消息仍按创作上下文处理，直到产出推文或用户取消
-  const expectRef = useRef(false)
 
   useEffect(() => {
     msgsRef.current = msgs
@@ -72,7 +68,6 @@ export default function App() {
   }
 
   const applySession = (item: SessionItem) => {
-    expectRef.current = false
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
       .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
@@ -99,7 +94,6 @@ export default function App() {
   }
 
   const clearAllChat = () => {
-    expectRef.current = false
     setMsgs([])
     setHtml(null)
     setQuality(null)
@@ -194,28 +188,23 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 对话路由：创作 / 通用对话（第 12 轮）----------
-  // kind='gen'：创作模式（persona + 知识，产出 ```html 推文，模型可先反问澄清）
-  // kind='chat'：通用对话（对话人设，正常聊天，不产出推文）
-  const turn = async (kind: 'gen' | 'chat', raw: string): Promise<boolean> => {
-    if (busyRef.current) return false
-    const content = kind === 'gen' ? decoratePrompt(raw, mode, style) : raw
+  // ---------- 对话回合（第 13 轮：统一 persona，模型自主判断对话/创作/反问）----------
+  const turn = async (raw: string): Promise<void> => {
+    if (busyRef.current) return
+    const content = decoratePrompt(raw, mode, style)
     const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
-    if (kind === 'gen') {
-      setHtml(null)
-      setQuality(null)
-    }
 
     busyRef.current = true
     setBusy(true)
     draftRef.current = ''
 
-    let system = ''
+    let picks: KnowledgePick[] = []
     try {
-      const hint = kind === 'gen' && style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
+      const hint = style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
       const r = await retrieve(hint)
+      picks = r.picks
       setNote(
         r.hits.length
           ? r.hits.slice(0, 8).join(' / ')
@@ -224,14 +213,13 @@ export default function App() {
               .slice(0, 8)
               .join(' / '),
       )
-      system = kind === 'gen' ? buildSystemPrompt(r.picks) : buildChatSystem(r.picks)
     } catch {
-      // 知识库加载失败不影响对话：退回无人设提示的原始 persona
-      system = kind === 'gen' ? PERSONA_RULES : buildChatSystem([])
+      // 知识库加载失败不影响对话：退回无节选的 persona
+      picks = []
     }
 
     const payload: ChatMsg[] = [
-      { role: 'system', content: system },
+      { role: 'system', content: buildSystemPrompt(picks) },
       ...history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
@@ -248,14 +236,13 @@ export default function App() {
       }
     } catch (err) {
       fail(err)
-      return false
+      return
     }
     busyRef.current = false
     setBusy(false)
     stopRef.current = null
-    // 流结束：终检 + 立即存档到当前会话
+    // 流结束：回复含推文 HTML 则更新预览并终检；纯对话不触碰预览
     const final = extractHtml(draftRef.current)
-    const hadHtml = final !== null
     if (final) {
       setHtml(final.html)
       setQuality(checkHtml(final.html))
@@ -264,31 +251,12 @@ export default function App() {
       const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
       persistNow(currentId, saveMsgs, mode, style)
     }
-    return hadHtml
   }
 
-  // 路由：创作请求（明确"写/生成推文"或演示话题）→ 创作模式；
-  // 其余（闲聊/答疑）→ 通用对话。创作模式下模型未产出推文（先反问）时，
-  // 下一条消息仍走创作模式；用户回答后模型直接产出，或说"算了"取消回对话。
   const send = async (text: string) => {
     const t = text.trim()
     if (!t || busyRef.current) return
-    if (expectRef.current) {
-      if (isCancel(t)) {
-        expectRef.current = false
-        await turn('chat', t)
-        return
-      }
-      const had = await turn('gen', t)
-      expectRef.current = !had
-      return
-    }
-    if (isDemoTopic(t) || isCreateRequest(t)) {
-      const had = await turn('gen', t)
-      expectRef.current = !had
-      return
-    }
-    await turn('chat', t)
+    await turn(t)
   }
 
   const stop = () => {

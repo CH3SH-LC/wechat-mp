@@ -1,6 +1,7 @@
-// needs.ts —— 请求分类与需求评估
-// 第 12 轮起：请求先路由为「创作请求 / 通用对话」两类；创作信息不足时由模型在对话流里反问，
-// 本地不再弹任何卡片（ClarifyCard 已退役）。evaluate 仍供模拟端判断"本条是否需要反问"。
+// needs.ts —— 请求启发式（供浏览器模拟端近似"模型自主判定"用）
+// 第 13 轮起：真实链路不再本地路由（统一 persona，模型自主判断对话/创作/反问）；
+// 浏览器模拟端用 isCreateRequest/isCancel/isDemoTopic/evaluate 近似模型的判断，
+// 以保持 E2E 语义（反问/直出/闲聊/取消）可测。evaluate 输出五维度需求评估。
 
 export interface NeedsAssessment {
   type: string | null

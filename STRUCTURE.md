@@ -26,13 +26,13 @@ wechat-mp-desktop/
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开）+ 模式/风格 + 输入（通用对话路由入口）
+│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开）+ 模式/风格 + 输入
 │   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
-│   │   ├── persona.ts     # 系统提示词（persona+间距/v10 硬规范+输出协议+知识拼装）+ buildChatSystem 通用对话人设
-│   │   ├── needs.ts       # 请求分类（isCreateRequest/isCancel/isDemoTopic）+ 需求评估 evaluate（模拟端反问判定）
+│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体、模型自主判断；间距/v10 硬规范+输出协议+知识拼装）
+│   │   ├── needs.ts       # 请求启发式（供浏览器模拟端近似模型自主判定：isCreateRequest/isCancel/evaluate）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
 │   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（含违规演示样本）
 │   │   ├── extract.ts     # HTML 提取 + splitAssistant（气泡净化拆分）
@@ -60,6 +60,6 @@ wechat-mp-desktop/
 ## 当前核心事实
 - 运行时：Node 24 / Rust 1.95；包管理器：pnpm 11（onlyBuiltDependencies esbuild）
 - 前端构建：`pnpm build`（tsc && vite build）；桌面运行：`pnpm tauri dev`
-- LLM：OpenAI 兼容接口，默认 https://api.deepseek.com/chat/completions，模型 deepseek-chat
+- LLM：OpenAI 兼容接口，默认 https://api.deepseek.com/chat/completions，模型 deepseek-v4-flash（reasoning_effort max，与 DSH 一致）
 - 密钥：env DEEPSEEK_API_KEY → ~/.dsh/.credentials.yaml
 - 验证：`scripts/verify-ui.mjs`（playwright + 本机 chromium-1234）+ `cargo test`（含 `--ignored` live 冒烟）

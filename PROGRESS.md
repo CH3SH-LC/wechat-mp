@@ -26,6 +26,28 @@
 
 ---
 
+## 2026-09-05
+
+### [Change] 第 13 轮：与 DSH 全面对齐——模型/推理配置 + 模型自主对话
+
+背景 / 变更原因：
+用户问「为什么和我用在 deepseek harness 里的差这么多」。差异检查定位：①DSH 用 deepseek-v4-flash + reasoningEffort max，桌面端默认 deepseek-chat 且请求体无推理参数（同 key 官方端点实测：v4-flash 带内部推理、输出更自然；reasoning_effort max 对 deepseek-chat 与 v4-flash 均兼容 HTTP 200）；②DSH 模型完全自主，桌面端仍是本地正则路由 + expectRef 状态机；③DSH persona 对话与创作一体。用户确认「全面对齐优化」。
+
+实现：
+- src-tauri/chat.rs：默认模型 deepseek-chat → deepseek-v4-flash；请求体加 reasoning_effort: max（流式）
+- src/lib/settings.ts：DEFAULTS.model → deepseek-v4-flash；settings.rs 测试 fixture 同步
+- src/lib/persona.ts：PERSONA_RULES 重写为「对话+创作一体」——身份含通用对话能力；行为判断由模型自主（闲聊/答疑直接回复不输出代码；创作模糊→自然问 1 个关键问题后等待；本条是对澄清的回答→直接产出；"算了"→停止创作回对话）；创作硬规范（间距/审美 v10/排版语法/```html 输出协议）保留；删除 buildChatSystem（不再有独立对话人设）
+- src/App.tsx：删除本地创作/对话路由与 expectRef 状态机、kind 分支；统一为单回合 turn（统一 persona + 知识节选，兜底无节选 persona）；回复含 HTML 才更新预览（纯对话不触碰预览）
+- src/lib/needs.ts：降级为「仅供浏览器模拟端近似模型自主判断」（注释声明）
+- src/lib/chat.ts：模拟端不再依赖系统"对话模式"标记，按 isCancel → isDemoTopic → isCreateRequest+需求评估 → 闲聊 启发式近似模型自主（上一条反问过且非取消 → 直接成文）
+- 知识库结构不动（第 13 轮 wechat-mp 设计已排除发布/复盘类，desktop 三层即创作知识面）
+
+验证：
+- pnpm build exit 0；E2E 全绿 28 项零浏览器错误（S9a 反问成文/S9b 直接写/S9c 闲聊/S9d 反问后"算了"取消 语义保持；S1-S8 回归）
+- cargo 17/17；live 冒烟 OK（v4-flash 流式回复）；live_article_sample OK（16.7s、6919 字、0 issues）
+
+---
+
 ## 2026-09-04
 
 ### [New Feature] 第 11 轮：结构化需求澄清卡——桌面端体现 req-clarify 能力

@@ -72,7 +72,7 @@ pub fn resolve_config() -> Result<LlmConfig, String> {
         &file.base_url,
         "https://api.deepseek.com",
     );
-    let model = pick_text(read_env("DEEPSEEK_MODEL").as_deref(), &file.model, "deepseek-chat");
+    let model = pick_text(read_env("DEEPSEEK_MODEL").as_deref(), &file.model, "deepseek-v4-flash");
     Ok(LlmConfig { key, base_url, model })
 }
 
@@ -101,6 +101,7 @@ async fn stream_chat(
     let body = serde_json::json!({
         "model": cfg.model,
         "stream": true,
+        "reasoning_effort": "max",
         "messages": messages,
     });
     let res = client

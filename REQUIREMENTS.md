@@ -11,6 +11,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-05｜第 13 轮：与 DSH 全面对齐——模型/推理配置 + 模型自主对话（检查驱动）
+- 需求：用户问「为什么和我用在 deepseek harness 里的差这么多」，检查定位三大差异：①模型配置——DSH 用 deepseek-v4-flash + reasoningEffort max，桌面端默认 deepseek-chat 且请求体无推理参数（同 key 实测 v4-flash 带内部推理、输出更自然）；②对话行为——DSH 模型完全自主，桌面端第 12 轮仍是本地正则路由 + expectRef 状态机；③人设/流程——DSH 预设 persona 对话与创作一体。用户确认「全面对齐优化」。
+- 改动点：①Rust chat.rs 默认模型 deepseek-chat → deepseek-v4-flash，请求体带推理参数（兼容策略实测后定，如仅 v4 系发送）；resolve_config 相关单测同步；②前端设置默认模型同步 v4-flash；③persona 统一为「对话+创作一体」人设（模型自主判断闲聊/答疑/创作、创作模糊时自然反问、产出走 ```html 协议），App 删除本地创作/对话路由与 expectRef 状态机；needs.ts 分类器降级仅供模拟端近似模型判定；④chat.ts 模拟端按「创作意图 or 上一条反问过」自主近似；⑤知识库结构不动（第 13 轮 wechat-mp 设计已排除发布/复盘类，desktop 三层即创作知识面）。
+- 验收标准：E2E 全绿（S9a 反问成文/S9b 直接写/S9c 闲聊/S9d 反问后"算了"取消 语义保持，S1-S8 回归）；pnpm build exit 0；cargo 单测更新后全绿 + live 冒烟（真实 v4-flash 流式、内容完整）；文档同步 + 提交；release 重建。
+- 状态：✅ 完成（Rust 默认模型 deepseek-v4-flash + 请求体 reasoning_effort max（实测对 chat/v4 双模型兼容）；App 删除本地创作/对话路由与 expectRef，统一 persona 模型自主判断（对话/答疑/创作/反问/取消全由模型决定）；persona 合并对话与创作能力并删 buildChatSystem；chat.ts 模拟端启发式近似模型自主；needs.ts 降级仅供模拟端；E2E 全绿 28 项零浏览器错误（S9a-d 语义保持）+ S1-S8 回归；pnpm build exit 0；cargo 17/17 + live 冒烟与整篇抽样（v4-flash 流式内容完整、16.7s 6919 字 0 issues）；release 重建含本功能）
+
 ### 2026-09-05｜第 12 轮：通用对话模式——去掉固定澄清卡，像通用智能体一样正常对话（形态已确认）
 - 需求：用户验收第 11 轮后反馈「这不是一个可用的智能体，为什么会有该死的固定框，为什么不是跟一个通用智能体一样正常对话」。经 1 问确认形态 = **通用对话模式**：AI 像 DeepSeek/ChatGPT 一样正常聊天（闲聊、公众号写作答疑都自然回复）；只有明确说「写/生成推文」时才产出推文；创作信息不足时由 AI 在对话流里用自然语言反问（最多问 1 个关键问题，其余按合理默认推进，按默认推进时先在正文前一句话说明采用的默认），用户直接在输入框回答，不再有任何卡片/按钮框。
 - 改动点：删除 components/ClarifyCard.tsx、.clarify-* 样式、pendingClarify 挂卡分流；App 改为「创作/对话」双路由（lib/needs.ts 增 isCreateRequest/isCancel，保留 evaluate 供模拟端判断反问）；persona.ts 增 buildChatSystem 通用对话人设（含「对话模式」标记），PERSONA_RULES 创作流程补「本条是对澄清的回答→直接产出；仍缺关键信息最多再问 1 个问题；按默认推进先一句话说明默认」；chat.ts 模拟端支持对话/反问/成文三类回复（上一条助手回复含？且本条为回答→直接成文）；第 11 轮的「需求确认/默认」注入注取消，改为对话即契约 + 模型开头一句话默认说明；ChatPane 移除卡片槽，空态/占位/示例芯片改对话式文案；E2E S9 重写为 S9a 反问成文 / S9b 直接写 / S9c 闲聊 / S9d 反问后取消。

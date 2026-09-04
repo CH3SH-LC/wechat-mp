@@ -59,13 +59,13 @@ mod tests {
         let s = AppSettings {
             api_key: "sk-abc".into(),
             base_url: "https://example.com".into(),
-            model: "deepseek-chat".into(),
+            model: "deepseek-v4-flash".into(),
         };
         let path = save_settings_to(&dir, &s).expect("save");
         assert!(path.ends_with("settings.json"));
         let loaded = read_settings_from(&dir).expect("load");
         assert_eq!(loaded.api_key, "sk-abc");
-        assert_eq!(loaded.model, "deepseek-chat");
+        assert_eq!(loaded.model, "deepseek-v4-flash");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -11,7 +11,7 @@ export interface AppSettings {
 export const DEFAULTS: AppSettings = {
   apiKey: '',
   baseUrl: 'https://api.deepseek.com',
-  model: 'deepseek-chat',
+  model: 'deepseek-v4-flash',
 }
 
 const LS_KEY = 'wxmp-settings-v1'
