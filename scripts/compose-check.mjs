@@ -46,18 +46,33 @@ ${FLAG_SVG}
 ${FLOWER_SVG}
 :::
 
-> [!KEY] 记得带
-> 录取通知书与身份证、水杯与防晒（户外排队用）
-
-::: art inline 行囊与准备
+::: art deco blossom
 ${FLOWER_SVG}
 :::
+
+> [!KEY|blossom] 记得带
+> 录取通知书与身份证、水杯与防晒（户外排队用）
 
 ## 你需要准备
 
 - 提前 15 分钟到集合点，找本班引导牌
 - 手机调静音，典礼中保持安静
 - 带一件薄外套，室内空调较凉
+
+## 提前一晚要做的事
+
+- 把录取通知书、身份证和一张一寸照片装进同一个文件袋，睡前放在门口鞋柜上
+- 校服提前熨好挂起，书包只装当天要用的东西，太重反而手忙脚乱
+- 设好两个闹钟，间隔十分钟——典礼日早上八点前要站到本班集合点
+- 熟悉一遍从校门到东区操场的路，家长可以从体育馆二层入场
+
+这些都做完了，就早睡。典礼日的精神头，一半在前一晚的睡眠里。
+
+## 给家长的话
+
+送完孩子不必急着走。体育馆二层的家长休息区开放到十点半，有饮水与座椅；班主任会在九点五十左右把班会安排发到班级群。如果孩子是第一次住校，可以趁典礼前把宿舍钥匙、水卡的位置再叮嘱一遍——大部分紧张，都在"东西放在哪"上。
+
+开学第一周是适应期，晚上九点后尽量别打电话，让孩子按自己的节奏收拾洗漱；真有急事，宿管老师的电话贴在每层楼梯口。
 
 ::: art inline 书本与开始
 ${FLOWER_SVG}
@@ -99,9 +114,14 @@ check('key bubble rendered (campus vivid)', r.html.includes('padding:16px 18px 1
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
+check('bubble deco rendered (corner img)', r.html.includes('width:60px;height:auto;pointer-events:none') && (r.html.match(/@@ART/g) || []).length >= 5)
+check('no short-body warning', !r.warnings.some((w) => w.includes('正文偏短')))
 const noComp = composeMarkdown('## 标题\n\n- 列表项\n\n正文段落。', { mode: 'text' })
 check('componentized warning (no container/bubble)', noComp.warnings.some((w) => w.includes('组件化不足')))
 check('SAMPLE componentized clean', !r.warnings.some((w) => w.includes('组件化不足')))
+const shortBody = composeMarkdown('::: art deco a\n' + FLOWER_SVG + '\n:::\n\n> [!KEY|b] 标题\n> 内容\n\n正文一句话。', { mode: 'text' })
+check('short body warning', shortBody.warnings.some((w) => w.includes('正文偏短')))
+check('undefined deco warning', shortBody.warnings.some((w) => w.includes('气泡角饰 b 未定义')))
 check('art collected 5 (2 wide)', r.arts.length === 5 && r.arts.filter((a) => a.wide).length === 2, `arts=${r.arts.length}`)
 check('art placeholder in html', r.html.includes('@@ART0@@'))
 check('art wide img style', r.html.includes('width:100%;height:auto;display:block;margin:12px 0'))

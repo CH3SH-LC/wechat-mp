@@ -209,9 +209,24 @@ function imgcardBlock(d: ComposeDesign, img: { src: string; alt: string }, capti
 }
 
 // v10 气泡：纯色底、无渐变、无 emoji 图标、无装饰圆；图案角饰走 art:// 资产（`> [!KEY|grass]`）
+// 第 21 轮：支持正文现场定义装饰素材（::: art deco 名称）并在此类气泡语法 `> [!KEY|名称]` 中引用角饰
 const DECO_MAP: Record<string, string> = { grass: 'sprig-grass', blossom: 'blossom-branch', leaf: 'leaf-corner' }
 
-function bubble(d: ComposeDesign, kind: string, title: string, body: string[], decoName: string, artUrls: Record<string, string>): string {
+export interface DecoSpec {
+  svg: string
+  alt: string
+  idx: number // arts 列表占位编号（@@ARTn@@）
+}
+
+function bubble(
+  d: ComposeDesign,
+  kind: string,
+  title: string,
+  body: string[],
+  decoName: string,
+  artUrls: Record<string, string>,
+  decoMap: Record<string, DecoSpec>,
+): string {
   const meta = ({
     note: { label: '提示', c: d.accent, bg: d.soft, bd: d.border },
     tip: { label: '技巧', c: d.tip, bg: d.tipBg, bd: d.tipBg },
@@ -224,9 +239,11 @@ function bubble(d: ComposeDesign, kind: string, title: string, body: string[], d
   const vivid = d.key === 'promo' && (kind === 'key' || kind === 'tip' || kind === 'danger')
   const bodyP = bodyHtml ? '<p style="margin:0;font-size:15px;line-height:1.75;color:' + (vivid ? '#ffffff' : d.text) + '">' + bodyHtml + '</p>' : ''
   const artName = DECO_MAP[decoName] || decoName
-  // v10.2：角饰 60px 显示，位置贴右下角
-  const decoImg = artName && artUrls && artUrls[artName]
-    ? '<img src="' + artUrls[artName] + '" alt="" style="position:absolute;right:12px;bottom:10px;width:60px;height:auto;pointer-events:none;opacity:.9;display:block" />' : ''
+  // 角饰来源：预置资产 URL（artUrls）> 现场装饰素材（::: art deco 定义，第 21 轮）
+  let src = artName && artUrls && artUrls[artName] ? artUrls[artName] : null
+  if (!src && decoMap && decoMap[decoName]) src = '@@ART' + decoMap[decoName].idx + '@@'
+  const decoImg = src
+    ? '<img src="' + src + '" alt="" style="position:absolute;right:12px;bottom:10px;width:60px;height:auto;pointer-events:none;opacity:.9;display:block" />' : ''
   if (vivid) {
     const bg = kind === 'danger' ? d.danger : kind === 'tip' ? d.tip : d.orange
     return '<section style="margin:0 0 16px;border-radius:14px;padding:16px 18px 14px;background:' + bg + ';position:relative;overflow:hidden">' +
@@ -438,10 +455,37 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const warnings: string[] = []
   const images: ComposeImage[] = []
   const arts: ArtSpec[] = []
+  const decoMap: Record<string, DecoSpec> = {}
   const lines = String(md || '').split(/\r?\n/)
   const out: string[] = []
   let i = 0
   let h2Counter = 0
+
+  // 预扫描：::: art deco 名称 装饰素材定义（第 21 轮）——SVG 校验合格后注册供气泡角饰引用
+  {
+    let j = 0
+    while (j < lines.length) {
+      const m = lines[j].match(/^:::\s*art\s+deco\s+([a-zA-Z0-9_-]+)\s*[^\n]*$/)
+      if (m) {
+        const name = m[1]
+        j++
+        const raw: string[] = []
+        while (j < lines.length && lines[j].trim() !== ':::') { raw.push(lines[j]); j++ }
+        j++
+        const svgM = /<svg\b[^>]*viewBox="[^"]*"[\s\S]*<\/svg>/i.exec(raw.join('\n').trim())
+        const n = svgM ? svgElementCount(svgM[0]) : 0
+        if (svgM && n >= 6) {
+          const idx = arts.length
+          arts.push({ svg: svgM[0], alt: '气泡角饰:' + name, wide: false })
+          decoMap[name] = { svg: svgM[0], alt: name, idx }
+        } else {
+          warnings.push('气泡装饰素材 deco:' + name + ' 未达标（需带 viewBox 且图形元素 ≥6 个），已忽略')
+        }
+        continue
+      }
+      j++
+    }
+  }
 
   function collectList(): void {
     const ordered = /^\s*\d+\.\s+/.test(lines[i])
@@ -513,11 +557,17 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 花边分隔线 [[lace]]
     if (/^\[\[lace\]\]$/.test(line)) { out.push(laceDivider(d)); i++; continue }
 
-    // 美术素材 ::: art [wide|inline] 说明（第 15 轮：原样收集 SVG，图形元素 ≥6 才渲染）
-    const artC = line.match(/^:::\s*art(?:\s+(wide|inline))?\s*(.*)$/)
+    // 美术素材 ::: art [wide|inline] 说明 / ::: art deco 名称（第 21 轮：deco 为气泡角饰定义，预扫描已注册）
+    const artC = line.match(/^:::\s*art(?:\s+(deco)\s+([a-zA-Z0-9_-]+))?(?:\s+(wide|inline))?\s*(.*)$/)
     if (artC) {
-      const wide = artC[1] === 'wide'
-      const alt = artC[2].trim() || '美术素材'
+      if (artC[1] === 'deco') {
+        i++
+        while (i < lines.length && lines[i].trim() !== ':::') i++
+        i++
+        continue
+      }
+      const wide = artC[3] === 'wide'
+      const alt = artC[4].trim() || '美术素材'
       i++
       const rawLines: string[] = []
       while (i < lines.length && lines[i].trim() !== ':::') {
@@ -605,6 +655,9 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     if (alert) {
       const kind = alert[1].toLowerCase()
       const decoName = alert[2] || ''
+      if (decoName && !(DECO_MAP[decoName] && artUrls[DECO_MAP[decoName]]) && !decoMap[decoName]) {
+        warnings.push('气泡角饰 ' + decoName + ' 未定义：请先用 ::: art deco ' + decoName + ' 定义现场装饰素材')
+      }
       const first = alert[3].trim()
       const body: string[] = []
       i++
@@ -613,7 +666,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         if (l !== '') body.push(l)
         i++
       }
-      out.push(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls))
+      out.push(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls, decoMap))
       continue
     }
 
@@ -706,6 +759,10 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     warnings.push(
       '组件化不足（当前容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处；要求容器 ≥2 且气泡 ≥1 且列表或引用 ≥1）',
     )
+  }
+  // 正文偏短提示（第 21 轮：默认应充实到 1500-2500 字）
+  if (plainText.length < 600) {
+    warnings.push('正文偏短（约 ' + plainText.length + ' 字），建议充实内容至 1500-2500 字（用户明确要求短篇除外）')
   }
   return { html: html2, plainText, images, arts, warnings, mode: modeKey, modeLabel: d.label }
 }

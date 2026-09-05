@@ -29,23 +29,32 @@ const res = await fetch('https://api.deepseek.com/chat/completions', {
   headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
   body: JSON.stringify({
     model: 'deepseek-v4-flash',
-    max_tokens: 32000,
+    max_tokens: 64000,
     reasoning_effort: 'max',
     stream: false,
     messages: [
       { role: 'system', content: sys },
-      { role: 'user', content: '写一篇咖啡店新店开业的宣传推文，国潮风，600-800 字。' },
+      {
+        role: 'user',
+        content: '写一篇咖啡店新店开业的宣传推文，国潮风。信息已定：店名"有闲茶咖"，7 月 1 日开业，地点中山路 12 号，开业前三天全场饮品第二杯半价，到店送桂花茶冻。不要提问，直接创作完整正文；正文 1800-2200 字；每个 KEY/TIP 气泡都要带 ::: art deco 定义的角饰并引用。',
+      },
     ],
   }),
 })
 const json = await res.json()
 const content = json.choices?.[0]?.message?.content || ''
 console.log(`usage: prompt=${json.usage?.prompt_tokens} completion=${json.usage?.completion_tokens} contentLen=${content.length}`)
-const m = content.match(/```v2\s*([\s\S]*?)```/)
-if (!m) {
+// v2 围栏提取：从首个 ```v2 之后截到最后一个 ```（正文内不再允许其它围栏）
+let md = ''
+const start = content.indexOf('```v2')
+if (start >= 0) {
+  const rest = content.slice(start + 5)
+  const last = rest.lastIndexOf('```')
+  md = (last >= 0 ? rest.slice(0, last) : rest).trim()
+}
+if (!md) {
   console.log('NO V2 FENCE. head: ' + content.slice(0, 300))
   process.exit(1)
 }
-const md = m[1].trim()
 writeFileSync(`${outDir}/probe-injected.md`, md, 'utf8')
 console.log(`v2 fence extracted: ${md.length} chars -> ${outDir}/probe-injected.md`)
