@@ -226,8 +226,8 @@ try {
   console.log(`  ${bOk ? 'PASS' : 'FAIL'} - S8 new session independent content (${userB.slice(0, 24)}…)`)
   if (!bOk) failed++
   const noteTxt = await page.locator('.knowledge-note').last().innerText().catch(() => '')
-  const routeOk = noteTxt.includes('内容类型:promo') && noteTxt.includes('合规红线')
-  console.log(`  ${routeOk ? 'PASS' : 'FAIL'} - S8 3-layer routing injected (${noteTxt.slice(0, 40)}…)`)
+  const routeOk = noteTxt.includes('内容类型:promo') && noteTxt.includes('合规红线') && noteTxt.includes('风格速查')
+  console.log(`  ${routeOk ? 'PASS' : 'FAIL'} - S8 3-layer routing + style-guide injected (${noteTxt.slice(0, 44)}…)`)
   if (!routeOk) failed++
 
   const n1 = await rowCount()

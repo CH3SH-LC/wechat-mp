@@ -1,6 +1,8 @@
-// retrieval.ts —— 极简知识检索：按主题词映射 + 二元组相似度，从知识库挑 ≤K 个条目
+// retrieval.ts —— 三层知识取用：主题词映射 + 按任务路由注入点文件（00-GUIDE 路由逻辑前端化）
 // 知识库懒加载：首次调用 ensureKnowledgeLoaded() 后缓存（打包体积从 2.4MB 降至数百 KB）
+// 第 20 轮：保留 00-* 索引（路由可显式注入"风格选择速查"等教程）；相似度兜底排除索引文件
 import type { KnowledgePick } from './persona'
+import { assess, isCreateRequest } from './needs.ts'
 
 export interface KnowledgeEntry {
   path: string // 如 src/knowledge/视觉/模块/module-bubble.md
@@ -29,8 +31,6 @@ export function ensureKnowledgeLoaded(): Promise<KnowledgeEntry[]> {
         const head = (text.match(/^#\s+.*$/m) || [''])[0]
         return { path, name, dir, head, text }
       }),
-    ).then((entries) =>
-      entries.filter((e) => !e.name.startsWith('00-') && e.name !== 'design-logic-components'),
     )
   }
   return cache
@@ -144,8 +144,7 @@ function bigrams(s: string): Set<string> {
   return out
 }
 
-// 第 19 轮：三层任务路由——内容类型 → type-<key> + copy-tpl-<key>；风格 → style-<key>；营销类 → comp-banned 红线
-import { assess } from './needs.ts'
+// 第 20 轮：三层任务路由——内容类型 → type-<key> + copy-tpl-<key>；风格 → style-<key> 或选型速查；营销类 → comp-banned 红线
 
 const TYPE_FILE: Record<string, string> = {
   tutorial: 'type-tutorial', news: 'type-news', emotion: 'type-emotion', soft: 'type-soft',
@@ -180,28 +179,37 @@ export async function retrieve(query: string, topK = 6): Promise<RetrievalResult
     }
   }
 
-  // 2) 三层任务路由（第 19 轮）：类型/模板/风格/红线按 00-GUIDE 路由注入点文件
+  // 2) 三层任务路由：内容类型/模板/风格（或风格选型教程）/合规红线——注入点文件原对象
   const a = assess(query)
-  const routeNames: string[] = []
+  const routeEntries: KnowledgeEntry[] = []
+  const addName = (n: string) => {
+    const e = byName.get(n)
+    if (e) routeEntries.push(e)
+  }
   if (a.type && TYPE_FILE[a.type]) {
-    routeNames.push(TYPE_FILE[a.type])
+    addName(TYPE_FILE[a.type])
     hits.push('内容类型:' + a.type)
   }
-  if (a.type && TPL_FILE[a.type]) routeNames.push(TPL_FILE[a.type])
+  if (a.type && TPL_FILE[a.type]) addName(TPL_FILE[a.type])
   if (a.style) {
-    routeNames.push('style-' + a.style)
+    addName('style-' + a.style)
     hits.push('风格:' + a.style)
+  } else if (isCreateRequest(query)) {
+    // 第 20 轮：未指定风格 → 注入风格选型速查（内容类型→首选/备选风格），避免瞎选/全国潮模板
+    const styleIndex = entries.find((e) => e.path.includes('/视觉/风格/00-索引.md'))
+    if (styleIndex) routeEntries.push(styleIndex)
+    hits.push('风格速查')
   }
   if (a.type && AD_TYPES.includes(a.type)) {
-    routeNames.push('comp-banned')
+    addName('comp-banned')
     hits.push('合规红线')
   }
-  for (const n of routeNames) if (byName.has(n)) picked.add(n)
+  for (const e of routeEntries) picked.add(e.name)
 
-  // 3) 相似度兜底：文件名 + 标题与查询的二元组重合
+  // 3) 相似度兜底：文件名 + 标题与查询的二元组重合（排除 00-* 索引与顶层世界观文件）
   const q = bigrams(query)
   const scored = entries
-    .filter((e) => !picked.has(e.name))
+    .filter((e) => !picked.has(e.name) && !e.name.startsWith('00-') && e.name !== 'design-logic-components')
     .map((e) => {
       const hay = e.name + ' ' + e.head + ' ' + e.dir
       let score = 0
@@ -215,15 +223,17 @@ export async function retrieve(query: string, topK = 6): Promise<RetrievalResult
     if (s.score >= 2) picked.add(s.e.name)
   }
 
-  // 路由点文件（类型/模板/风格/红线）是"该任务权威细则"：截断放宽到 8000 字符
-  const routeSet = new Set<string>(routeNames)
+  // 路由点文件（类型/模板/风格/选型/红线）是"该任务权威细则"：截断放宽到 8000 字符
   const picks: KnowledgePick[] = []
-  for (const n of picked) {
-    const e = byName.get(n)
-    if (!e) continue
-    const limit = routeSet.has(n) ? 8000 : 4500
+  const emit = (e: KnowledgeEntry, limit: number) => {
     const text = e.text.length > limit ? e.text.slice(0, limit) + '\n…（节选截断）' : e.text
     picks.push({ path: e.path, head: e.head, text })
+  }
+  for (const e of routeEntries) emit(e, 8000)
+  for (const n of picked) {
+    if (routeEntries.some((re) => re.name === n)) continue // 路由条目已输出（含同名索引用原对象）
+    const e = byName.get(n)
+    if (e) emit(e, 4500)
   }
   return { picks, hits, sourceCount: entries.length }
 }
