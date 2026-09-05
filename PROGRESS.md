@@ -158,6 +158,25 @@
 
 ---
 
+## 2026-09-05
+
+### [Change] 第 19 轮：三层数据库按任务路由注入——让最终三层库真正驱动创作
+
+背景 / 变更原因：
+用户「我需要的就是最终的三层数据库，为什么没能体现出这个性能」。根因：桌面端只做关键词检索 + ≤6 条 4500 字截断节选，三层库的 46 模块/30 风格/内容类型/模板/合规红线绝大部分从不进入生成上下文；DSH 侧 agent 按 00-GUIDE「路由→索引→点文件」读全文。桌面无工具调用 → 由前端在单次请求内执行同一路由逻辑（非对话状态机，不违永久禁令）。
+
+实现：
+- retrieval.ts：任务路由注入——needs.assess 判内容类型 → 文本/内容类型/type-<key> + 文本/文案/copy-tpl-<key>（模板）；风格 → 视觉/风格/style-<key> 全文；营销类（promo/soft/brand）→ 文本/合规/comp-banned 红线（命中提示加"合规红线"）；主题词命中优先、相似度兜底补足 topK；路由点文件截断放宽 8000（其余 4500）
+- persona：知识库参考段改为「按任务路由注入，注入内容即该任务权威细则，冲突以库为准」；风格规则强化 auto 场景必须在 v2 正文第一行声明 [[theme:名称]]
+- scripts/live-knowledge-probe.mjs（真实注入对比：读库内 4 点文件 → buildSystemPrompt → 模型 → compose）
+
+验证：
+- pnpm build exit 0；E2E 39 项全绿零浏览器错误（新增 S8 三层路由注入断言：知识命中含"内容类型:promo / 合规红线"）
+- 真实注入对比 live-knowledge-probe：注入 type-promo + copy-tpl-promo + style-guochao + comp-banned（23.6KB）→ 模型产出 6814 字：促销 banner（前三天八折利益点）、5 处素材全部国潮库色（#C03A2B 朱红/#D4AF37 鎏金/#FFF3DE 绢黄/#2B2118 墨）且 alt 具象（开张横幅圆窗杯盏山影红灯笼/桂花枝瓷杯/宣纸灯竹影/金线水云纹/杯垫红印）、0 警告；产物 probe-injected.md / compose-probe-injected.html
+- cargo 17/17（Rust 零改动）
+
+---
+
 ## 2026-09-04
 
 ### [New Feature] 第 11 轮：结构化需求澄清卡——桌面端体现 req-clarify 能力

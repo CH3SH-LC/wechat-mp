@@ -20,9 +20,10 @@ wechat-mp-desktop/
 ├── public/                # 静态资源（空占位）
 ├── scripts/
 │   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright）
-│   ├── compose-check.mjs  # composeMarkdown 转换器 22 项断言（node 直跑 TS）
-│   └── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
-├── docs/information/     # 需求报告（…compose-port.md、art-gen.md、art-coverage.md、2026-09-05-quality-r17.md）
+│   ├── compose-check.mjs  # composeMarkdown 转换器断言（node 直跑 TS）
+│   ├── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
+│   └── live-knowledge-probe.mjs # 三层知识路由注入的真实模型验证（读库点文件 → persona → 模型 → compose）
+├── docs/information/     # 需求报告（…art-coverage.md、quality-r17.md、2026-09-05-knowledge-routing.md）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
@@ -38,7 +39,7 @@ wechat-mp-desktop/
 │   │   ├── artRender.ts   # SVG 素材 → PNG data URI（canvas 2x；回退 svg data URI）
 │   │   ├── persona.ts     # 统一系统提示词（对话+创作一体；```v2 协议 + 素材铁律 + 语气/结构/风格规则 + 知识拼装）
 │   │   ├── needs.ts       # 请求启发式（模拟端近似 + 澄清触发评估：isCreateRequest/isCancel/evaluate）
-│   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
+│   │   ├── retrieval.ts   # 知识检索：主题词映射 + 三层任务路由注入（类型/模板/风格/合规红线）+ 二元组兜底
 │   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（v2+art+theme 样例与违规直通演示）
 │   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2)
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）

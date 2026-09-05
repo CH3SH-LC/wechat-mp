@@ -144,9 +144,25 @@ function bigrams(s: string): Set<string> {
   return out
 }
 
+// 第 19 轮：三层任务路由——内容类型 → type-<key> + copy-tpl-<key>；风格 → style-<key>；营销类 → comp-banned 红线
+import { assess } from './needs.ts'
+
+const TYPE_FILE: Record<string, string> = {
+  tutorial: 'type-tutorial', news: 'type-news', emotion: 'type-emotion', soft: 'type-soft',
+  promo: 'type-promo', brand: 'type-brand-story', person: 'type-person-story', list: 'type-list',
+  science: 'type-science', announcement: 'type-announcement', serial: 'type-serial',
+}
+
+const TPL_FILE: Record<string, string> = {
+  tutorial: 'copy-tpl-tutorial', news: 'copy-tpl-news', emotion: 'copy-tpl-emotion', soft: 'copy-tpl-soft',
+  promo: 'copy-tpl-promo', brand: 'copy-tpl-brand', person: 'copy-tpl-person',
+}
+
+const AD_TYPES = ['promo', 'soft', 'brand'] // 营销类必须带合规红线
+
 export interface RetrievalResult {
   picks: KnowledgePick[]
-  hits: string[] // 命中的主题词（调试/展示用）
+  hits: string[] // 命中的主题词/路由（调试/展示用）
   sourceCount: number
 }
 
@@ -156,7 +172,7 @@ export async function retrieve(query: string, topK = 6): Promise<RetrievalResult
   const byName = new Map(entries.map((e) => [e.name, e]))
   const picked = new Set<string>()
 
-  // 1) 精确主题词映射
+  // 1) 精确主题词映射（用户明示的模块/风格/文案位词优先）
   for (const [word, names] of Object.entries(TOPIC_MAP)) {
     if (query.includes(word)) {
       hits.push(word)
@@ -164,7 +180,25 @@ export async function retrieve(query: string, topK = 6): Promise<RetrievalResult
     }
   }
 
-  // 2) 相似度兜底：文件名 + 标题与查询的二元组重合
+  // 2) 三层任务路由（第 19 轮）：类型/模板/风格/红线按 00-GUIDE 路由注入点文件
+  const a = assess(query)
+  const routeNames: string[] = []
+  if (a.type && TYPE_FILE[a.type]) {
+    routeNames.push(TYPE_FILE[a.type])
+    hits.push('内容类型:' + a.type)
+  }
+  if (a.type && TPL_FILE[a.type]) routeNames.push(TPL_FILE[a.type])
+  if (a.style) {
+    routeNames.push('style-' + a.style)
+    hits.push('风格:' + a.style)
+  }
+  if (a.type && AD_TYPES.includes(a.type)) {
+    routeNames.push('comp-banned')
+    hits.push('合规红线')
+  }
+  for (const n of routeNames) if (byName.has(n)) picked.add(n)
+
+  // 3) 相似度兜底：文件名 + 标题与查询的二元组重合
   const q = bigrams(query)
   const scored = entries
     .filter((e) => !picked.has(e.name))
@@ -181,10 +215,15 @@ export async function retrieve(query: string, topK = 6): Promise<RetrievalResult
     if (s.score >= 2) picked.add(s.e.name)
   }
 
+  // 路由点文件（类型/模板/风格/红线）是"该任务权威细则"：截断放宽到 8000 字符
+  const routeSet = new Set<string>(routeNames)
   const picks: KnowledgePick[] = []
   for (const n of picked) {
     const e = byName.get(n)
-    if (e) picks.push({ path: e.path, head: e.head, text: e.text })
+    if (!e) continue
+    const limit = routeSet.has(n) ? 8000 : 4500
+    const text = e.text.length > limit ? e.text.slice(0, limit) + '\n…（节选截断）' : e.text
+    picks.push({ path: e.path, head: e.head, text })
   }
   return { picks, hits, sourceCount: entries.length }
 }

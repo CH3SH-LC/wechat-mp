@@ -225,6 +225,10 @@ try {
   const bOk = userB.includes('毕业季')
   console.log(`  ${bOk ? 'PASS' : 'FAIL'} - S8 new session independent content (${userB.slice(0, 24)}…)`)
   if (!bOk) failed++
+  const noteTxt = await page.locator('.knowledge-note').last().innerText().catch(() => '')
+  const routeOk = noteTxt.includes('内容类型:promo') && noteTxt.includes('合规红线')
+  console.log(`  ${routeOk ? 'PASS' : 'FAIL'} - S8 3-layer routing injected (${noteTxt.slice(0, 40)}…)`)
+  if (!routeOk) failed++
 
   const n1 = await rowCount()
   const grewOk = n1 === n0 + 1
