@@ -36,6 +36,7 @@ D:\deepseek-harness\wechat-mp-desktop/
 3. **知识语料同步**：`src/knowledge/` 从 wechat-mp 项目（wechat-mp/test/knowledge 三层结构）拷贝；语料更新需手动同步并在 PROGRESS 记录。
 4. **真实验证文化**：UI 链路用 `scripts/verify-ui.mjs`（playwright）跑通并截图存证；Rust 逻辑用 cargo 单元测试 + live 冒烟（`--ignored`）。
 5. **零 emoji 内容**：产品文案与知识语料不使用 emoji。
+6. **绝对禁止前端对话状态机**（用户 2026-09-05 明确，永久有效）：不得用任何前端状态（pendingClarify / expectRef / askRef 之类）控制对话流程、澄清或路由——消息一律直通模型，由模型自主判断（需求澄清靠 persona 约束，不靠前端分流）。违者立即撤销重做。
 
 ## 每次变更的文档同步规则
 **每次代码修复/重构/功能变更后，必须同步更新：**

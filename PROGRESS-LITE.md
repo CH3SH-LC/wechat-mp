@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-05
+- [Change] 第 18 轮：撤销前端对话状态机（用户永久禁令"绝对禁止"）——删 App askRef/CLARIFY_SYSTEM 澄清回合与 needs 前端导入，send 直通模型自主；禁令写入 CLAUDE.md 铁律第 6 条 + REQUIREMENTS「〇、永久禁令」；E2E 全绿；第 17 轮文案/组件化/风格三项保留
 - [Change] 第 17 轮：四项质量修复（文案克制/组件必用/强制询问/风格落地）——palettes.ts 8 风格主题表（知识库色板）+ compose theme（UI 优先/正文 [[theme]] 声明/底色）+ persona 语气与结构规则 + App 强制澄清回合状态机（缺 ≥2 先问再写）+ 组件化引擎校验；E2E 37 项全绿（S1.8 主题色）；真实模型 live 国潮主题渲染落地、文案克制；Rust 零改动
 - [Change] 第 16 轮：素材用量升级——组件装饰全覆盖（用户："量太少，每个组件都必须使用美术素材"；1 问确认口径）——persona 铁律 v2（每篇 5-8 处、banner/小节/气泡/分隔/容器装饰位全覆盖、单屏 ≤1）；compose 引擎 0/<4 处用量警告；mock ×5 素材；chat.rs max_tokens 32000（推理吃光 16k 实测）；E2E 33 项全绿（S1.8 five art assets）；真实模型 live 6 处素材全达标 0 警告
 - [New Feature] 第 15 轮：现场生成美术素材（回应"为什么没素材了"）——::: art 容器：模型按知识库现场绘制 SVG，引擎校验元素 ≥6 与 viewBox，canvas 渲染 PNG data URI 内嵌预览/导出；persona 强制每篇 ≥1 素材；E2E 32 项全绿（S1.8 素材渲染 data 图）；真实模型 live 咖啡题材 SVG 15 元素 0 警告

@@ -11,16 +11,10 @@ import { composeMarkdown } from './lib/compose'
 import { renderArtPlaceholders } from './lib/artRender'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
-import { evaluate, isCreateRequest, isDemoTopic } from './lib/needs'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
 let idSeq = 1
-
-// 澄清回合人设（第 17 轮：需求模糊的创作请求先强制询问，避免模型默认直出）
-const CLARIFY_SYSTEM = `你是「公众号推文助手」。用户想让你创作一篇微信公众号推文，但需求里关键信息不足（类型/风格/字数/调性/配图等缺失较多）。
-请用自然口语、最多两句话，向用户提一个简短问题，把最影响产出的 2-3 个缺失项一次问清（可给出常见选项举例）。
-要求：只问问题；不要产出正文；不要输出任何代码块；不要用 emoji；不要寒暄。`
 
 const STYLE_PHRASE: Record<Exclude<Style, 'auto'>, string> = {
   campus: '校园',
@@ -81,8 +75,6 @@ export default function App() {
   const msgsRef = useRef<DisplayMsg[]>([])
   // artSeqRef：素材异步渲染序号，防止旧渲染结果覆盖新预览
   const artSeqRef = useRef(0)
-  // askRef（第 17 轮）：上一轮是"澄清回合"（只问未产出），本条消息视为回答 → 直接走创作
-  const askRef = useRef(false)
 
   useEffect(() => {
     msgsRef.current = msgs
@@ -94,7 +86,6 @@ export default function App() {
   }
 
   const applySession = async (item: SessionItem) => {
-    askRef.current = false
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
       .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
@@ -133,7 +124,6 @@ export default function App() {
   }
 
   const clearAllChat = () => {
-    askRef.current = false
     setMsgs([])
     setHtml(null)
     setQuality(null)
@@ -240,10 +230,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 对话回合（统一 persona；第 17 轮：clarify=true 为澄清回合，只问不产出）----------
-  const turn = async (raw: string, clarify = false): Promise<void> => {
+  // ---------- 对话回合（统一 persona，模型自主判断；禁止任何前端对话状态机）----------
+  const turn = async (raw: string): Promise<void> => {
     if (busyRef.current) return
-    const content = clarify ? raw : decoratePrompt(raw, mode, style)
+    const content = decoratePrompt(raw, mode, style)
     const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
@@ -253,27 +243,25 @@ export default function App() {
     draftRef.current = ''
 
     let picks: KnowledgePick[] = []
-    if (!clarify) {
-      try {
-        const hint = style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
-        const r = await retrieve(hint)
-        picks = r.picks
-        setNote(
-          r.hits.length
-            ? r.hits.slice(0, 8).join(' / ')
-            : r.picks
-                .map((p) => p.path.replace(/^.*\/([^/]+)$/, '$1'))
-                .slice(0, 8)
-                .join(' / '),
-        )
-      } catch {
-        // 知识库加载失败不影响对话：退回无节选的 persona
-        picks = []
-      }
+    try {
+      const hint = style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
+      const r = await retrieve(hint)
+      picks = r.picks
+      setNote(
+        r.hits.length
+          ? r.hits.slice(0, 8).join(' / ')
+          : r.picks
+              .map((p) => p.path.replace(/^.*\/([^/]+)$/, '$1'))
+              .slice(0, 8)
+              .join(' / '),
+      )
+    } catch {
+      // 知识库加载失败不影响对话：退回无节选的 persona
+      picks = []
     }
 
     const payload: ChatMsg[] = [
-      { role: 'system', content: clarify ? CLARIFY_SYSTEM : buildSystemPrompt(picks) },
+      { role: 'system', content: buildSystemPrompt(picks) },
       ...history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
@@ -312,22 +300,10 @@ export default function App() {
     }
   }
 
-  // 发送：需求模糊的创作请求先强制澄清（第 17 轮），回答后创作；闲聊/清晰创作直行
+  // 发送：直通统一回合，不设任何对话状态机（澄清与否由模型自主判断）
   const send = async (text: string) => {
     const t = text.trim()
     if (!t || busyRef.current) return
-    if (askRef.current) {
-      // 澄清回合之后：本条视为回答 → 直接创作（模型从历史看到自己问的问题）
-      askRef.current = false
-      await turn(t)
-      return
-    }
-    if ((isDemoTopic(t) || isCreateRequest(t)) && evaluate(t).needsClarify) {
-      // 创作请求但类型/风格/字数/调性/配图缺 ≥2：先问 1 个精简问题，不产出
-      await turn(t, true)
-      askRef.current = true
-      return
-    }
     await turn(t)
   }
 
