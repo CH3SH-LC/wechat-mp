@@ -11,10 +11,16 @@ import { composeMarkdown } from './lib/compose'
 import { renderArtPlaceholders } from './lib/artRender'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
+import { evaluate, isCreateRequest, isDemoTopic } from './lib/needs'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
 let idSeq = 1
+
+// 澄清回合人设（第 17 轮：需求模糊的创作请求先强制询问，避免模型默认直出）
+const CLARIFY_SYSTEM = `你是「公众号推文助手」。用户想让你创作一篇微信公众号推文，但需求里关键信息不足（类型/风格/字数/调性/配图等缺失较多）。
+请用自然口语、最多两句话，向用户提一个简短问题，把最影响产出的 2-3 个缺失项一次问清（可给出常见选项举例）。
+要求：只问问题；不要产出正文；不要输出任何代码块；不要用 emoji；不要寒暄。`
 
 const STYLE_PHRASE: Record<Exclude<Style, 'auto'>, string> = {
   campus: '校园',
@@ -37,13 +43,13 @@ function decoratePrompt(text: string, mode: Mode, style: Style): string {
 }
 
 // 把助手文本解析为可预览 HTML（第 14/15 轮）：```html 直通；```v2 正文经 compose 渲染；无围栏返回 null
-// arts：compose 收集的 SVG 美术素材（需由调用方渲染替换 @@ARTn@@ 占位）
-function resolvePreview(raw: string, mode: Mode): { html: string; warnings: string[]; arts: { svg: string; alt: string; wide: boolean }[] } | null {
+// theme：UI 显式风格选择（palettes key）；arts：compose 收集的 SVG 素材（需由调用方渲染替换 @@ARTn@@ 占位）
+function resolvePreview(raw: string, mode: Mode, style: Style): { html: string; warnings: string[]; arts: { svg: string; alt: string; wide: boolean }[] } | null {
   const direct = extractHtml(raw)
   if (direct) return { html: direct.html, warnings: [], arts: [] }
   const { v2 } = splitAssistant(raw)
   if (v2) {
-    const r = composeMarkdown(v2, { mode })
+    const r = composeMarkdown(v2, { mode, theme: style !== 'auto' ? style : undefined })
     return { html: r.html, warnings: r.warnings, arts: r.arts }
   }
   return null
@@ -75,6 +81,8 @@ export default function App() {
   const msgsRef = useRef<DisplayMsg[]>([])
   // artSeqRef：素材异步渲染序号，防止旧渲染结果覆盖新预览
   const artSeqRef = useRef(0)
+  // askRef（第 17 轮）：上一轮是"澄清回合"（只问未产出），本条消息视为回答 → 直接走创作
+  const askRef = useRef(false)
 
   useEffect(() => {
     msgsRef.current = msgs
@@ -86,6 +94,7 @@ export default function App() {
   }
 
   const applySession = async (item: SessionItem) => {
+    askRef.current = false
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
       .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
@@ -100,7 +109,8 @@ export default function App() {
     const last = [...mapped].reverse().find((m) => m.role === 'assistant')
     if (last) {
       const m = VALID_MODES.includes(item.mode as Mode) ? (item.mode as Mode) : 'auto'
-      const c = resolvePreview(last.content, m)
+      const s = VALID_STYLES.includes(item.style as Style) ? (item.style as Style) : 'auto'
+      const c = resolvePreview(last.content, m, s)
       if (c) {
         const seq = ++artSeqRef.current
         const html2 = c.arts.length ? await renderArtPlaceholders(c.html, c.arts) : c.html
@@ -123,6 +133,7 @@ export default function App() {
   }
 
   const clearAllChat = () => {
+    askRef.current = false
     setMsgs([])
     setHtml(null)
     setQuality(null)
@@ -195,7 +206,7 @@ export default function App() {
       return copy
     })
     // 流中实时预览：```html 直通或 ```v2 围栏闭合即 compose；素材异步渲染（序号防覆盖）
-    const c = resolvePreview(draft, mode)
+    const c = resolvePreview(draft, mode, style)
     if (c) {
       const seq = ++artSeqRef.current
       if (c.arts.length) {
@@ -229,10 +240,10 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 对话回合（第 13 轮：统一 persona，模型自主判断对话/创作/反问）----------
-  const turn = async (raw: string): Promise<void> => {
+  // ---------- 对话回合（统一 persona；第 17 轮：clarify=true 为澄清回合，只问不产出）----------
+  const turn = async (raw: string, clarify = false): Promise<void> => {
     if (busyRef.current) return
-    const content = decoratePrompt(raw, mode, style)
+    const content = clarify ? raw : decoratePrompt(raw, mode, style)
     const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
@@ -242,25 +253,27 @@ export default function App() {
     draftRef.current = ''
 
     let picks: KnowledgePick[] = []
-    try {
-      const hint = style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
-      const r = await retrieve(hint)
-      picks = r.picks
-      setNote(
-        r.hits.length
-          ? r.hits.slice(0, 8).join(' / ')
-          : r.picks
-              .map((p) => p.path.replace(/^.*\/([^/]+)$/, '$1'))
-              .slice(0, 8)
-              .join(' / '),
-      )
-    } catch {
-      // 知识库加载失败不影响对话：退回无节选的 persona
-      picks = []
+    if (!clarify) {
+      try {
+        const hint = style !== 'auto' ? raw + STYLE_PHRASE[style] : raw
+        const r = await retrieve(hint)
+        picks = r.picks
+        setNote(
+          r.hits.length
+            ? r.hits.slice(0, 8).join(' / ')
+            : r.picks
+                .map((p) => p.path.replace(/^.*\/([^/]+)$/, '$1'))
+                .slice(0, 8)
+                .join(' / '),
+        )
+      } catch {
+        // 知识库加载失败不影响对话：退回无节选的 persona
+        picks = []
+      }
     }
 
     const payload: ChatMsg[] = [
-      { role: 'system', content: buildSystemPrompt(picks) },
+      { role: 'system', content: clarify ? CLARIFY_SYSTEM : buildSystemPrompt(picks) },
       ...history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
@@ -283,7 +296,7 @@ export default function App() {
     setBusy(false)
     stopRef.current = null
     // 流结束：含 ```html 直通或 ```v2 正文 → compose 预览（素材渲染完成）并终检；纯对话不触碰预览
-    const final = resolvePreview(draftRef.current, mode)
+    const final = resolvePreview(draftRef.current, mode, style)
     if (final) {
       const seq = ++artSeqRef.current
       const html2 = final.arts.length ? await renderArtPlaceholders(final.html, final.arts) : final.html
@@ -299,9 +312,22 @@ export default function App() {
     }
   }
 
+  // 发送：需求模糊的创作请求先强制澄清（第 17 轮），回答后创作；闲聊/清晰创作直行
   const send = async (text: string) => {
     const t = text.trim()
     if (!t || busyRef.current) return
+    if (askRef.current) {
+      // 澄清回合之后：本条视为回答 → 直接创作（模型从历史看到自己问的问题）
+      askRef.current = false
+      await turn(t)
+      return
+    }
+    if ((isDemoTopic(t) || isCreateRequest(t)) && evaluate(t).needsClarify) {
+      // 创作请求但类型/风格/字数/调性/配图缺 ≥2：先问 1 个精简问题，不产出
+      await turn(t, true)
+      askRef.current = true
+      return
+    }
     await turn(t)
   }
 

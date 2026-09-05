@@ -119,6 +119,28 @@
 
 ---
 
+## 2026-09-05
+
+### [Change] 第 17 轮：四项质量修复——文案克制 / 组件必用 / 强制询问 / 风格真正落地
+
+背景 / 变更原因：
+用户反馈四项：①文案用力过猛；②只有 SVG 插图、没有各种组件（如修饰的小气泡）；③依旧不询问清楚；④完全没有考虑风格（显式风格按钮在渲染层不生效）。
+
+实现：
+- src/lib/palettes.ts（新）：按知识库视觉/风格条目提取 8 风格主题表（日系/国潮/校园/科技/极简/商务/手账/森系；bg 正文底色 + 文字类 accent/accentDark/heading/soft/soft2/border/hl + 宣传类 orange/amber/teal/ink；深档近似色按同色系）
+- compose.ts：resolveTheme（UI opts.theme 优先，否则正文 [[theme:名称]] 首个声明）；makeDesign 主题键覆盖；wrapper 加 background（主题底色）；theme 行不渲染；组件化校验警告（容器 ≥2 + 气泡 ≥1 + 列表/引用 ≥1）
+- persona 新增三段：文案语气规则（禁夸张营销词/感叹号 ≤1/具体细节/平实号召）；结构规则（正文必须组件化，纯文字 ≤2 连段）；风格规则（界面选择优先；自动时正文顶部 [[theme:名称]] 声明；素材配色同步）
+- App：强制询问状态机——创作请求且 evaluate 缺 ≥2（无"直接写"/演示）→ 澄清回合（CLARIFY_SYSTEM 只问 1 个精简问题、不产出）→ 回答后创作；askRef 恢复/清空复位；UI style → compose theme 注入；恢复会话按 item.style 上色
+- mock 样例声明 [[theme:校园]]；compose-check 36 项 + E2E 断言更新（主题色渲染、UI 优先、组件化警告、S9 强制询问语义）
+
+验证：
+- pnpm build exit 0；compose-check 36 项全绿
+- E2E 37 项全绿零浏览器错误（S1.8 campus theme colors applied；S1.7/1.5/1.6/S2/S7/S8/S9a-d 回归）
+- 真实模型 live：国潮茶饮 5474 字正文——[[theme:国潮]] 声明 → 宣纸米底 #fff9ef + 朱红 #c03a2b 主色落地、SVG 素材配色贴合（鎏金/朱红/宣纸米）、文案自然克制（"菜单不大，是手抄的…"）；素材 5 处元素 9-12 全达标；产物 compose-live-guochao.html（模型示例语法导致 alt 换行，非产品缺陷）
+- cargo 17/17（Rust 零改动）
+
+---
+
 ## 2026-09-04
 
 ### [New Feature] 第 11 轮：结构化需求澄清卡——桌面端体现 req-clarify 能力

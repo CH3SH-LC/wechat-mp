@@ -2,7 +2,10 @@
 // 来源：wechat-mp preset「wechat-mp-bootstrap」SKILL.md Host 源码（已验证 pkg-8，勿随意改动）
 // 移植为桌面纯 TS：去掉微信 API/上传/资产渲染依赖；DESIGNS text/promo 双色系、间距 v5、
 // 平面化 v10 全量保留；art:// 资产桌面不提供 → 引用被移除并记入 warnings（与 DSH 未上传行为一致）。
-// 协议：正文以 Markdown + v2 语法书写，composeMarkdown(md, { mode }) 输出 HTML。
+// 第 15 轮：::: art 素材容器（现场 SVG，元素 ≥6 校验）。第 17 轮：风格主题（palettes 色板覆盖 + 正文底色）。
+
+import { resolveTheme } from './palettes.ts'
+import type { StylePalette } from './palettes.ts'
 
 export interface ComposeDesign {
   key: 'text' | 'promo'
@@ -33,6 +36,33 @@ const DESIGNS: Record<'text' | 'promo', ComposeDesign> = {
     danger: '#b3453c', dangerBg: '#f9efed',
     hl: '#f2e3c2', codeBg: '#2f3640', codeText: '#f2ede6',
   },
+}
+
+// 按主题覆盖设计键（第 17 轮：风格色板落地；未选主题返回默认双色系）
+function makeDesign(modeKey: 'text' | 'promo', pal?: StylePalette): ComposeDesign {
+  const base = DESIGNS[modeKey]
+  if (!pal) return base
+  const d: ComposeDesign = { ...base }
+  d.bg = pal.bg
+  if (modeKey === 'text') {
+    d.accent = pal.accent
+    d.accentDark = pal.accentDark
+    d.heading = pal.heading
+    d.soft = pal.soft
+    d.soft2 = pal.soft2
+    d.border = pal.border
+    d.hl = pal.hl
+  } else {
+    d.orange = pal.orange
+    d.amber = pal.amber
+    d.teal = pal.teal
+    d.ink = pal.ink
+    d.soft = pal.soft
+    d.soft2 = pal.soft2
+    d.border = pal.border
+    d.hl = pal.hl
+  }
+  return d
 }
 
 function rgba(hex: string, a: number): string {
@@ -364,6 +394,7 @@ export function detectMode(md: string, explicit?: string): 'text' | 'promo' {
 
 export interface ComposeOptions {
   mode?: 'auto' | 'text' | 'promo'
+  theme?: string // UI 显式风格选择（palettes key，优先于正文 [[theme:名称]] 声明）
 }
 
 export interface ComposeImage {
@@ -399,8 +430,10 @@ export function svgElementCount(svg: string): number {
 export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResult {
   opts = opts || {}
   const modeKey = detectMode(md, opts.mode)
-  // v9：不提供主题参数；排版语法模块使用 DESIGNS[modeKey] 基础色渲染骨架
-  const d = DESIGNS[modeKey]
+  // v9：不提供主题参数；排版语法模块使用 DESIGNS[modeKey] 基础色渲染骨架；
+  // 第 17 轮：UI 风格选择或正文 [[theme:名称]] 声明 → 主题色板覆盖（含正文底色）
+  const pal = resolveTheme(md, opts.theme)
+  const d = makeDesign(modeKey, pal)
   const artUrls: Record<string, string> = {}
   const warnings: string[] = []
   const images: ComposeImage[] = []
@@ -465,6 +498,9 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       i++
       continue
     }
+
+    // 风格声明 [[theme:名称]]（第 17 轮：只影响配色渲染，不产生输出）
+    if (/^\[\[theme:[^\]]+\]\]$/.test(line)) { i++; continue }
 
     // 横幅 [[banner:主|副]]
     const bn = line.match(/^\[\[banner:([^|\]]+)(?:\|([^\]]+))?\]\]$/)
@@ -648,8 +684,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     warnings.push('本地图片 ' + img.local + '：桌面版无微信上传通道，请发布前手动替换为微信图片地址')
   }
 
-  const wrapperBg = '' // v10：无顶部渐变，正文保持纯白底
-  const html2 = '<section style="' + wrapperBg + 'padding:4px 16px;box-sizing:border-box;font-size:16px;line-height:1.75;color:' + d.text + ';font-family:' + FONT + ';letter-spacing:0.5px;word-break:break-word">' + html + '</section>'
+  const wrapperBg = '' // v10：无顶部渐变；正文底色随主题（background:d.bg），纯白为默认
+  const html2 = '<section style="' + wrapperBg + 'background:' + d.bg + ';padding:4px 16px;box-sizing:border-box;font-size:16px;line-height:1.75;color:' + d.text + ';font-family:' + FONT + ';letter-spacing:0.5px;word-break:break-word">' + html + '</section>'
   const plainText = html2
     .replace(/<[^>]+>/g, ' ')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
@@ -660,6 +696,16 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
   } else if (arts.length < 4) {
     warnings.push('素材用量偏低（当前 ' + arts.length + ' 处，建议 5-8 处并覆盖各组件装饰位）')
+  }
+  // 组件化校验（第 17 轮：结构规则——容器 ≥2 + 气泡 ≥1 + 列表/引用 ≥1）
+  const src = String(md || '')
+  const containers = (src.match(/^:::\s*(?:steps|cols|card|band|frame|timeline)\b/gm) || []).length
+  const bubbles = (src.match(/^>\s*\[!/gm) || []).length
+  const listOrQuote = (src.match(/^\s*[-*+]\s+/gm) || []).length + (src.match(/^>\s*(?!\[!)/gm) || []).length
+  if (containers < 2 || bubbles < 1 || listOrQuote < 1) {
+    warnings.push(
+      '组件化不足（当前容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处；要求容器 ≥2 且气泡 ≥1 且列表或引用 ≥1）',
+    )
   }
   return { html: html2, plainText, images, arts, warnings, mode: modeKey, modeLabel: d.label }
 }

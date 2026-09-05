@@ -24,7 +24,9 @@ const FLOWER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260
 <circle cx="90" cy="104" r="6" fill="#f2c76e"/>
 </svg>`
 
-const SAMPLE = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
+const SAMPLE = `[[theme:校园]]
+
+[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
 
 ::: art wide 晨光里的旗帜
 ${FLAG_SVG}
@@ -83,22 +85,32 @@ const check = (name, ok, extra = '') => {
 
 const outDir = process.argv[2] || 'D:/deepseek-harness/verify-artifacts'
 
-// 1) 宣传类样例：mode 自动检测 promo；关键模块渲染
+// 1) 宣传类样例（校园主题）：mode 自动检测 promo；关键模块渲染；主题色落地
 const r = composeMarkdown(SAMPLE, { mode: 'auto' })
 check('auto detect promo', r.mode === 'promo' && r.modeLabel === '宣传类', `${r.mode}/${r.modeLabel}`)
-check('banner rendered (orange bg)', r.html.includes('background:#c96f4a;padding:24px 18px'))
+check('theme declared not rendered', !r.html.includes('[[theme'))
+check('campus theme banner (blue)', r.html.includes('background:#2f6fed;padding:24px 18px'))
+check('wrapper white bg (campus)', r.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
 check('steps numbered circles', (r.html.match(/border-radius:50%/g) || []).length >= 3)
 check('band rgba pattern', r.html.includes('rgba(') && r.html.includes('band') === false)
 check('badge rendered', r.html.includes('border-radius:20px'))
-check('title box rendered', r.html.includes('border:2px solid #c96f4a'))
-check('key bubble rendered (promo vivid)', r.html.includes('padding:16px 18px 14px;background:#c96f4a'))
-check('wrapper present', r.html.startsWith('<section style="padding:4px 16px'))
+check('title box rendered (campus blue)', r.html.includes('border:2px solid #2f6fed'))
+check('key bubble rendered (campus vivid)', r.html.includes('padding:16px 18px 14px;background:#2f6fed'))
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
+const noComp = composeMarkdown('## 标题\n\n- 列表项\n\n正文段落。', { mode: 'text' })
+check('componentized warning (no container/bubble)', noComp.warnings.some((w) => w.includes('组件化不足')))
+check('SAMPLE componentized clean', !r.warnings.some((w) => w.includes('组件化不足')))
 check('art collected 5 (2 wide)', r.arts.length === 5 && r.arts.filter((a) => a.wide).length === 2, `arts=${r.arts.length}`)
 check('art placeholder in html', r.html.includes('@@ART0@@'))
 check('art wide img style', r.html.includes('width:100%;height:auto;display:block;margin:12px 0'))
+
+// 1c) 主题：opts.theme（UI）优先于正文声明；日系底色/主色落地
+const uiTheme = composeMarkdown(SAMPLE, { mode: 'auto', theme: 'japanese' })
+check('opts theme overrides body theme', uiTheme.html.includes('background:#faf3e3;padding:4px 16px') && uiTheme.html.includes('background:#c29b6b;padding:24px 18px'))
+const bodyTheme = composeMarkdown('[[theme:国潮]]\n\n[[banner:开业大吉|主标题]]\n\n正文内容。', { mode: 'auto' })
+check('body theme guochao applied', bodyTheme.html.includes('background:#fff9ef;padding:4px 16px') && bodyTheme.html.includes('background:#c03a2b;padding:24px 18px'))
 
 // 1a) 素材用量警告：0 处与不足 4 处均提示
 const zero = composeMarkdown('## 标题\n\n正文段落，没有任何素材。', { mode: 'text' })

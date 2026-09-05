@@ -46,8 +46,10 @@ const FLOWER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260
 <circle cx="90" cy="104" r="6" fill="#f2c76e"/>
 </svg>`
 
-// v2 语法正文样例（第 16 轮：组件装饰全覆盖——banner/小节/气泡/分隔均配素材，共 5 处）
-const SAMPLE_V2 = `[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
+// v2 语法正文样例（第 16 轮：组件装饰全覆盖——banner/小节/气泡/分隔均配素材，共 5 处；第 17 轮：声明校园主题）
+const SAMPLE_V2 = `[[theme:校园]]
+
+[[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
 
 ::: art wide 晨光里的旗帜
 ${FLAG_SVG}

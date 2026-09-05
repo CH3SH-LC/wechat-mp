@@ -22,7 +22,7 @@ wechat-mp-desktop/
 │   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright）
 │   ├── compose-check.mjs  # composeMarkdown 转换器 22 项断言（node 直跑 TS）
 │   └── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
-├── docs/information/     # 需求报告（…conversational-agent.md、align-dsh.md、compose-port.md、art-gen.md、2026-09-05-art-coverage.md）
+├── docs/information/     # 需求报告（…compose-port.md、art-gen.md、art-coverage.md、2026-09-05-quality-r17.md）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
@@ -33,12 +33,13 @@ wechat-mp-desktop/
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
-│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH compose；含 ::: art 素材容器 + 元素计数校验）
+│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH compose；::: art 素材 + 元素/用量/组件化校验 + 主题色）
+│   │   ├── palettes.ts    # 风格主题表（知识库 8 风格色板：日系/国潮/校园/科技/极简/商务/手账/森系）
 │   │   ├── artRender.ts   # SVG 素材 → PNG data URI（canvas 2x；回退 svg data URI）
-│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体、模型自主判断；```v2 语法正文协议 + 素材铁律 + 知识拼装）
-│   │   ├── needs.ts       # 请求启发式（供浏览器模拟端近似模型自主判定：isCreateRequest/isCancel/evaluate）
+│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体；```v2 协议 + 素材铁律 + 语气/结构/风格规则 + 知识拼装）
+│   │   ├── needs.ts       # 请求启发式（模拟端近似 + 澄清触发评估：isCreateRequest/isCancel/evaluate）
 │   │   ├── retrieval.ts   # 知识检索（主题词映射+二元组；懒加载 ensureKnowledgeLoaded 缓存）
-│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（v2+art 样例与违规直通演示）
+│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（v2+art+theme 样例与违规直通演示）
 │   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2)
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>

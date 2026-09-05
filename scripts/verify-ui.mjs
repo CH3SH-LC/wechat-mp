@@ -93,6 +93,10 @@ try {
   const artImgs = frame ? await frame.locator('img[src^="data:image/"]').count() : 0
   console.log(`  ${artImgs >= 4 ? 'PASS' : 'FAIL'} - S1.8 five art assets rendered to data images (${artImgs})`)
   if (artImgs < 4) failed++
+  const bodyHtml = frame ? await frame.locator('body').innerHTML() : ''
+  const themed = bodyHtml.includes('#2f6fed') && !bodyHtml.includes('[[theme')
+  console.log(`  ${themed ? 'PASS' : 'FAIL'} - S1.8 campus theme colors applied in preview`)
+  if (!themed) failed++
 } catch (e) {
   console.log('  FAIL - S1.8 compose render error:', String(e).slice(0, 200))
   failed++
