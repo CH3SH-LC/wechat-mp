@@ -6,7 +6,7 @@ import { createRequire } from 'module'
 const require = createRequire(import.meta.url)
 const { chromium } = require('D:/deepseek-harness/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright')
 
-const outDir = process.argv[2] || '.'
+const outDir = process.argv[2] || 'docs/artifacts'
 const url = process.argv[3] || 'http://127.0.0.1:1420'
 const errors = []
 

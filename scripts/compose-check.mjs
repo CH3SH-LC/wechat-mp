@@ -1,4 +1,4 @@
-// compose-check.mjs —— composeMarkdown 转换器校验（第 14/15 轮）
+﻿// compose-check.mjs —— composeMarkdown 转换器校验（第 14/15 轮）
 // 用法：node scripts/compose-check.mjs [outDir]
 import { composeMarkdown, svgElementCount } from '../src/lib/compose.ts'
 import { writeFileSync } from 'fs'
@@ -98,7 +98,7 @@ const check = (name, ok, extra = '') => {
   if (!ok) failed++
 }
 
-const outDir = process.argv[2] || 'D:/deepseek-harness/verify-artifacts'
+const outDir = process.argv[2] || 'docs/artifacts'
 
 // 1) 宣传类样例（校园主题）：mode 自动检测 promo；关键模块渲染；主题色落地
 const r = composeMarkdown(SAMPLE, { mode: 'auto' })

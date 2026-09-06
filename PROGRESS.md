@@ -7,6 +7,19 @@
 
 ## 2026-09-05
 
+### [Change] 第 22 轮：整理散落验证产物归档到项目 docs/artifacts（整理轮）
+
+背景 / 变更原因：用户「整理所有散落在外的文件到 wechat-mp-desktop 内」。按 file-organize skill 只读盘点 + 归类提议 + 用户确认：A 组 19 个本项目验证产物移入项目；B 组 14 个 askkp/dsh-desktop 历史产物与工作区杂项/TEMP 残留保留原位（只整理不删除）。
+
+实现：
+- 新建 docs/artifacts/，从工作区 verify-artifacts 移入 19 个：E2E 截图 8（wxmp-desktop-*.png）、compose/注入样例 9（compose-sample/compose-live*/compose-probe*.html、probe-injected.md）、风格选型 3（style-choice-*.md）
+- verify-ui.mjs / compose-check.mjs 默认输出路径改为项目内 docs/artifacts（今后验证截图与样例自动落项目内）
+- STRUCTURE docs 树登记 artifacts；REQUIREMENTS 第 22 轮登记
+
+验证：docs/artifacts 19 个产物齐；verify-artifacts 剩余 14 个非本项目文件；产物入库作为验证证据
+
+---
+
 ### [Change] 第 12 轮：通用对话模式——去掉固定澄清卡，像通用智能体一样正常对话
 
 背景 / 变更原因：

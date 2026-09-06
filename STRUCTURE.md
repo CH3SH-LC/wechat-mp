@@ -24,7 +24,9 @@ wechat-mp-desktop/
 │   ├── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
 │   ├── live-knowledge-probe.mjs # 三层知识路由注入的真实模型验证（读库点文件 → persona → 模型 → compose）
 │   └── live-style-choice.mjs    # 风格选型验证（同质注入 × 三主题，检查 theme 选择与反模板化）
-├── docs/information/     # 需求报告（…art-coverage.md、quality-r17.md、2026-09-05-knowledge-routing.md）
+├── docs/
+│   ├── information/     # 需求报告（…quality-r17.md、knowledge-routing.md、style-choice.md、art-concrete.md）
+│   └── artifacts/       # 验证产物归档（E2E 截图 + compose/注入/风格选型样例；verify-ui/compose-check 默认输出至此）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢

@@ -15,6 +15,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-05｜第 22 轮：整理散落验证产物归档到项目 docs/artifacts（整理轮，无代码功能）
+- 需求：用户「整理所有散落在外的文件到 wechat-mp-desktop 内」。盘点：工作区 verify-artifacts 33 个文件——A 组 19 个属本项目验证产物（E2E 截图 8、compose/注入样例 9、风格选型 3）；B 组 14 个属 askkp/dsh-desktop 历史产物保留原位；工作区根杂项与 TEMP 残留不动。用户确认按提议移动 A 组。
+- 改动点：新建 docs/artifacts/ 并移入 A 组 19 个；verify-ui.mjs 与 compose-check.mjs 默认输出路径改为项目内 docs/artifacts（今后验证截图/样例自动落在项目内）；STRUCTURE/docs 树登记；REQUIREMENTS/进度同步。
+- 验收标准：docs/artifacts 含 19 个产物；verify-artifacts 剩 14 个非本项目文件；脚本默认输出路径生效；文档同步 + 提交。
+- 状态：✅ 完成（19 个产物已移入 docs/artifacts；verify-artifacts 剩余 14 个非本项目历史产物；两脚本默认 outDir 指向项目内；STRUCTURE/PROGRESS/RELEASE-NOTES 同步；commit 完成）
+
 ### 2026-09-05｜第 21 轮：素材具体插画化 + 正文加长 + 气泡角饰修饰
 - 需求：用户反馈三项——①SVG 插图过于抽象没有具体图像（根因：persona 素材铁律"线条意象+平面克制"导致模型画几何剪影；库中"具体插画"引导未入规则）；②文案太短（默认长度与"充实度"要求不足，模型倾向短篇）；③所有气泡缺修饰（组件内装饰素材桌面未实现，bubble 只有纯色/左条）。
 - 改动点：①persona 素材铁律 v4——素材必须"具体可辨认插画"：明确对象轮廓与结构、≥2 层明暗体积（允许渐变）、细节纹理层，禁止几何剪影冒充图像，附自查点；②正文默认 1500-2500 字（未要求短篇时），每小节展开细节/场景/数据；compose 加"正文偏短(<600 字)"警告；③气泡角饰：compose 支持 \`::: art deco 名称\` 装饰素材定义（不输出正文图）+ 气泡 \`> [!KEY|名称]\` 引用 → 角饰 60px 右下渲染（SVG 现场生成 data uri）；引用未定义名称产生警告；persona 要求每个 KEY/TIP/DANGER 气泡带角饰（定义+引用示例）；④mock 样例加长至 1200 字级并给 KEY 气泡加角饰；E2E/compose-check 断言更新。
