@@ -219,16 +219,15 @@ export default function App() {
     setBusy(false)
   }
 
-  // Tauri 流式事件订阅（仅桌面模式）
+  // Tauri 流式事件订阅（仅桌面模式）。注：错误不依赖事件——Rust 从不 emit chat-error，
+  // 失败经 sendChatRust 抛错 → catch → fail()（第 27 轮清理休眠监听）。
   useEffect(() => {
     if (!inTauri()) return
     const un1 = listen<string>('chat-delta', (e) => {
       if (busyRef.current) updateAssistant(draftRef.current + e.payload)
     })
-    const un2 = listen<string>('chat-error', (e) => fail(e.payload))
     return () => {
       un1.then((f) => f())
-      un2.then((f) => f())
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

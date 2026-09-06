@@ -15,6 +15,12 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-06｜第 27 轮：全项目结构重构（技术债清理，零行为变化）
+- 需求：用户「重构整个项目」。经评估界定为**可审计、零行为变化的全项目结构与技术债清理**（不重写产品语义）：类型/职责集中、删死代码与休眠监听、清理遗留样式、修 2 处已探明小 latent（SSE EOF 残留、chat-error 休眠监听）。
+- 改动点：①死代码/死导出清理（未被引用的 retrieve 旧路径、buildSystemPrompt、样式选择器等——逐一 grep 证实后移除；被 live 脚本引用的先同步改造）；②休眠 chat-error 前端监听移除（Rust 从不 emit，错误走 invoke reject）；③SSE 行尾无换行残留冲刷修复 + 单测（O-8）；④App.css 清理无引用规则；⑤类型跨文件 import 归并到 src/lib/types.ts（若机械改动收益>风险）；⑥live 验证脚本改用注册表 API 的则同步。
+- 验收标准：pnpm build exit 0；compose-check 全绿；cargo 全绿（37 + 新增/调整单测）；E2E 全绿；`cargo build` app 编译通过；无行为回归（E2E S1-S9 语义不变）；文档同步 + 提交。
+- 状态：✅ 完成（删旧 retrieve/三层路由死代码与休眠 chat-error 监听；清模式/风格遗留 CSS；SSE EOF 无尾换行残留修复 + sse_tail_delta 单测；cargo 38/38 + pnpm build + compose-check + E2E + cargo build app 全绿；E2E S1-S9 语义不变；文档同步 + 提交）
+
 ### 2026-09-06｜第 26 轮：微信草稿箱发布（需求文档 v2 修订 1）
 - 需求：成稿后除复制/导出外，可经微信官方接口发布到公众号草稿箱——配置 AppID/AppSecret → 正文图片上传为永久素材并替换引用 → draft/add 入草稿箱。
 - 改动点：①Rust publish.rs（access_token 获取/缓存刷新、material/add_material 图片上传、draft/add）+ 命令注册；②SettingsPanel 增公众号配置（AppID/AppSecret 本地存）；③PreviewPane「发布到草稿箱」按钮与状态反馈；④微信接口抽象层支持 mock（E2E）与测试号（live）。

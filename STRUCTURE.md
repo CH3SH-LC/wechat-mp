@@ -44,7 +44,7 @@ wechat-mp-desktop/
 │   │   ├── image-agent.ts # 第24轮 图像子智能体编排：hasPlaceholders/materializePlaceholders（图位→gen_svg/样例池→回填 ::: art 块）
 │   │   ├── persona.ts     # 统一系统提示词（对话+创作一体；```v2 协议 + 素材铁律 v5 图位 + 语气/结构/风格 v5 规则 + 知识工具用法 + buildRegistrySystem）
 │   │   ├── needs.ts       # 请求启发式（模拟端近似 + 澄清触发评估：isCreateRequest/isCancel/evaluate）
-│   │   ├── retrieval.ts   # 知识取用：ensureKnowledgeLoaded 缓存 + 旧主题词/三层路由 retrieve（保留）+ 第25轮 buildRegistry（注册表目录）/runKnowledgeTool（本地执行 load/search）
+│   │   ├── retrieval.ts   # 知识取用：ensureKnowledgeLoaded 懒加载缓存 + buildRegistry（注册表目录，≤3500 字）+ runKnowledgeTool（本地执行 load_knowledge/search_knowledge，供 prep 工具循环）；旧"请求前条件注入 retrieve"已删
 │   │   ├── prep.ts        # 第25轮 创作前置工具循环：runPrep（桌面 tool_calls→runKnowledgeTool→回传；READY/澄清）+ PREP/WRITE_INSTRUCTION
 │   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟；ChatMsg 支持 tool 回合（v2+art+theme 样例与违规直通演示）
 │   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2)

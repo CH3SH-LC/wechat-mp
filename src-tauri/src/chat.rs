@@ -118,6 +118,15 @@ fn sse_delta(line: &str) -> Option<String> {
     v["choices"][0]["delta"]["content"].as_str().map(|s| s.to_string()).filter(|s| !s.is_empty())
 }
 
+/// 解析流结束残留 buffer（可无尾部换行）；空 buffer → None（纯函数，可测）
+fn sse_tail_delta(buf: &str) -> Option<String> {
+    let tail = buf.trim();
+    if tail.is_empty() {
+        return None;
+    }
+    sse_delta(tail)
+}
+
 /// 流式对话核心：返回完整文本，同时逐段回调（测试可直接调用）
 async fn stream_chat(
     cfg: &LlmConfig,
@@ -169,6 +178,12 @@ async fn stream_chat(
                 None => break,
             }
         }
+    }
+    // EOF 冲刷（O-8 修复）：流结束后 buffer 残留的末块（无尾部换行）也应解析
+    let tail = sse_tail_delta(&buf);
+    if let Some(delta) = tail {
+        collected.push_str(&delta);
+        on_delta(delta);
     }
     Ok(collected)
 }
@@ -423,6 +438,14 @@ mod tests {
     fn sse_reasoning_ignored() {
         let line = r#"data: {"choices":[{"delta":{"reasoning_content":"thinking"}}]}"#;
         assert_eq!(sse_delta(line), None);
+    }
+
+    #[test]
+    fn sse_tail_flush_parses_residual_without_newline() {
+        let buf = r#"data: {"choices":[{"delta":{"content":"收尾"}}]}"#;
+        assert_eq!(sse_tail_delta(buf).as_deref(), Some("收尾"));
+        assert_eq!(sse_tail_delta("  \n\t "), None, "空 buffer 不解析");
+        assert_eq!(sse_tail_delta("data: [DONE]"), None);
     }
 
     #[tokio::test]

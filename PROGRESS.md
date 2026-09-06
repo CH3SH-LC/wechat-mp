@@ -7,6 +7,20 @@
 
 ## 2026-09-06
 
+### [Change] 第 27 轮：全项目结构重构（技术债清理，零行为变化）
+
+背景 / 变更原因：用户「重构整个项目」。经评估界定为可审计、零行为变化的全项目结构与技术债清理（不重写产品语义）——第 25 轮知识工具化后，旧"请求前条件注入"整段成为死代码；UI 去控件后遗留样式与休眠监听仍在；O-8 SSE EOF 残留不解析。
+
+实现：
+- Modify: `src/lib/retrieval.ts` — 删除第 20-21 轮整段死代码：retrieve()/RetrievalResult/TYPE_FILE/TPL_FILE/AD_TYPES 及其 assess、isCreateRequest 导入；头注释更新为"注册表 + 工具"语义（保留懒加载缓存、TOPIC_MAP/bigrams——runKnowledgeTool 的 search 仍用）
+- Modify: `src/App.tsx` — 删除休眠 chat-error 监听（Rust 从不 emit，错误经 sendChatRust 抛错→catch→fail；O-3）
+- Modify: `src/App.css` — 删除第 23 轮移除控件后遗留的模式/风格控制条样式块（chat-controls/ctrl-*/seg/style-select）
+- Modify: `src-tauri/src/chat.rs` — O-8 修复：SSE 流结束后残留 buffer（末块无尾换行）现被冲刷解析；抽出纯函数 sse_tail_delta + 单测
+
+验证：
+- cargo 38/38（新增 sse_tail_delta 1 项）；pnpm build exit 0；compose-check OK；verify-ui E2E 全绿（S1-S9 语义不变，无 .style-select/.seg-btn 引用残留）；cargo build 桌面 app 编译通过
+- 文档：STRUCTURE retrieval 注释、REQUIREMENTS/PROGRESS-LITE 同步
+
 ### [New Feature] 第 26 轮：微信草稿箱发布（需求文档 v2 修订 1 落地，本地门禁全绿，真实接口 LIVE-PENDING）
 
 背景 / 变更原因：成稿除复制/导出外需能直达公众号草稿箱——应用内配置 AppID/AppSecret，正文 data 图上传为微信永久素材并替换引用，再 draft/add 入草稿箱。当前环境无微信测试号/外网授权，真实接口链路无法验证；网络层按官方接口实现，逻辑层做成纯函数并用单测覆盖。

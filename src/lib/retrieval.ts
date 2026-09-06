@@ -1,8 +1,6 @@
-// retrieval.ts —— 三层知识取用：主题词映射 + 按任务路由注入点文件（00-GUIDE 路由逻辑前端化）
-// 知识库懒加载：首次调用 ensureKnowledgeLoaded() 后缓存（打包体积从 2.4MB 降至数百 KB）
-// 第 20 轮：保留 00-* 索引（路由可显式注入"风格选择速查"等教程）；相似度兜底排除索引文件
-import type { KnowledgePick } from './persona'
-import { assess, isCreateRequest } from './needs.ts'
+// retrieval.ts —— 三层知识取用（第 25 轮）：懒加载缓存 + buildRegistry 注册表目录 +
+// runKnowledgeTool 本地执行（load_knowledge / search_knowledge，供 prep 工具循环取用）。
+// 第 20-21 轮的"请求前条件注入（retrieve/三层任务路由）"已在第 25 轮移除。
 
 export interface KnowledgeEntry {
   path: string // 如 src/knowledge/视觉/模块/module-bubble.md
@@ -142,100 +140,6 @@ function bigrams(s: string): Set<string> {
   const out = new Set<string>()
   for (let i = 0; i < clean.length - 1; i++) out.add(clean.slice(i, i + 2))
   return out
-}
-
-// 第 20 轮：三层任务路由——内容类型 → type-<key> + copy-tpl-<key>；风格 → style-<key> 或选型速查；营销类 → comp-banned 红线
-
-const TYPE_FILE: Record<string, string> = {
-  tutorial: 'type-tutorial', news: 'type-news', emotion: 'type-emotion', soft: 'type-soft',
-  promo: 'type-promo', brand: 'type-brand-story', person: 'type-person-story', list: 'type-list',
-  science: 'type-science', announcement: 'type-announcement', serial: 'type-serial',
-}
-
-const TPL_FILE: Record<string, string> = {
-  tutorial: 'copy-tpl-tutorial', news: 'copy-tpl-news', emotion: 'copy-tpl-emotion', soft: 'copy-tpl-soft',
-  promo: 'copy-tpl-promo', brand: 'copy-tpl-brand', person: 'copy-tpl-person',
-}
-
-const AD_TYPES = ['promo', 'soft', 'brand'] // 营销类必须带合规红线
-
-export interface RetrievalResult {
-  picks: KnowledgePick[]
-  hits: string[] // 命中的主题词/路由（调试/展示用）
-  sourceCount: number
-}
-
-export async function retrieve(query: string, topK = 6): Promise<RetrievalResult> {
-  const entries = await ensureKnowledgeLoaded()
-  const hits: string[] = []
-  const byName = new Map(entries.map((e) => [e.name, e]))
-  const picked = new Set<string>()
-
-  // 1) 精确主题词映射（用户明示的模块/风格/文案位词优先）
-  for (const [word, names] of Object.entries(TOPIC_MAP)) {
-    if (query.includes(word)) {
-      hits.push(word)
-      for (const n of names) picked.add(n)
-    }
-  }
-
-  // 2) 三层任务路由：内容类型/模板/风格（或风格选型教程）/合规红线——注入点文件原对象
-  const a = assess(query)
-  const routeEntries: KnowledgeEntry[] = []
-  const addName = (n: string) => {
-    const e = byName.get(n)
-    if (e) routeEntries.push(e)
-  }
-  if (a.type && TYPE_FILE[a.type]) {
-    addName(TYPE_FILE[a.type])
-    hits.push('内容类型:' + a.type)
-  }
-  if (a.type && TPL_FILE[a.type]) addName(TPL_FILE[a.type])
-  if (a.style) {
-    addName('style-' + a.style)
-    hits.push('风格:' + a.style)
-  } else if (isCreateRequest(query)) {
-    // 第 20 轮：未指定风格 → 注入风格选型速查（内容类型→首选/备选风格），避免瞎选/全国潮模板
-    const styleIndex = entries.find((e) => e.path.includes('/视觉/风格/00-索引.md'))
-    if (styleIndex) routeEntries.push(styleIndex)
-    hits.push('风格速查')
-  }
-  if (a.type && AD_TYPES.includes(a.type)) {
-    addName('comp-banned')
-    hits.push('合规红线')
-  }
-  for (const e of routeEntries) picked.add(e.name)
-
-  // 3) 相似度兜底：文件名 + 标题与查询的二元组重合（排除 00-* 索引与顶层世界观文件）
-  const q = bigrams(query)
-  const scored = entries
-    .filter((e) => !picked.has(e.name) && !e.name.startsWith('00-') && e.name !== 'design-logic-components')
-    .map((e) => {
-      const hay = e.name + ' ' + e.head + ' ' + e.dir
-      let score = 0
-      for (const g of q) if (hay.includes(g)) score++
-      return { e, score }
-    })
-    .sort((a, b) => b.score - a.score)
-
-  for (const s of scored) {
-    if (picked.size >= topK) break
-    if (s.score >= 2) picked.add(s.e.name)
-  }
-
-  // 路由点文件（类型/模板/风格/选型/红线）是"该任务权威细则"：截断放宽到 8000 字符
-  const picks: KnowledgePick[] = []
-  const emit = (e: KnowledgeEntry, limit: number) => {
-    const text = e.text.length > limit ? e.text.slice(0, limit) + '\n…（节选截断）' : e.text
-    picks.push({ path: e.path, head: e.head, text })
-  }
-  for (const e of routeEntries) emit(e, 8000)
-  for (const n of picked) {
-    if (routeEntries.some((re) => re.name === n)) continue // 路由条目已输出（含同名索引用原对象）
-    const e = byName.get(n)
-    if (e) emit(e, 4500)
-  }
-  return { picks, hits, sourceCount: entries.length }
 }
 
 // ---------- 第 25 轮：知识注册表 + 本地工具执行（DeepSeek function-calling） ----------
