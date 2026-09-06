@@ -5,6 +5,122 @@
 
 ---
 
+## 2026-09-06
+
+### [New Feature] 第 26 轮：微信草稿箱发布（需求文档 v2 修订 1 落地，本地门禁全绿，真实接口 LIVE-PENDING）
+
+背景 / 变更原因：成稿除复制/导出外需能直达公众号草稿箱——应用内配置 AppID/AppSecret，正文 data 图上传为微信永久素材并替换引用，再 draft/add 入草稿箱。当前环境无微信测试号/外网授权，真实接口链路无法验证；网络层按官方接口实现，逻辑层做成纯函数并用单测覆盖。
+
+实现：
+- Add: `src-tauri/src/publish.rs` — WeChatClient（默认 api.weixin.qq.com）；纯函数 parse_token/extract_data_image/build_draft_json/resolve_title/urlencode/plain_text；get_token（GET cgi-bin/token，urlencode）→ upload_material（multipart POST material/add_material?type=image，字段 media、.png、image/png）→ draft_add（POST draft/add）→ media_id；access_token 缓存（Tauri Mutex + Instant，提前 60s 过期；40001/42001 清缓存重试一次）；data 图按偏移重建正文（成功换微信 url，失败保留并告警）；command `publish_draft(html,title)`（读 wx_appid/wx_secret，缺失给可读中文 Err）；9 纯函数单测
+- Modify: `src-tauri/src/settings.rs` — AppSettings 增 wx_appid/wx_secret（Option+default，旧文件兼容；空=未配置）；lib.rs 注册 publish_draft + setup manage WxTokenState（命令共 13）
+- Modify: `src-tauri/Cargo.toml` — reqwest 加 "multipart"，加 base64 0.22
+- Modify: `src/lib/settings.ts`、`src/components/SettingsPanel.tsx` — AppSettings 增 wxAppid/wxSecret，设置面板加"公众号配置（草稿箱发布）"区块（AppID/AppSecret 掩码，随保存/恢复默认）
+- Modify: `src/App.tsx`/`src/components/PreviewPane.tsx` — App 提供 publishDraft（invoke publish_draft，非 Tauri 报"发布需桌面模式"）；PreviewPane 桌面模式渲染「发布到草稿箱」按钮（disabled 无 html/发布中），结果 pub-ok/pub-fail 显示、失败不丢产物
+- Modify: `src/App.css` — .settings-sep/.mini-publish/.publish-msg 样式
+
+验证：
+- cargo 37 passed（26 旧 + publish 9 + settings 1 + 本地假微信服务器端到端契约单测 1）+ 2 live ignored（既有 chat 冒烟联网通过）；pnpm build exit 0；compose-check OK；verify-ui E2E 全绿（浏览器 mock 不渲染发布按钮，其余场景回归）；`cargo build`（桌面 app 二进制）编译通过
+- LIVE-PENDING（见 publish.rs 注释）：封面 thumb_media_id 待用户公众平台填；multipart data 图子类型/文件名；token 过期整体重试幂等；draft/add 返回体与字段以微信测试号核对；未 git 提交
+
+### [Change] 第 23-25 轮真实模型 live 闭环（联网验证）+ gen_svg 图像模型修正
+
+背景 / 变更原因：补上 23-25 轮"真实模型 live 待联网验证"。用真实 DeepSeek 直跑：①persona v5 模糊创作→澄清；②明确创作→知识工具自选→digest 续写（验证被指出的"带工具历史但不带 tools 流式 400"风险路径）；③gen_svg 真实画图。
+
+发现与修复：
+- Modify: `src/lib/prep.ts`/`src/App.tsx` — 最终撰写从"透传 prep 的 assistant tool_calls/tool 消息给 stream_chat"改为"把实际取用结果拼成知识摘要 digest，随撰写指令作为普通 user 消息进上下文"（DeepSeek 对"含工具历史但请求不带 tools"的续写有 400 风险；digest 方案彻底规避，且不影响用户可见回合）
+- Modify: `src-tauri/src/chat.rs` — ①新增 2 个 `#[ignore]` live 测试（live_clarify_tools_then_digest_write / live_gen_svg_draws_concrete_illustration）；②**图像子智能体改专用模型 `deepseek-chat`**（可用 DEEPSEEK_IMAGE_MODEL 覆盖）——实测 deepseek-v4-flash（reasoning_effort max/low）画 SVG 会推理失控吃光预算、content 为空；deepseek-chat 11s 直出 53 元素完整 SVG；③svg 无结果错误附响应片段便于定位
+
+验证（真实 DeepSeek，4/4 live 通过）：
+- live 澄清：模糊"新书上市"→模型输出多维度澄清问句（含问号、无正文/工具）——第 23 轮"需求未齐不产出"成立
+- live 工具：明确"咖啡开业·日系·800字"→模型主动调用 load_knowledge（style-japanese / type-promo / copy-tpl-promo / comp-banned 4 个点）——第 25 轮"注册表+模型自选工具"成立
+- live digest 续写：不带工具历史的流式请求 200，产出 3422 字符 ```v2 正文、首行声明 [[theme]]——400 风险路径已闭环
+- live gen_svg：deepseek-chat 产出 viewBox=0 0 750 220、53 个可见图形元素的咖啡店门头 SVG（10.99s）
+- 全量：cargo 36/36 + live 4/4；pnpm build + compose-check + E2E 全绿
+
+### [New Feature] 第 25 轮：知识注册表 + 模型按需工具取用（DeepSeek function-calling，替代请求前 topK 大段注入）
+
+背景 / 变更原因：需求文档 v2 修订 7（▲）落地——原实现是"请求前 `retrieve()` 一次性拼 topK 点文件大段节选注入 system"（内容/风格/合规一次全塞、越写越臃肿）。改为 system 只注入 ≤3500 字符的**知识注册表（目录）**；创作前置由 DeepSeek function-calling 让模型自行决定读取哪些点文件（load_knowledge / search_knowledge），取完输出 READY，再携带工具结果流式成稿。属"模型发起 tool_calls → 前端机械执行本地知识工具 → 回传 tool 结果"的确定性循环，非对话路由，不违反铁律 6。
+
+实现：
+- Modify: `src-tauri/src/chat.rs` — ChatMsg 扩展：content 改 Option<String>，新增 tool_call_id/tool_calls（OpenAI 兼容，可承载 tool 回合）；新增非流式命令 `prep_turn`（复用 resolve_config；POST /chat/completions body 顶层带 tools、stream:false、max_tokens=1200、省略 reasoning_effort）；`parse_prep_reply` 纯函数解析 choices[0].message 的 content 与 tool_calls；新增 PrepReply/ToolCall/ToolCallWire serde；既有 ChatMsg 构造点改 Some(...)；新增 5 个单测（工具调用解析/纯文本解析/READY 标记/非法 JSON/消息序列化往返）
+- Modify: `src-tauri/src/lib.rs` — 注册 prep_turn（命令共 12 个）
+- Modify: `src/lib/retrieval.ts` — 新增 `buildRegistry()`（缓存条目按子方向分组压缩成"name｜短标"目录、总量 ≤3500、超长截断注记）与 `runKnowledgeTool()`（load_knowledge→点文件全文截 6000 字符；search_knowledge→TOPIC_MAP + 二元组近似返回 ≤6 命中；参数去引号/大小写容错、执行不抛错）；保留 ensureKnowledgeLoaded 缓存与旧 retrieve 导出
+- Modify: `src/lib/persona.ts` — PERSONA_RULES 末尾"知识库参考（按任务路由注入）"改写为"知识工具（创作前按需取用）"用法说明；新增 `buildRegistrySystem(registry)`
+- Add: `src/lib/prep.ts` — `runPrep(messages)`：桌面工具取用循环 ≤3 轮（tool_calls→本地执行→回传 tool 结果；无 calls 输出 READY 或澄清文字）；浏览器直接 `{mode:'skip'}`；导出 PREP_INSTRUCTION / WRITE_INSTRUCTION / PrepOutcome
+- Modify: `src/App.tsx` — turn 去掉 retrieve/buildSystemPrompt 大段注入，改 system=`buildRegistrySystem(buildRegistry())`；`needPrep=isCreateRequest(raw)||历史上一条 assistant 含 '？'`，桌面 needPrep 走 runPrep——READY→把实际取用知识拼成 digest + WRITE_INSTRUCTION 一起流式（不透传工具回合，规避 DeepSeek 工具历史 400）；澄清→追加 assistant 消息并结束本回合（不做预览）；prep/工具失败→退化无 prep 流式；知识注记改"注册表就绪 · N 字符目录"
+- Modify: `src/lib/chat.ts` — ChatMsg 支持 role 'tool' / content nullable / tool_calls；sendChatMock 对空 content 加守卫（浏览器语义不变）
+- Modify: `scripts/verify-ui.mjs` — S8 知识注记断言由"3 层路由命中（内容类型:promo/合规红线/风格速查）"改为"注册表就绪"（路由命中注记已随注入机制退役）
+
+验证：
+- cargo test 26 通过（21 旧 + 5 新 prep 单测；2 live ignored 未联网）
+- pnpm build exit 0；compose-check 全绿；verify-ui E2E 全绿（S1/S1.5-S1.9/S2/S7/S8/S9）
+- buildRegistry 实际输出 3495 字符（≤3500 预算）
+- 真实模型桌面 live（联网）建议验证见最后一段；未 git 提交
+
+### [Change] 第 24 轮：美术素材改图像子智能体产出（需求文档 v2 修订 8 落地）
+
+背景 / 变更原因：把"画 SVG"从主模型剥离——主模型只写**图位占位**，正文产出后由**图像子智能体**按占位清单逐个独立生成具体插画 SVG（校验 ≥6 元素 + viewBox），经 artRender 转 PNG data URI 回填后 compose 渲染。降低主模型输出量与中途跑题/超长风险（busy 素材生成期维持"正在生成…"）。
+
+实现：
+- Modify: `src/lib/persona.ts` — 素材铁律 v4→v5：主模型不内联 SVG，改整行占位 `[[img:wide|说明]]`/`[[img:inline|说明]]`、气泡角饰 `[[deco:名称|说明]]`+`> [!KEY|名称]`；占位说明=给画图子智能体的可执行描述（对象/用途/意象/风格）；画图约束（具体插画/≥2 层明暗/零文字零 emoji/低饱和 ≤4 色/元素≥6）留给子智能体
+- Add: `src/lib/image-agent.ts` — `hasPlaceholders`/`materializePlaceholders(v2,theme)`：扫占位→逐个 `generateSvg`（桌面 invoke Rust `gen_svg`；浏览器用 3 张本地样例池+短延迟近似）→ 校验 → 替换为完整 `::: art`/`::: art deco` 块
+- Add: `src-tauri/src/chat.rs` — 非流式命令 `gen_svg(kind,desc,theme)`：专用"图像子智能体"系统提示（一次一幅具体插画、viewBox、可见元素≥6、SVG 零文字、只输出 <svg>…</svg>）；complete_svg 非流式调用（stream:false、max_tokens=4000、不带 reasoning_effort）；extract_svg 抽 SVG；新增 4 单测
+- Modify: `src-tauri/src/lib.rs` — 注册 gen_svg；`src-tauri/Cargo.toml` — 加 regex 依赖
+- Modify: `src/App.tsx` — 流中 resolvePreview 对含占位正文返回 null（不渲染字面量）；turn 收尾先 materializePlaceholders 再 compose+终检，busy 保持到素材生成完；applySession 恢复含占位会话同样先 materialize
+- Modify: `src/lib/chat.ts` — 演示样本改图位占位写法（去掉内联 SVG 常量）
+
+验证：
+- pnpm build exit 0；compose-check 全绿；verify-ui E2E 全绿（新增 S1.8 placeholders materialized、S1.9 无控件+busy 生成文案）
+- cargo 26 通过（21 旧 + gen_svg 4 + prep 1 后续合并前为 21+4）
+- 真实模型桌面 live（素材来自图位 + gen_svg 联网画图）待联网验证；未 git 提交
+
+### [Change] 第 23 轮：界面去控件 + LLM 自决 + busy 两档 + persona v5（需求文档 v2 修订 3/4/5/6 落地）
+
+背景 / 变更原因：需求文档 v2 修订落地第一批——界面删除"模式三段按钮与风格下拉"（类型与风格交 LLM 自决）；创作前"需求全澄清、未决不产出"（非只问 1 个）；风格不限预置（非预置可用 [[palette]] 自定义色板渲染）；busy 分"思考/澄清中"与"生成中"两档；统一 persona 字数口径（修 O-1）。
+
+实现：
+- Modify: `src/components/ChatPane.tsx` — 删除模式/风格控件及类型导出；busy 两档文案（think='正在思考…'/gen='正在生成…'，以当前在途消息是否已打开 ``` 围栏派生，仅展示非状态机）；空态文案更新
+- Modify: `src/App.tsx` — 移除 mode/style 状态与 decoratePrompt/STYLE_PHRASE/VALID_*；resolvePreview 不再传 UI 主题（主题只来自正文声明）；保存恒为 mode/style='auto'（旧会话仍兼容）
+- Modify: `src/lib/persona.ts` — 对话判断改 v5：创作先澄清，逐维度问清（一次可问多要点、可小结再补问），任一相关维度未明确且未获"你定"授权不得产出；风格规则改自决+声明 [[theme]]、非预置须自带 [[palette]]；输出默认字数口径统一 1500-2500（删 800-2000 旧口径）
+- Modify: `src/lib/palettes.ts` — 新增 themeDeclaration()/parsePaletteDirective()（自定义色板解析，#rgb/#rrggbb 校验）
+- Modify: `src/lib/compose.ts` — makeDesign 支持 custom 色板覆盖（text/promo 各自键集 + bg）；跳过 [[palette:…]] 行；未知风格名且无自定义色板 → 警告并回退默认双色系
+- Modify: `scripts/compose-check.mjs` — 新增 palette 渲染 / 未知风格警告断言；`scripts/verify-ui.mjs` — 新增 S1.9（无控件 + busy 生成文案）
+
+验证：
+- pnpm build exit 0；compose-check 全绿（含 5 项新增 palette/未知风格断言）；verify-ui E2E 全绿（含 S1.9）
+- 真实模型桌面 live（自决风格声明/非预置色板/澄清多轮）待联网验证；未 git 提交
+
+### [Change] 撰写按理解还原的需求文件 docs/REQUIREMENTS-understanding.md（文档轮，无代码变更）
+
+背景 / 变更原因：用户「阅读整个文件夹，搞清楚这个项目，生成一份按你理解的需求文件」。项目已有 REQUIREMENTS.md（轮次登记册，记录"历次改了什么"），缺一份"截至第 22 轮后产品现状"的完整需求规格。产物定位为按理解重建的需求文件，供对照/校错/后续迭代引用，与登记册并存。
+
+实现：
+- 通读四文件体系（CLAUDE/STRUCTURE/PROGRESS-LITE/REQUIREMENTS 0-22 轮全史）+ README
+- 派 3 个并行子智能体精读三层源码（前端组件与传输层、compose/theme/art/quality 管线、Rust 后端与配置），自读产品中枢 App.tsx/persona.ts/retrieval.ts
+- 撰写 docs/REQUIREMENTS-understanding.md：项目定位（目标/非目标/铁律）、双形态架构与数据流、FR-A 工作台对话 / B 生成引擎 / C 知识检索 / D 多会话 / E 预览导出设置 / F 质量护栏、领域模型、NFR、技术决策、10 条代码读后观察待议（O-1…O-10）、验证方法
+- 观察要点摘录：O-1 persona 字数口径 800-2000 vs 1500-2500 不一致；O-2 桌面停止非真取消；O-3 chat-error 休眠；O-4 rename_session 未用；O-5 DECO_MAP 预置冲突；O-6 Documents 硬编码
+
+验证：产物即文档（无代码变更）；STRUCTURE 登记新文件；PROGRESS-LITE 同步
+
+### [Change] 需求文档修订为目标态（v2）——依用户 8 项意见，仅改文档不改代码
+
+背景 / 变更原因：用户 2026-09-06 对需求文件提出 8 项修正（定位/澄清策略/界面控件/知识注入/素材机制等），明确「先不要修改代码」。将 docs/REQUIREMENTS-understanding.md 由"现状还原"重写为"目标需求"，被改条目统一标 ▲（代码尚未实现），并加「附录 A：修订对照」。
+
+修订要点（8 项 → 落点）：
+1. 定位：产物经微信官方接口直达**公众号草稿箱**（非仅粘贴）→ 新增 FR-E4 发布、publish 模块、§5 素材上传
+2. 有创作需求 ≠ 直接生成：必须先**逐项澄清用户要求**才产出 HTML → FR-A2 阶段 A
+3. 澄清非"只问 1 个就停"：保证所有相关维度明确（给定或授权"由你定"）才开写 → FR-A2 + O-11（收束判据待定）
+4. 界面删**模式三段按钮与风格下拉**，类型/风格由 LLM 自决 → FR-A3
+5. 风格**不局限于已探索风格**（预置 8 色板之外的任意风格可由模型自带 token 渲染）→ FR-A3/O-12
+6. busy 分**"思考/澄清"与"生成中"两档** → FR-A5（依赖桌面真取消，O-2）
+7. 知识注入改 **注册表 + 知识工具按需取用**（参考 skill 机制），不再一股脑/启发式条件注入 → FR-C2/O-13
+8. 美术素材改**图像子智能体**产出（SVG→PNG 回填），减主智能体负担 → FR-B2/O-14
+
+验证：本文档为纯文档修订（无代码变更）；STRUCTURE 注释、PROGRESS-LITE 同步；「附录 A」8 行对照表与 ▲ 待迭代清单留在文中供后续轮次引用
+
+---
+
 ## 2026-09-05
 
 ### [Change] 第 22 轮：整理散落验证产物归档到项目 docs/artifacts（整理轮）

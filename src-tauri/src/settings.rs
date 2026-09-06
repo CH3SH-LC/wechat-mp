@@ -11,6 +11,20 @@ pub struct AppSettings {
     pub base_url: String,
     #[serde(default)]
     pub model: String,
+    // 公众号草稿箱发布（可选）：缺省/空串均视为未配置；读旧 settings.json（无此字段）时 serde(default) → None
+    #[serde(default)]
+    pub wx_appid: Option<String>,
+    #[serde(default)]
+    pub wx_secret: Option<String>,
+}
+
+impl AppSettings {
+    pub fn wx_appid_str(&self) -> Option<&str> {
+        self.wx_appid.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
+    pub fn wx_secret_str(&self) -> Option<&str> {
+        self.wx_secret.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    }
 }
 
 pub fn settings_path() -> Result<std::path::PathBuf, String> {
@@ -60,12 +74,16 @@ mod tests {
             api_key: "sk-abc".into(),
             base_url: "https://example.com".into(),
             model: "deepseek-v4-flash".into(),
+            wx_appid: Some("wx1234567890".into()),
+            wx_secret: Some("secret-中文 & /=".into()),
         };
         let path = save_settings_to(&dir, &s).expect("save");
         assert!(path.ends_with("settings.json"));
         let loaded = read_settings_from(&dir).expect("load");
         assert_eq!(loaded.api_key, "sk-abc");
         assert_eq!(loaded.model, "deepseek-v4-flash");
+        assert_eq!(loaded.wx_appid.as_deref(), Some("wx1234567890"));
+        assert_eq!(loaded.wx_secret.as_deref(), Some("secret-中文 & /="));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -76,6 +94,19 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("settings.json"), "not json").unwrap();
         assert!(read_settings_from(&dir).expect("ok").api_key.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn legacy_json_without_wx_fields_defaults_none() {
+        // 旧 settings.json 无 wx_appid/wx_secret → 应回退 None（不报错、不丢原字段）
+        let dir = std::env::temp_dir().join(format!("wxmp-settings-old-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("settings.json"), r#"{"api_key":"sk-legacy","base_url":"https://x","model":"m"}"#).unwrap();
+        let loaded = read_settings_from(&dir).expect("load old json");
+        assert_eq!(loaded.api_key, "sk-legacy");
+        assert_eq!(loaded.wx_appid, None);
+        assert_eq!(loaded.wx_secret, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

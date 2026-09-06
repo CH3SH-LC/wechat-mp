@@ -132,6 +132,18 @@ check('opts theme overrides body theme', uiTheme.html.includes('background:#faf3
 const bodyTheme = composeMarkdown('[[theme:国潮]]\n\n[[banner:开业大吉|主标题]]\n\n正文内容。', { mode: 'auto' })
 check('body theme guochao applied', bodyTheme.html.includes('background:#fff9ef;padding:4px 16px') && bodyTheme.html.includes('background:#c03a2b;padding:24px 18px'))
 
+// 1d) 第 23 轮：自定义色板 [[palette]]——非预置风格可渲染；缺色板的未知风格 → 警告并回退默认
+const customTheme = composeMarkdown(
+  '[[theme:杂志]]\n\n[[palette:bg=#fbf6ef;accent=#b5482d;orange=#b5482d;amber=#c9a227;heading=#2f2a26]]\n\n[[banner:标题|副标题]]\n\n正文内容。',
+  { mode: 'auto' },
+)
+check('custom palette wrapper bg', customTheme.html.includes('background:#fbf6ef;padding:4px 16px'))
+check('custom palette banner uses orange', customTheme.html.includes('background:#b5482d;padding:24px 18px'))
+check('custom palette no unknown-theme warning', !customTheme.warnings.some((w) => w.includes('未收录')))
+const unknownTheme = composeMarkdown('[[theme:山海清风]]\n\n正文内容，未带自定义色板。', { mode: 'text' })
+check('unknown theme warning', unknownTheme.warnings.some((w) => w.includes('「山海清风」未收录且正文未提供 [[palette]]')))
+check('unknown theme falls back default white', unknownTheme.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
+
 // 1a) 素材用量警告：0 处与不足 4 处均提示
 const zero = composeMarkdown('## 标题\n\n正文段落，没有任何素材。', { mode: 'text' })
 check('zero-art warning', zero.warnings.some((w) => w.includes('未包含美术素材')))

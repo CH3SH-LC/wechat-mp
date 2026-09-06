@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { QualityResult } from '../lib/quality'
 import { exportHtml } from '../lib/exportHtml'
+import { inTauri } from '../lib/chat'
 
 interface Props {
   html: string | null
   quality: QualityResult | null
   warnings?: string[]
   onClear: () => void
+  // 桌面模式下发「发布到草稿箱」；由 App 提供（浏览器模式按钮不渲染）
+  publishDraft?: (html: string) => Promise<string>
 }
 
 function wrapSrcDoc(html: string): string {
@@ -26,10 +29,22 @@ ${html}
 </html>`
 }
 
-export default function PreviewPane({ html, quality, warnings = [], onClear }: Props) {
+export default function PreviewPane({ html, quality, warnings = [], onClear, publishDraft }: Props) {
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [exportMsg, setExportMsg] = useState('')
+  const [publishMsg, setPublishMsg] = useState('')
+  const [publishing, setPublishing] = useState(false)
+  const msgTimer = useRef<number | null>(null)
+
+  const flashMsg = (setter: (v: string) => void, text: string, ms = 8000) => {
+    if (msgTimer.current) window.clearTimeout(msgTimer.current)
+    setter(text)
+    msgTimer.current = window.setTimeout(() => {
+      setter('')
+      msgTimer.current = null
+    }, ms)
+  }
 
   const copy = async () => {
     if (!html) return
@@ -45,8 +60,21 @@ export default function PreviewPane({ html, quality, warnings = [], onClear }: P
   const doExport = async () => {
     if (!html) return
     const r = await exportHtml(html)
-    setExportMsg(r.ok ? `已导出：${r.msg}` : `导出失败：${r.msg}`)
-    setTimeout(() => setExportMsg(''), 8000)
+    flashMsg(setExportMsg, r.ok ? `已导出：${r.msg}` : `导出失败：${r.msg}`)
+  }
+
+  const doPublish = async () => {
+    if (!html || !publishDraft) return
+    setPublishing(true)
+    setPublishMsg('发布中，正在上传正文图片并写入草稿箱…')
+    try {
+      const r = await publishDraft(html)
+      flashMsg(setPublishMsg, r)
+    } catch (e) {
+      flashMsg(setPublishMsg, `发布失败：${String(e)}（本地产物已保留）`, 15000)
+    } finally {
+      setPublishing(false)
+    }
   }
 
   return (
@@ -61,6 +89,16 @@ export default function PreviewPane({ html, quality, warnings = [], onClear }: P
           <button className="mini" onClick={copy} disabled={!html}>
             {copied ? '已复制' : '复制 HTML'}
           </button>
+          {inTauri() && (
+            <button
+              className="mini mini-publish"
+              onClick={() => void doPublish()}
+              disabled={!html || !publishDraft || publishing}
+              title="把当前正文发布到微信公众号草稿箱（需在设置里填写 AppID/AppSecret）"
+            >
+              {publishing ? '发布中…' : '发布到草稿箱'}
+            </button>
+          )}
           <button className="mini" onClick={() => void doExport()} disabled={!html}>
             导出
           </button>
@@ -71,6 +109,11 @@ export default function PreviewPane({ html, quality, warnings = [], onClear }: P
       </div>
 
       {exportMsg && <div className="export-msg">{exportMsg}</div>}
+      {publishMsg && (
+        <div className={`publish-msg ${publishMsg.includes('发布失败') ? 'pub-fail' : 'pub-ok'}`}>
+          {publishMsg}
+        </div>
+      )}
       {warnings.length > 0 && (
         <div className="compose-warn">
           {warnings.slice(0, 3).map((w, i) => (

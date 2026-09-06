@@ -4,6 +4,14 @@
 > 详细记录见 PROGRESS.md
 
 ---
+## 2026-09-06
+- [Change] 第 23-25 轮真实模型 live 闭环（联网）：模糊→多维度澄清（不产出）；明确→模型自选 load 4 点文件→digest 流式成稿 3422 字 v2（无 400）；gen_svg 改专用 deepseek-chat（v4-flash 画图推理失控），11s 直出 53 元素具体 SVG；cargo 36/36 + live 4/4 + build/compose/E2E 全绿
+- [New Feature] 第 26 轮：微信草稿箱发布——publish.rs（token 缓存/素材上传替换 data 图/draft.add）+ 公众号配置区块 + 桌面发布按钮；cargo 37 过（含本地假微信服务器端到端契约单测）+ build/compose/E2E/app 编译全绿；真实微信接口 LIVE-PENDING（封面/字段待测试号核对）
+- [New Feature] 第 25 轮：知识注册表 + 工具按需取用——system 只注入 ≤3500 字注册表目录；Rust prep_turn（tools/tool_calls）让模型创作前置自选读哪些点，取完 READY 再带工具结果流式成稿；cargo 26 过 + build/compose/E2E 全绿；live 待联网
+- [Change] 第 24 轮：素材改图像子智能体——主模型只写图位占位（[[img:…]]/[[deco:…]]），Rust gen_svg 非流式按描述画具体插画，前端 materialize 替换 ::: art 块再 compose+PNG；浏览器 mock 样例池近似；cargo 26 过 + E2E 全绿（占位全替换断言）；live 待联网
+- [Change] 第 23 轮：界面删模式/风格控件、类型风格交 LLM 自决；创作前需求全澄清（v5）；风格不限预置（[[palette]] 自定义色板渲染，未收录名回退警告）；busy 分"思考·生成"两档；统一 1500-2500 字口径；build/compose/E2E 全绿（新增 palette/未知风格/S1.9）；live 待联网
+- [Change] 撰写按理解还原的需求文件 docs/REQUIREMENTS-understanding.md——通读四文件+源码三层（前端/Rust/管线）后重建现状需求规格（定位/架构/FR/NFR/领域模型 + 10 条代码观察待议）；非轮次登记册
+- [Change] 依用户 8 项意见把需求文档修订为目标态（v2，仅改文档不动代码）：发布直达公众号草稿箱▲ / 创作前需求全澄清▲ / 删模式·风格控件改 LLM 自决 / 风格不限于预置▲ / busy 分"思考·生成"两档▲ / 知识改"注册表+工具按需调用"▲ / 素材改图像子智能体产出▲；落点见附录 A 对照表
 ## 2026-09-05
 - [Change] 第 22 轮：整理散落验证产物归档——docs/artifacts 收纳 E2E 截图/compose/注入/风格样例 19 个（工作区 verify-artifacts 迁入，其余项目产物保留原位）；verify-ui/compose-check 默认输出改项目内；STRUCTURE/REQUIREMENTS 同步
 - [Change] 第 21 轮：素材具体插画化 + 正文加长 + 气泡角饰——素材铁律 v4（具体可辨认插画/明暗层次/禁几何剪影）、正文默认 1500-2500 字、气泡 KEY/TIP/DANGER 必带 ::: art deco 角饰；compose 支持 deco 定义/引用/未定义与偏短警告；chat.rs max_tokens 64000；compose-check 41 项 + E2E 41 项全绿；live 1518 字 + 双气泡角饰 + 7 处具体插画（元素 16-41）0 警告

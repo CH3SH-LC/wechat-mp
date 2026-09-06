@@ -2,9 +2,18 @@
 import { invoke } from '@tauri-apps/api/core'
 import { evaluate, isCancel, isCreateRequest, isDemoTopic } from './needs'
 
+// 消息可承载工具回合（第 25 轮）：assistant 带 tool_calls（content 为空）、tool 结果带 tool_call_id
 export interface ChatMsg {
-  role: 'system' | 'user' | 'assistant'
-  content: string
+  role: 'system' | 'user' | 'assistant' | 'tool'
+  content: string | null
+  tool_call_id?: string
+  tool_calls?: ChatToolCall[]
+}
+
+export interface ChatToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
 }
 
 export function inTauri(): boolean {
@@ -24,36 +33,13 @@ export interface MockTopic {
   html?: string // 直通演示样本（违规输出检测等）
 }
 
-// 演示素材 SVG（第 16 轮：组件装饰全覆盖，一篇 5 处素材；图形元素均 ≥6）
-const FLAG_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
-<rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
-<path d="M65 142 h170 l-24 16 24 16 h-170 z" fill="#e8b48a"/>
-<circle cx="628" cy="64" r="36" fill="#f2c76e"/>
-<circle cx="640" cy="52" r="5" fill="#ffffff"/>
-<path d="M0 210 L160 148 L280 186 L430 112 L570 170 L750 96 V210 Z" fill="#d9a35f" opacity="0.35"/>
-<path d="M0 210 L230 158 L390 190 L560 134 L750 172 V210 Z" fill="#c96f4a" opacity="0.22"/>
-<path d="M560 40 q12 -20 30 -20 q-4 -14 -22 -14 q-20 0 -26 14 q-8 14 4 22 q10 -6 14 -2z" fill="#5f8d8a" opacity="0.5"/>
-</svg>`
-
-const FLOWER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260" fill="none">
-<path d="M150 250 C140 180 120 140 90 110" stroke="#5f8d8a" stroke-width="4" fill="none"/>
-<path d="M150 250 C165 190 195 150 230 130" stroke="#5f8d8a" stroke-width="4" fill="none"/>
-<circle cx="90" cy="104" r="16" fill="#e8b48a"/>
-<circle cx="236" cy="124" r="14" fill="#d9a35f"/>
-<circle cx="150" cy="150" r="20" fill="#c96f4a"/>
-<path d="M120 130 q-26 -8 -34 -30 q28 2 40 18z" fill="#8fb8a4"/>
-<path d="M188 170 q24 -14 44 -6 q-10 24 -38 18z" fill="#8fb8a4"/>
-<circle cx="90" cy="104" r="6" fill="#f2c76e"/>
-</svg>`
-
-// v2 语法正文样例（第 16 轮：组件装饰全覆盖——banner/小节/气泡/分隔均配素材，共 5 处；第 17 轮：声明校园主题）
+// v2 正文样例（第 24 轮：素材用图位占位——插画 [[img:wide|说明]] / [[img:inline|说明]]、
+// 气泡角饰先 [[deco:名称|说明]] 再由 > [!KEY|名称] 引用；SVG 由图像子智能体生成）
 const SAMPLE_V2 = `[[theme:校园]]
 
 [[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
 
-::: art wide 晨光里的旗帜
-${FLAG_SVG}
-:::
+[[img:wide|晨光中的升旗台与旗帜，开学典礼横幅场景插画，暖色调]]
 
 九月第一天，典礼如约而至。这篇清单把当天安排一次看明白。
 
@@ -65,13 +51,9 @@ ${FLAG_SVG}
 - 9:50 班级班会：典礼后各班回教室，班主任交代入学安排
 :::
 
-::: art inline 节奏与小花
-${FLOWER_SVG}
-:::
+[[img:inline|节奏小花与书本，典礼前的小物件插画]]
 
-::: art deco blossom
-${FLOWER_SVG}
-:::
+[[deco:blossom|花簇小角饰]]
 
 > [!KEY|blossom] 记得带
 > 录取通知书与身份证、水杯与防晒（户外排队用）
@@ -97,17 +79,13 @@ ${FLOWER_SVG}
 
 开学第一周是适应期，晚上九点后尽量别打电话，让孩子按自己的节奏收拾洗漱；真有急事，宿管老师的电话贴在每层楼梯口。
 
-::: art inline 书本与开始
-${FLOWER_SVG}
-:::
+[[img:inline|书本与开始，翻开的新课本插画]]
 
 ::: band 斜纹
 - 典礼后各班回教室开班会，记得把这份时间表转给同班同学。
 :::
 
-::: art wide 花带收尾
-${FLOWER_SVG}
-:::
+[[img:wide|典礼散场的花带与横幅插画，收尾场景]]
 
 [[title:新的开始|box]]
 
@@ -118,7 +96,7 @@ ${FLOWER_SVG}
 export const MOCK_TOPICS: MockTopic[] = [
   {
     label: '示例：开学典礼宣传',
-    prompt: '写一篇新生入学典礼的宣传类推文，校园风格，800 字左右，直接写',
+    prompt: '写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写',
     v2: SAMPLE_V2,
   },
 ]
@@ -134,11 +112,11 @@ export const MOCK_BAD: MockTopic = {
 }
 
 // 模拟文案（浏览器演示：闲聊 / 反问澄清 / 成文 / 取消）
-const CLARIFY_QUESTION = '好的，先确认一下再写：这篇推文你希望是什么类型（比如活动宣传还是资讯介绍）？想要什么风格？大概多少字？需要配图吗？回复我后马上出稿。'
+const CLARIFY_QUESTION = '好的，先把要求问清楚再写：这篇推文是什么类型（活动宣传还是资讯介绍）？想要什么风格？大概多少字？需要配图吗？还有发布到哪里（导出/草稿箱）？你逐项告诉我即可。'
 const CANCEL_REPLY = '好的，那先不写了。需要的时候随时告诉我主题就行。'
-const CHAT_GREET = '你好，我是公众号推文助手。你可以像用通用助手一样和我聊天：问公众号写作的问题、聊选题想法都行；明确说「写一篇…推文」，我就帮你产出可直接发布的推文并实时预览。'
+const CHAT_GREET = '你好，我是公众号推文助手。你可以像用通用助手一样和我聊天：问公众号写作的问题、聊选题想法都行；说「写一篇…推文」，我会先把要求问清楚再帮你产出可直接发布的推文并实时预览。'
 const CHAT_QA = '可以。公众号写作的通用要点：开头三秒抓住读者，正文短段落加小标题分层，重点加粗，结尾留行动号召，全文不用 emoji 和花哨装饰（演示环境为本地模拟回复）。需要针对具体场景展开，或直接写一篇，告诉我就行。'
-const CHAT_DEFAULT = '明白。想继续聊公众号写作，还是让我直接写一篇推文？告诉我主题、风格、大概字数即可。'
+const CHAT_DEFAULT = '明白。想继续聊公众号写作，还是让我写一篇推文？告诉我主题、目标读者、风格倾向即可。'
 
 export interface StreamHandle {
   cancel: () => void
@@ -155,8 +133,8 @@ export function sendChatMock(
   const user = [...messages].reverse().find((m) => m.role === 'user')
   const u = user?.content ?? ''
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-  const asked = lastAssistant?.content.includes('？') ?? false
-  const article = `好的，按宣传类 + 校园风直接产出（v2 正文，本地排版引擎渲染）：\n\n\`\`\`v2\n${SAMPLE_V2}\n\`\`\``
+  const asked = (lastAssistant?.content ?? '').includes('？')
+  const article = `好的，需求已明确，按所选风格直接产出（v2 正文，素材交给图像子智能体生成）：\n\n\`\`\`v2\n${SAMPLE_V2}\n\`\`\``
   const badArticle = `好的，按要求演示违规输出：\n\n\`\`\`html\n${MOCK_BAD.html}\n\`\`\``
   let full: string
   if (isCancel(u)) {

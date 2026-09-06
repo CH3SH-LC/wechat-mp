@@ -1,6 +1,6 @@
 # wechat-mp-desktop 项目结构
 
-> 最后更新：2026-09-05
+> 最后更新：2026-09-06
 > 新增、删除、重命名文件或目录时必须同步更新本文件。
 
 ---
@@ -25,6 +25,7 @@ wechat-mp-desktop/
 │   ├── live-knowledge-probe.mjs # 三层知识路由注入的真实模型验证（读库点文件 → persona → 模型 → compose）
 │   └── live-style-choice.mjs    # 风格选型验证（同质注入 × 三主题，检查 theme 选择与反模板化）
 ├── docs/
+│   ├── REQUIREMENTS-understanding.md  # 需求文档（目标态，2026-09-06 依 8 项意见修订；▲ 标未实现待迭代）
 │   ├── information/     # 需求报告（…quality-r17.md、knowledge-routing.md、style-choice.md、art-concrete.md）
 │   └── artifacts/       # 验证产物归档（E2E 截图 + compose/注入/风格选型样例；verify-ui/compose-check 默认输出至此）
 ├── src/                   # 前端源码
@@ -32,23 +33,25 @@ wechat-mp-desktop/
 │   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开）+ 模式/风格 + 输入
-│   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空
+│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开+busy 两档）+ 输入（第 23 轮无模式/风格控件）
+│   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空/发布草稿箱（桌面）
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
 │   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH compose；::: art 素材 + 元素/用量/组件化校验 + 主题色）
 │   │   ├── palettes.ts    # 风格主题表（知识库 8 风格色板：日系/国潮/校园/科技/极简/商务/手账/森系）
 │   │   ├── artRender.ts   # SVG 素材 → PNG data URI（canvas 2x；回退 svg data URI）
-│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体；```v2 协议 + 素材铁律 + 语气/结构/风格规则 + 知识拼装）
+│   │   ├── image-agent.ts # 第24轮 图像子智能体编排：hasPlaceholders/materializePlaceholders（图位→gen_svg/样例池→回填 ::: art 块）
+│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体；```v2 协议 + 素材铁律 v5 图位 + 语气/结构/风格 v5 规则 + 知识工具用法 + buildRegistrySystem）
 │   │   ├── needs.ts       # 请求启发式（模拟端近似 + 澄清触发评估：isCreateRequest/isCancel/evaluate）
-│   │   ├── retrieval.ts   # 知识取用：主题词映射 + 三层任务路由注入（类型/模板/风格或选型速查/合规红线）+ 二元组兜底
-│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟（v2+art+theme 样例与违规直通演示）
+│   │   ├── retrieval.ts   # 知识取用：ensureKnowledgeLoaded 缓存 + 旧主题词/三层路由 retrieve（保留）+ 第25轮 buildRegistry（注册表目录）/runKnowledgeTool（本地执行 load/search）
+│   │   ├── prep.ts        # 第25轮 创作前置工具循环：runPrep（桌面 tool_calls→runKnowledgeTool→回传；READY/澄清）+ PREP/WRITE_INSTRUCTION
+│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟；ChatMsg 支持 tool 回合（v2+art+theme 样例与违规直通演示）
 │   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2)
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
 │   │   ├── sessions.ts    # 多会话：Tauri→sessions 命令 / 浏览器→localStorage（含旧键迁移）
-│   │   └── settings.ts    # API 设置：Tauri→save/load_settings / 浏览器→localStorage
+│   │   └── settings.ts    # API 设置 + 公众号配置（wx_appid/wx_secret）：Tauri→save/load_settings / 浏览器→localStorage
 │   └── knowledge/         # 知识语料 149 文件（三层：文本/视觉/插图/其它 + 00-GUIDE/design-logic）
 │       ├── 00-GUIDE.md    # 三层路由总表
 │       ├── design-logic-components.md
@@ -60,15 +63,16 @@ wechat-mp-desktop/
     ├── icons/             # 应用图标
     └── src/
         ├── main.rs        # 入口（调 lib::run）
-        ├── lib.rs         # Builder + 10 命令注册（chat/export/sessions/settings）
-        ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式、事件推送、单测+live
+        ├── lib.rs         # Builder + 13 命令注册（chat_stream/gen_svg/prep_turn/publish_draft/export/sessions/settings）+ WxTokenState setup
+        ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式、图像 gen_svg、创作前置 prep_turn（tools/tool_calls）、单测+live
         ├── export.rs      # 导出 HTML（workspace/exports/，文件名消毒，4 单测）
         ├── sessions.rs    # 多会话（workspace/sessions/<id>.json + state.json；旧 draft 迁移；5 单测）
-        └── settings.rs    # API 设置（workspace/settings.json，损坏→默认，2 单测）
+        ├── settings.rs    # API 设置 + 公众号配置（workspace/settings.json，损坏→默认，2+ 单测）
+        └── publish.rs     # 第26轮 微信草稿箱发布：access_token 缓存/素材上传替换 data 图/draft.add（9 纯函数单测；真实接口 LIVE-PENDING）
 
 ## 当前核心事实
 - 运行时：Node 24 / Rust 1.95；包管理器：pnpm 11（onlyBuiltDependencies esbuild）
 - 前端构建：`pnpm build`（tsc && vite build）；桌面运行：`pnpm tauri dev`
-- LLM：OpenAI 兼容接口，默认 https://api.deepseek.com/chat/completions，模型 deepseek-v4-flash（reasoning_effort max，与 DSH 一致）
+- LLM：OpenAI 兼容接口，默认 https://api.deepseek.com/chat/completions，模型 deepseek-v4-flash（reasoning_effort max，与 DSH 一致；创作前置 prep_turn 用 tools/function-calling，省略 reasoning_effort；图像子智能体 gen_svg 专用 deepseek-chat，可 DEEPSEEK_IMAGE_MODEL 覆盖——v4-flash 画图推理失控）
 - 密钥：env DEEPSEEK_API_KEY → ~/.dsh/.credentials.yaml
 - 验证：`scripts/verify-ui.mjs`（playwright + 本机 chromium-1234）+ `cargo test`（含 `--ignored` live 冒烟）

@@ -15,6 +15,30 @@
 
 ## 二、功能需求登记（逐轮追加，最新在最上）
 
+### 2026-09-06｜第 26 轮：微信草稿箱发布（需求文档 v2 修订 1）
+- 需求：成稿后除复制/导出外，可经微信官方接口发布到公众号草稿箱——配置 AppID/AppSecret → 正文图片上传为永久素材并替换引用 → draft/add 入草稿箱。
+- 改动点：①Rust publish.rs（access_token 获取/缓存刷新、material/add_material 图片上传、draft/add）+ 命令注册；②SettingsPanel 增公众号配置（AppID/AppSecret 本地存）；③PreviewPane「发布到草稿箱」按钮与状态反馈；④微信接口抽象层支持 mock（E2E）与测试号（live）。
+- 验收标准：cargo 单测全绿（token 解析/上传/草稿拼装纯函数 + mock HTTP）；E2E mock 链路：发布成功返回草稿提示；无凭据/失败给出可读错误且不丢产物；文档同步+提交；live（微信测试号）验证另行记录。
+- 状态：✅ 代码完成（cargo 37/37（含 publish 9 纯函数单测 + 本地假微信服务器端到端契约单测）+ pnpm build + compose-check + E2E 全绿；真实微信 draft/add 需测试号联网验证——LIVE-PENDING 见 publish.rs 注释：封面 thumb_media_id、multipart 字段、token 过期重试幂等）
+
+### 2026-09-06｜第 25 轮：知识注册表 + 模型按需工具取用（需求文档 v2 修订 7）
+- 需求：知识不再"一股脑注入"也不"启发式条件注入"——system 只注入**知识注册表**（目录），创作前模型经 **DeepSeek function-calling 工具**（load_knowledge/search_knowledge）按需取用点文件全文。
+- 改动点：①Rust prep_turn 非流式命令（tools 声明 + 透传 tool_calls）；②retrieval 增 buildRegistry/runKnowledgeTool（内存库执行）；③persona 知识段改工具用法；④App turn 创作前 prep 循环（模型决定取知识/澄清），取完 READY 后带工具结果流式生成；浏览器 mock 走原路不触发。
+- 验收标准：pnpm build exit 0；cargo 全绿（含 prep 解析单测）；E2E 全绿；真实模型 live：创作时 system 含注册表不含大段正文、模型确实触发 load_knowledge 且产物体现类型模板/风格色板/合规（live 记录于 docs）。
+- 状态：✅ 代码完成（cargo 36/36 + pnpm build + compose-check + E2E 全绿；真实模型 live 已闭环：明确创作→模型自选 load style-japanese/type-promo/copy-tpl-promo/comp-banned 4 点→digest 流式成稿 3422 字 v2，无 400）
+
+### 2026-09-06｜第 24 轮：美术素材改图像子智能体产出（需求文档 v2 修订 8）
+- 需求：把"画 SVG"从主模型剥离——创作时主模型只写**图位占位**（`[[img:wide|说明]]` / `[[img:inline|说明]]` / `[[deco:名称|说明]]`），正文产出后由**图像子智能体**按占位清单逐个独立生成具体插画 SVG（校验 ≥6 元素 + viewBox），再经 artRender 转 PNG data URI 回填、compose 渲染——减主模型负担与中断风险。
+- 改动点：①persona 素材铁律改"图位占位语法"，主模型不再内联 SVG（明确类型/位置/意象/风格/说明）；②新增 src/lib/image-agent.ts——桌面 invoke 新 Rust 命令 gen_svg（DeepSeek 非流式、专用画图 persona）/ 浏览器模拟用本地样例池近似；③App 创作收尾"素材生成器"：检测占位 → 逐个（可串行）生成 → 校验 → 替换为完整 ::: art/deco 块 → compose；④chat.ts 模拟样例改为占位写法 + 本地 SVG 池；⑤验证断言。
+- 验收标准：pnpm build exit 0；compose-check 全绿；E2E 全绿（新增：产物含 ≥4 data 素材图、无占位残留文本）；真实模型 live：一次创作素材全部来自图位（非手写 svg）、素材数 5-8、0 警告；cargo 回归（新 gen_svg 单测/live）。
+- 状态：✅ 代码完成（pnpm build + compose-check + E2E 全绿（S1.8 占位全替换断言过）+ cargo 36/36；gen_svg live 已联网闭环——专用 deepseek-chat 11s 直出 53 元素具体 SVG）
+
+### 2026-09-06｜第 23 轮：界面去控件 + LLM 自决风格/模式 + busy 两档 + persona v5 全澄清（需求文档 v2 落地第 1 批）
+- 需求（源自 docs/REQUIREMENTS-understanding.md 修订意见 3/4/5/6 + O-1）：界面删去"模式三段按钮"与"风格下拉"——类型/风格改由 LLM 依据已澄清需求自决；风格不局限于预置 8 色板（引擎支持正文自定义 palette token）；澄清策略改"创作前把相关需求逐项问清、未决不产出"（非只问 1 个）；busy 区分"思考/澄清中"与"生成中"两档；统一 persona 字数口径。
+- 改动点：①ChatPane/App 移除模式按钮与风格下拉及 decoratePrompt 注入；会话存档 mode/style 保留（旧会话恢复兼容，作为主题回退）；②busy 两档=「正在思考…/正在生成…」，由"当前 draft 是否已打开 ``` 围栏"内容态派生（仅展示，非对话状态机）；③persona v5——澄清规则（逐维度问清至明确或授权"由你定"，需求全明确才产出，取消"最多 1 问"与"直接写即产出"倾向）、风格自决规则（预置可名引用、非预置须自带色板、UI 无风格）、正文默认 1500-2500 字统一口径（修 O-1）；④compose/palettes 主题扩展——`[[theme:名称]]` 非预置名时合并正文 `[[palette:bg=…;accent=…;…]]` 自定义色板渲染，二者皆缺则警告回退默认色系。
+- 验收标准：pnpm build exit 0；compose-check 全绿（新增 palette/未知风格警告断言）；E2E 全绿（界面无模式/风格控件；自动模式创作产出含 [[theme]] 声明；S9 澄清语义按 v5 更新）；真实模型 live：不指定风格时模型自选并声明 theme（含非预置风格样例）、正文 ≥1200 字、澄清不产出；cargo 回归；文档同步 + 提交；release 重建。
+- 状态：✅ 代码完成（pnpm build + compose-check（palette/未知风格断言）+ E2E S1.9 全绿；真实模型 live 已联网闭环：模糊→多维度澄清不产出、明确→工具自选+成稿，见 PROGRESS live）
+
 ### 2026-09-05｜第 22 轮：整理散落验证产物归档到项目 docs/artifacts（整理轮，无代码功能）
 - 需求：用户「整理所有散落在外的文件到 wechat-mp-desktop 内」。盘点：工作区 verify-artifacts 33 个文件——A 组 19 个属本项目验证产物（E2E 截图 8、compose/注入样例 9、风格选型 3）；B 组 14 个属 askkp/dsh-desktop 历史产物保留原位；工作区根杂项与 TEMP 残留不动。用户确认按提议移动 A 组。
 - 改动点：新建 docs/artifacts/ 并移入 A 组 19 个；verify-ui.mjs 与 compose-check.mjs 默认输出路径改为项目内 docs/artifacts（今后验证截图/样例自动落在项目内）；STRUCTURE/docs 树登记；REQUIREMENTS/进度同步。

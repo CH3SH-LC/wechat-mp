@@ -75,7 +75,7 @@ export const PALETTES: StylePalette[] = [
 const BY_KEY = new Map(PALETTES.map((p) => [p.key, p]))
 const BY_LABEL = new Map(PALETTES.map((p) => [p.label, p]))
 
-// 解析主题：UI 显式选择（opts.theme，key）优先；否则取正文首个 [[theme:名称|key]] 声明
+// 解析主题：正文首个 [[theme:名称|key]] 声明（第 23 轮起 UI 不再传风格，optsTheme 仅作向后兼容保留）
 export function resolveTheme(md: string, optsTheme?: string): StylePalette | undefined {
   if (optsTheme) {
     const p = BY_KEY.get(optsTheme)
@@ -87,4 +87,30 @@ export function resolveTheme(md: string, optsTheme?: string): StylePalette | und
     return BY_KEY.get(name) || BY_LABEL.get(name)
   }
   return undefined
+}
+
+// 返回正文声明的风格名（[[theme:…]] 首个，不含则 undefined）——用于"未收录且无自定义色板"的警告
+export function themeDeclaration(md: string): string | undefined {
+  const m = /\[\[theme:([^\]]+)\]\]/.exec(String(md || ''))
+  return m ? m[1].trim() : undefined
+}
+
+// 第 23 轮：风格不限预置——正文可用 [[palette:k=v;k2=v2]] 自定义可渲染色板。
+// 仅收 compose 可消费的语义键，且值须为合法十六进制（#rgb/#rrggbb），否则忽略该键。
+const PALETTE_KEYS = new Set(['bg', 'accent', 'accentDark', 'heading', 'soft', 'soft2', 'border', 'hl', 'orange', 'amber', 'teal', 'ink'])
+
+export function parsePaletteDirective(md: string): Record<string, string> | undefined {
+  const m = /\[\[palette:([^\]]+)\]\]/.exec(String(md || ''))
+  if (!m) return undefined
+  const out: Record<string, string> = {}
+  for (const seg of m[1].split(';')) {
+    const eq = seg.indexOf('=')
+    if (eq <= 0) continue
+    const key = seg.slice(0, eq).trim()
+    let val = seg.slice(eq + 1).trim()
+    if (!PALETTE_KEYS.has(key) || !/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(val)) continue
+    if (val.length === 4) val = '#' + val[1] + val[1] + val[2] + val[2] + val[3] + val[3]
+    out[key] = val
+  }
+  return Object.keys(out).length ? out : undefined
 }

@@ -61,6 +61,33 @@ for (const [name, ok] of s1.checks) {
   if (!ok) failed++
 }
 
+// 第 23 轮：界面无模式/风格控件（LLM 自决）；busy 生成期文案为「正在生成…」
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.chat-head .badge', { timeout: 20000 })
+  if ((await page.locator('.msg-user').count()) > 0) {
+    await page.locator('.mini', { hasText: '清空' }).click()
+    await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  }
+  const noStyle = (await page.locator('.style-select').count()) === 0
+  const noMode = (await page.locator('.seg-btn').count()) === 0
+  console.log(`  ${noStyle && noMode ? 'PASS' : 'FAIL'} - S1.9 no mode/style UI controls (styleSelect=${await page.locator('.style-select').count()})`)
+  if (!noStyle || !noMode) failed++
+  await page.locator('.chip-primary').click()
+  await page.waitForFunction(
+    () => {
+      const t = document.querySelector('.typing')
+      return !!t && t.textContent.includes('正在生成')
+    },
+    { timeout: 20000 },
+  )
+  console.log('  PASS - S1.9 busy generating label shown (正在生成…)')
+  await waitStreamDone()
+} catch (e) {
+  console.log('  FAIL - S1.9 controls/busy-phase error:', String(e).slice(0, 200))
+  failed++
+}
+
 // S1.7 对话流净化：气泡无代码文本；「查看正文」可展开 v2 语法正文/收起
 try {
   const bubble = await page.locator('.msg-assistant-text').last().innerText()
@@ -97,6 +124,9 @@ try {
   const themed = bodyHtml.includes('#2f6fed') && !bodyHtml.includes('[[theme')
   console.log(`  ${themed ? 'PASS' : 'FAIL'} - S1.8 campus theme colors applied in preview`)
   if (!themed) failed++
+  const noSlot = frame ? !bodyHtml.includes('[[img') && !bodyHtml.includes('[[deco') : false
+  console.log(`  ${noSlot ? 'PASS' : 'FAIL'} - S1.8 placeholders materialized (no [[img/[[deco in output)`)
+  if (!noSlot) failed++
 } catch (e) {
   console.log('  FAIL - S1.8 compose render error:', String(e).slice(0, 200))
   failed++
@@ -226,8 +256,8 @@ try {
   console.log(`  ${bOk ? 'PASS' : 'FAIL'} - S8 new session independent content (${userB.slice(0, 24)}…)`)
   if (!bOk) failed++
   const noteTxt = await page.locator('.knowledge-note').last().innerText().catch(() => '')
-  const routeOk = noteTxt.includes('内容类型:promo') && noteTxt.includes('合规红线') && noteTxt.includes('风格速查')
-  console.log(`  ${routeOk ? 'PASS' : 'FAIL'} - S8 3-layer routing + style-guide injected (${noteTxt.slice(0, 44)}…)`)
+  const routeOk = noteTxt.includes('注册表')
+  console.log(`  ${routeOk ? 'PASS' : 'FAIL'} - S8 knowledge registry active (${noteTxt.slice(0, 44)}…)`)
   if (!routeOk) failed++
 
   const n1 = await rowCount()

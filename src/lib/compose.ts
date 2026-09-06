@@ -4,7 +4,7 @@
 // 平面化 v10 全量保留；art:// 资产桌面不提供 → 引用被移除并记入 warnings（与 DSH 未上传行为一致）。
 // 第 15 轮：::: art 素材容器（现场 SVG，元素 ≥6 校验）。第 17 轮：风格主题（palettes 色板覆盖 + 正文底色）。
 
-import { resolveTheme } from './palettes.ts'
+import { parsePaletteDirective, resolveTheme, themeDeclaration } from './palettes.ts'
 import type { StylePalette } from './palettes.ts'
 
 export interface ComposeDesign {
@@ -39,28 +39,37 @@ const DESIGNS: Record<'text' | 'promo', ComposeDesign> = {
 }
 
 // 按主题覆盖设计键（第 17 轮：风格色板落地；未选主题返回默认双色系）
-function makeDesign(modeKey: 'text' | 'promo', pal?: StylePalette): ComposeDesign {
+// 第 23 轮：正文 [[palette]] 自定义色板可覆盖预置色板或独立配色（风格不限预置）
+const THEME_TEXT_KEYS = ['accent', 'accentDark', 'heading', 'soft', 'soft2', 'border', 'hl']
+const THEME_PROMO_KEYS = ['orange', 'amber', 'teal', 'ink', 'soft', 'soft2', 'border', 'hl']
+
+function makeDesign(modeKey: 'text' | 'promo', pal?: StylePalette, custom?: Record<string, string>): ComposeDesign {
   const base = DESIGNS[modeKey]
-  if (!pal) return base
   const d: ComposeDesign = { ...base }
-  d.bg = pal.bg
-  if (modeKey === 'text') {
-    d.accent = pal.accent
-    d.accentDark = pal.accentDark
-    d.heading = pal.heading
-    d.soft = pal.soft
-    d.soft2 = pal.soft2
-    d.border = pal.border
-    d.hl = pal.hl
-  } else {
-    d.orange = pal.orange
-    d.amber = pal.amber
-    d.teal = pal.teal
-    d.ink = pal.ink
-    d.soft = pal.soft
-    d.soft2 = pal.soft2
-    d.border = pal.border
-    d.hl = pal.hl
+  if (pal) {
+    d.bg = pal.bg
+    if (modeKey === 'text') {
+      d.accent = pal.accent
+      d.accentDark = pal.accentDark
+      d.heading = pal.heading
+      d.soft = pal.soft
+      d.soft2 = pal.soft2
+      d.border = pal.border
+      d.hl = pal.hl
+    } else {
+      d.orange = pal.orange
+      d.amber = pal.amber
+      d.teal = pal.teal
+      d.ink = pal.ink
+      d.soft = pal.soft
+      d.soft2 = pal.soft2
+      d.border = pal.border
+      d.hl = pal.hl
+    }
+  }
+  if (custom) {
+    const keys = modeKey === 'text' ? ['bg', ...THEME_TEXT_KEYS] : ['bg', ...THEME_PROMO_KEYS]
+    for (const k of keys) if (custom[k]) d[k] = custom[k]
   }
   return d
 }
@@ -450,7 +459,9 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // v9：不提供主题参数；排版语法模块使用 DESIGNS[modeKey] 基础色渲染骨架；
   // 第 17 轮：UI 风格选择或正文 [[theme:名称]] 声明 → 主题色板覆盖（含正文底色）
   const pal = resolveTheme(md, opts.theme)
-  const d = makeDesign(modeKey, pal)
+  const custom = parsePaletteDirective(md)
+  const themeName = themeDeclaration(md)
+  const d = makeDesign(modeKey, pal, custom)
   const artUrls: Record<string, string> = {}
   const warnings: string[] = []
   const images: ComposeImage[] = []
@@ -543,8 +554,9 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       continue
     }
 
-    // 风格声明 [[theme:名称]]（第 17 轮：只影响配色渲染，不产生输出）
+    // 风格声明 [[theme:名称]] 与自定义色板 [[palette:...]]（第 23 轮：只影响配色，不产生输出）
     if (/^\[\[theme:[^\]]+\]\]$/.test(line)) { i++; continue }
+    if (/^\[\[palette:[^\]]+\]\]$/.test(line)) { i++; continue }
 
     // 横幅 [[banner:主|副]]
     const bn = line.match(/^\[\[banner:([^|\]]+)(?:\|([^\]]+))?\]\]$/)
@@ -744,6 +756,10 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ').trim()
   if (html2.length >= 20000) warnings.push('正文超过 20000 字符限制（当前约 ' + html2.length + '），微信会拒绝保存')
+  // 未知风格名且无自定义色板 → 警告（第 23 轮：风格不限预置，缺色板回退默认双色系）
+  if (themeName && !pal && !custom) {
+    warnings.push('风格「' + themeName + '」未收录且正文未提供 [[palette]] 自定义色板，已回退默认双色系')
+  }
   // 素材用量校验（第 16 轮：组件装饰全覆盖——数量下限提示，persona 负责产出）
   if (arts.length === 0) {
     warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')

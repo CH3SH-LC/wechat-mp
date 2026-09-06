@@ -15,52 +15,17 @@ interface Props {
   onStop: () => void
   status: string
   knowledgeNote: string
-  mode: Mode
-  style: Style
-  onModeChange: (m: Mode) => void
-  onStyleChange: (s: Style) => void
 }
-
-export type Mode = 'auto' | 'text' | 'promo'
-export type Style = 'auto' | 'campus' | 'tech' | 'guochao' | 'japanese' | 'minimal' | 'business' | 'handbook'
-
-const MODES: { v: Mode; label: string }[] = [
-  { v: 'auto', label: '自动' },
-  { v: 'text', label: '文字类' },
-  { v: 'promo', label: '宣传类' },
-]
-
-const STYLES: { v: Style; label: string }[] = [
-  { v: 'auto', label: '风格自动' },
-  { v: 'campus', label: '校园' },
-  { v: 'tech', label: '科技' },
-  { v: 'guochao', label: '国潮' },
-  { v: 'japanese', label: '日系' },
-  { v: 'minimal', label: '极简' },
-  { v: 'business', label: '商务' },
-  { v: 'handbook', label: '手账' },
-]
 
 const QUICK_PROMPTS = [
   '帮我写一篇推文，主题是新书上市',
-  '写一篇新生入学典礼的宣传类推文，校园风，直接写',
-  '写一篇咖啡店新品上新的宣传推文，日系风，直接写',
-  '写一篇软件使用教程的干货文开头与三个分点，直接写',
+  '写一篇新生入学典礼的宣传类推文，校园风',
+  '写一篇咖啡店新品上新的宣传推文，日系风',
+  '写一篇软件使用教程的干货文，配图少一点',
   '公众号推文怎么起标题？',
 ]
 
-export default function ChatPane({
-  msgs,
-  busy,
-  onSend,
-  onStop,
-  status,
-  knowledgeNote,
-  mode,
-  style,
-  onModeChange,
-  onStyleChange,
-}: Props) {
+export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledgeNote }: Props) {
   const [input, setInput] = useState('')
   const [openSrc, setOpenSrc] = useState<ReadonlySet<number>>(new Set())
 
@@ -80,6 +45,15 @@ export default function ChatPane({
     onSend(t)
   }
 
+  // busy 两档（第 23 轮，仅展示态非对话状态机）：正在思考/澄清中 vs 正在生成 HTML。
+  // 以"当前在途助手消息是否已打开 ``` 围栏"为界——澄清/思考只有文字无围栏 → think；进入正文产出（围栏出现）→ gen。
+  const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant')
+  const busyPhase: 'think' | 'gen' | null = busy
+    ? lastAssistant && lastAssistant.content.includes('```')
+      ? 'gen'
+      : 'think'
+    : null
+
   return (
     <div className="chat-pane">
       <div className="chat-head">
@@ -88,41 +62,10 @@ export default function ChatPane({
         <span className={`badge ${status.includes('模拟') ? 'badge-warn' : 'badge-ok'}`}>{status}</span>
       </div>
 
-      <div className="chat-controls">
-        <div className="ctrl-row">
-          <span className="ctrl-label">模式</span>
-          <div className="seg">
-            {MODES.map((m) => (
-              <button
-                key={m.v}
-                className={`seg-btn ${mode === m.v ? 'seg-on' : ''}`}
-                disabled={busy}
-                onClick={() => onModeChange(m.v)}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <span className="ctrl-label ctrl-gap">风格</span>
-          <select
-            className="style-select"
-            value={style}
-            disabled={busy}
-            onChange={(e) => onStyleChange(e.target.value as Style)}
-          >
-            {STYLES.map((s) => (
-              <option key={s.v} value={s.v}>
-                {s.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
       <div className="chat-body">
         {msgs.length === 0 && (
           <div className="chat-empty">
-            <p>像用通用助手一样正常对话：闲聊、写作答疑都行；说「写一篇…推文」就为你创作，信息不够时 AI 会先在对话里问你。</p>
+            <p>像用通用助手一样正常对话：闲聊、写作答疑都行；说「写一篇…推文」就为你创作。创作前 AI 会先在对话里把要求问清楚，不会急着出稿。</p>
             <div className="chips">
               {QUICK_PROMPTS.map((p) => (
                 <button key={p} className="chip" disabled={busy} onClick={() => onSend(p)}>
@@ -179,7 +122,7 @@ export default function ChatPane({
             </div>
           )
         })}
-        {busy && <div className="typing">正在思考…</div>}
+        {busyPhase && <div className={`typing ${busyPhase}`}>{busyPhase === 'gen' ? '正在生成…' : '正在思考…'}</div>}
         {knowledgeNote && <div className="knowledge-note">知识命中: {knowledgeNote}</div>}
       </div>
 
