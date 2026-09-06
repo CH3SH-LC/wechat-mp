@@ -7,6 +7,18 @@
 
 ## 2026-09-06
 
+### [Build] 第 27 轮后全功能 release 重建（用户「我的桌面端入口呢 / 重建」）
+
+背景 / 变更原因：既有桌面可执行/安装产物停留在第 8 轮（2026-09-05），第 9-27 轮全部功能未进入；用户需要最新桌面端入口。
+
+实现：
+- `pnpm tauri build --bundles nsis`：前端 build → Rust release（1m43s）→ makensis 打包
+
+验证：
+- release exe：`src-tauri/target/release/wechat-mp-desktop.exe`（14,840,320 B，2026-09-06 23:46）
+- setup：`src-tauri/target/release/bundle/nsis/wechat-mp-desktop_0.1.0_x64-setup.exe`（4,314,395 B）
+- 启动冒烟：release exe 拉起存活 5s 后正常停止（SMOKE OK）；产物不入库
+
 ### [Change] 第 27 轮：全项目结构重构（技术债清理，零行为变化）
 
 背景 / 变更原因：用户「重构整个项目」。经评估界定为可审计、零行为变化的全项目结构与技术债清理（不重写产品语义）——第 25 轮知识工具化后，旧"请求前条件注入"整段成为死代码；UI 去控件后遗留样式与休眠监听仍在；O-8 SSE EOF 残留不解析。

@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-06
+- [Build] 第 27 轮后全功能 release 重建——pnpm tauri build --bundles nsis：release exe 14.2MB + setup 4.1MB（2026-09-06 23:46）；启动冒烟存活后关闭 OK；含到第 27 轮全部功能
 - [Change] 第 27 轮：全项目结构重构（零行为变化）——删旧 retrieve/三层任务路由死代码与休眠 chat-error 监听、清理遗留模式/风格 CSS、修复 SSE EOF 无尾换行残留不解析（O-8，补 sse_tail_delta 单测）；cargo 38 + build/compose/E2E/app 编译全绿
 - [Change] 第 23-25 轮真实模型 live 闭环（联网）：模糊→多维度澄清（不产出）；明确→模型自选 load 4 点文件→digest 流式成稿 3422 字 v2（无 400）；gen_svg 改专用 deepseek-chat（v4-flash 画图推理失控），11s 直出 53 元素具体 SVG；cargo 36/36 + live 4/4 + build/compose/E2E 全绿
 - [New Feature] 第 26 轮：微信草稿箱发布——publish.rs（token 缓存/素材上传替换 data 图/draft.add）+ 公众号配置区块 + 桌面发布按钮；cargo 37 过（含本地假微信服务器端到端契约单测）+ build/compose/E2E/app 编译全绿；真实微信接口 LIVE-PENDING（封面/字段待测试号核对）
