@@ -605,6 +605,30 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       continue
     }
 
+    // 照片位（第 28 轮，口径 A）：用户提供真实照片时用可替换占位块，发布前在微信后台换真图。
+    // 不计素材数、不触发插画相关警告（有 photo 位即视为"以照片配图"意图）。
+    const photoC = line.match(/^:::\s*photo(?:\s+(.*))?$/)
+    if (photoC) {
+      const head = (photoC[1] || '').trim()
+      i++
+      const notes: string[] = []
+      while (i < lines.length && lines[i].trim() !== ':::') {
+        const t = lines[i].trim()
+        if (t) notes.push(t)
+        i++
+      }
+      i++
+      const label = head || notes.shift() || '照片位'
+      const note = notes.length ? notes.join(' / ') : '（发布前在微信后台替换为真实照片）'
+      out.push(
+        '<section style="margin:0 0 16px;border:2px dashed #cbd5e1;border-radius:12px;padding:12px 14px;background:#f8fafc;text-align:left">' +
+          '<p style="margin:0 0 4px;font-size:14px;font-weight:700;color:#1f2d3d;letter-spacing:0.5px">【照片位】' + escapeHtml(label) + '</p>' +
+          '<p style="margin:0;font-size:12.5px;line-height:1.6;color:#8a94a6;letter-spacing:0.5px">' + escapeHtml(note) + '</p>' +
+          '</section>',
+      )
+      continue
+    }
+
     // 容器 ::: card / ::: steps / ::: cols / ::: imgrow / ::: imgcard / ::: timeline / ::: band / ::: frame
     const cont = line.match(/^:::\s*(card|steps|cols|imgrow|imgcard|timeline|band|frame)\s*(.*)$/)
     if (cont) {
@@ -761,9 +785,11 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     warnings.push('风格「' + themeName + '」未收录且正文未提供 [[palette]] 自定义色板，已回退默认双色系')
   }
   // 素材用量校验（第 16 轮：组件装饰全覆盖——数量下限提示，persona 负责产出）
-  if (arts.length === 0) {
+  // 第 28 轮：正文含照片位（::: photo，用户以真实照片配图）时不要求生成插画素材
+  const photoUsed = /^:::\s*photo\b/m.test(String(md || ''))
+  if (arts.length === 0 && !photoUsed) {
     warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
-  } else if (arts.length < 4) {
+  } else if (arts.length < 4 && !photoUsed) {
     warnings.push('素材用量偏低（当前 ' + arts.length + ' 处，建议 5-8 处并覆盖各组件装饰位）')
   }
   // 组件化校验（第 17 轮：结构规则——容器 ≥2 + 气泡 ≥1 + 列表/引用 ≥1）

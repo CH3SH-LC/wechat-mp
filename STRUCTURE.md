@@ -23,7 +23,8 @@ wechat-mp-desktop/
 │   ├── compose-check.mjs  # composeMarkdown 转换器断言（node 直跑 TS）
 │   ├── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
 │   ├── live-knowledge-probe.mjs # 三层知识路由注入的真实模型验证（读库点文件 → persona → 模型 → compose）
-│   └── live-style-choice.mjs    # 风格选型验证（同质注入 × 三主题，检查 theme 选择与反模板化）
+│   ├── live-style-choice.mjs    # 风格选型验证（同质注入 × 三主题，检查 theme 选择与反模板化）
+│   └── live-conformance.mjs # 第28轮 真实模型合规验收闸门：A 照片位(::: photo)/B 插画([[img]]) + 风格别名 + 无兜底泄漏（真机跑）
 ├── docs/
 │   ├── REQUIREMENTS-understanding.md  # 需求文档（目标态，2026-09-06 依 8 项意见修订；▲ 标未实现待迭代）
 │   ├── information/     # 需求报告（…quality-r17.md、knowledge-routing.md、style-choice.md、art-concrete.md）
@@ -38,7 +39,7 @@ wechat-mp-desktop/
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
-│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH compose；::: art 素材 + 元素/用量/组件化校验 + 主题色）
+│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH compose；::: art 素材 + 元素/用量/组件化校验 + 主题色 + ::: photo 照片位占位）
 │   │   ├── palettes.ts    # 风格主题表（知识库 8 风格色板：日系/国潮/校园/科技/极简/商务/手账/森系）
 │   │   ├── artRender.ts   # SVG 素材 → PNG data URI（canvas 2x；回退 svg data URI）
 │   │   ├── image-agent.ts # 第24轮 图像子智能体编排：hasPlaceholders/materializePlaceholders（图位→gen_svg/样例池→回填 ::: art 块）

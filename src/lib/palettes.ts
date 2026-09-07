@@ -75,16 +75,34 @@ export const PALETTES: StylePalette[] = [
 const BY_KEY = new Map(PALETTES.map((p) => [p.key, p]))
 const BY_LABEL = new Map(PALETTES.map((p) => [p.label, p]))
 
+// 风格名归一（第 28 轮）：真实模型常声明「校园风/国潮风/日系风」，去尾缀"风格/风/風"后再匹配，
+// 避免带尾缀声明落空 → 静默回退默认色系
+export function normalizeStyleName(name: string): string {
+  return String(name || '')
+    .trim()
+    .replace(/风格$/u, '')
+    .replace(/[风風]$/u, '')
+    .trim()
+}
+
+function paletteByName(name: string): StylePalette | undefined {
+  return (
+    BY_KEY.get(name) ||
+    BY_LABEL.get(name) ||
+    BY_LABEL.get(normalizeStyleName(name)) ||
+    BY_KEY.get(normalizeStyleName(name))
+  )
+}
+
 // 解析主题：正文首个 [[theme:名称|key]] 声明（第 23 轮起 UI 不再传风格，optsTheme 仅作向后兼容保留）
 export function resolveTheme(md: string, optsTheme?: string): StylePalette | undefined {
   if (optsTheme) {
-    const p = BY_KEY.get(optsTheme)
+    const p = paletteByName(optsTheme)
     if (p) return p
   }
   const m = /\[\[theme:([^\]]+)\]\]/.exec(String(md || ''))
   if (m) {
-    const name = m[1].trim()
-    return BY_KEY.get(name) || BY_LABEL.get(name)
+    return paletteByName(m[1].trim())
   }
   return undefined
 }

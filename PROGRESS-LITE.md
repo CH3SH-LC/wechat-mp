@@ -4,6 +4,8 @@
 > 详细记录见 PROGRESS.md
 
 ---
+## 2026-09-07
+- [New Feature] 第 28 轮：真实产物合格性修复 + 验收闸门（实机审计驱动）——风格名归一（校园风→校园）；::: photo 照片位（口径 A，预览虚线占位、抑制无素材误报）+ persona 配图来源分支；prep 3 轮不收敛降级直接撰写（不再把兜底话术当回复）；新增 scripts/live-conformance.mjs 真实模型合规闸门——A 照片位/B 插画双场景全绿；build/compose/E2E/cargo 38 全绿
 ## 2026-09-06
 - [Build] 第 27 轮后全功能 release 重建——pnpm tauri build --bundles nsis：release exe 14.2MB + setup 4.1MB（2026-09-06 23:46）；启动冒烟存活后关闭 OK；含到第 27 轮全部功能
 - [Change] 第 27 轮：全项目结构重构（零行为变化）——删旧 retrieve/三层任务路由死代码与休眠 chat-error 监听、清理遗留模式/风格 CSS、修复 SSE EOF 无尾换行残留不解析（O-8，补 sse_tail_delta 单测）；cargo 38 + build/compose/E2E/app 编译全绿

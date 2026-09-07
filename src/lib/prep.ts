@@ -16,6 +16,7 @@ export interface PrepOutcome {
   ready?: boolean // text === READY 标记（已取完知识、可进入创作）
   text?: string // READY，或模型输出的澄清问题/说明
   digest?: string // READY 分支：本轮实际取用的知识点摘要（工具结果），供流式撰写作上下文
+  exhausted?: boolean // 第 28 轮：工具循环 3 轮未收敛但应直接撰写（勿把兜底话术当回复）
 }
 
 // prep 阶段对模型的约束：只允许澄清问题或 READY（是否明确完全由模型判断）
@@ -98,6 +99,13 @@ export async function runPrep(messages: ChatMsg[]): Promise<PrepOutcome> {
     return { mode: 'prep', ready: false, text: text || '（请补充需求，我再开始创作）' }
   }
 
-  // 超过 3 轮仍未收敛：不产出 READY 也不产出明确澄清 → 交由上层按澄清处理/退化
-  return { mode: 'prep', ready: false, text: '（需求信息仍在收集中，请继续补充）' }
+  // 超过 3 轮仍在请求工具（无 READY 也无澄清文字）→ 视为"知识收集未完但应尽快成稿"：
+  // 降级为直接撰写（ready:true，带上已取知识摘要），不再把兜底话术当正式回复（第 28 轮）。
+  return {
+    mode: 'prep',
+    ready: true,
+    text: undefined,
+    exhausted: true,
+    digest: digestParts.length ? digestParts.join('\n\n') : undefined,
+  }
 }

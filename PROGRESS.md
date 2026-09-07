@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-09-07
+
+### [New Feature] 第 28 轮：真实产物合格性修复 + 验收闸门（用户实机审计驱动）
+
+背景 / 变更原因：用户在 release 实机反馈"基本什么都不符合要求"。审计真实持久化输出（Documents/wechat-mp-workspace/sessions）定位 4 根因：①风格别名不识别（真实输出 `[[theme:校园风]]` 匹配不上 → 静默回退默认色）；②prep 工具循环 3 轮不收敛把兜底话术「（请补充需求，我再开始创作）」当正式回复、导致多轮 `？` 后乱出稿；③配图来源未澄清——用户"要真实照片/留占位"时产物既无素材也无照片位；④验证体系盲区：E2E 只跑浏览器 mock、live 只证能力不证产物合规、release 冒烟只验进程存活。
+口径确认（用户）：照片占位 = A（正文放可替换照片位，发布前换真图），非自动生成插画。
+
+实现：
+- Modify: `src/lib/palettes.ts` — 风格名归一 normalizeStyleName（去尾缀 风格/风/風 再匹配），resolveTheme 走 paletteByName；`校园风/国潮风/日系风` 不再落空
+- Modify: `src/lib/compose.ts` — 新增 `::: photo 说明\n…\n:::` 照片位块（虚线占位框【照片位】+ 提示文字）；正文含 photo 位时抑制"未包含美术素材/用量偏低"误报
+- Modify: `src/lib/persona.ts` — 美术素材铁律 v5 补第 5 条"配图来源分支"：真实照片→`::: photo` 占位（不生成插画）；无照片→`[[img]]/[[deco]]` 插画；可混用但同屏不并存；附**反面约束**：用户无照片时严禁 `::: photo`
+- Modify: `src/lib/prep.ts` — 工具循环 3 轮不收敛改为降级 `ready:true+exhausted`（带已取知识摘要直接撰写），不再把兜底话术当正式回复
+- Add: `scripts/live-conformance.mjs` — 真实模型 → 排版引擎 → 规范断言验收闸门（场景 A 真实照片 / 场景 B 无照片走插画；断言：无兜底话术泄漏、photo/[[img]] 分支正确、声明风格被识别渲染、无"无素材"误报）
+- Modify: `scripts/compose-check.mjs` — 新增断言：校园风→校园色板无回退警告、photo 块渲染、photo 抑制无素材误报
+
+验证：
+- compose-check 全绿（含 alias/photo 新增 4 项）；pnpm build exit 0；cargo 38/38；E2E 全绿（S1-S9 语义不变）
+- live-conformance 真实 DeepSeek：A 场景产出 7 个 ::: photo、0 文字说明、theme 命中 campus、无泄漏；B 场景产出 [[img]]=3/[[deco]]=1、0 照片位、无泄漏 → CONFORM OK（先于本轮，模型偶发先澄清 1 轮——脚本已按真实多轮模拟到出稿）
+- 文档：STRUCTURE（live-conformance/compose photo）、REQUIREMENTS/PROGRESS-LITE 同步
+
+---
+
 ## 2026-09-06
 
 ### [Build] 第 27 轮后全功能 release 重建（用户「我的桌面端入口呢 / 重建」）
