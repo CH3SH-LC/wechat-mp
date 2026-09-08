@@ -4,7 +4,14 @@
 > 详细记录见 PROGRESS.md
 
 ---
+## 2026-09-08
+- [New Feature] 第 32 轮：自动质检自检（"能检测到组件不足就是不做"，口径确认=检出即自动重写到合格）+ 修叠稿——真实会话 21:20 定位：修订回合助手同一消息叠两篇 v2、预览只取首篇→差稿(组件化不足)进预览好稿被吞、warning 从不驱动修正。改 extract v2=末围栏 + collapseAssistantDraft 归一叠稿、新增 revise.ts(fixableWarnings 五类可修项/buildReviseContent/REVISE_MARKER/上限2)、App turn 尾段改有界自检回路(检出可修项→喂回模型重写同一气泡,纯产物门禁无对话状态机)、chat mock 自检触发/修订返回、verify-ui 新增 S10；验证:tsc/build/cargo 42/compose-check/E2E S1-S10 全绿(修复 note 闭包旧值回归)、extract/revise 单测过、真实模型 LIVE-REVISE OK(单围栏+组件化不足消除容器3)、release 重建(exe14.9+setup4.3)冒烟 OK
+- [Debug] 第 31 轮：修复"依旧无法生成美术资产"（真实会话审计 + 口径确认驱动）——根因：28 轮口径 A 一刀切"给真实照片→只留 ::: photo 不写 [[img]]"，凡要照片的推文只剩空照片框零装饰插画；且 live-conformance 场景 A / compose photoUsed 只查"占位合规"从不查"有没有插画"，3 次复发未被拦。用户口径确认"照片位+装饰插画都要"。改 engine-write-protocol §二/§三.3 为并存口径（照片=信息画面留位、插画=版面装饰照配，照片多时插画 2-5 处）、persona 澄清配图来源措辞、compose 纯照片位软提示缺装饰插画、live-conformance 场景 A 断言 photo≥1 且 [[img]]/[[deco]]≥1、compose-check 增并存断言；验证：tsc/build/cargo 42/E2E/compose-check 全绿；live-conformance CONFORM OK（A 场景产出 photo=6+[[img]]=4+[[deco]]=1 并存 / B 无照片零照片位）；release 重建（停用户运行实例后 exe 14.9MB+setup 4.3MB）启动冒烟 OK
+- [Debug] 第 30 轮：修复"又生成不了美术素材"（真实持久化会话审计驱动）——四根因：①SSE 每 chunk 独立 from_utf8_lossy 劈开中文→U+FFFD 乱码（重构字节缓冲按完整行解码 + 2 单测）；②prep 空回复（v4-flash 推理吃光 1200 预算）把兜底话术当正式回复泄漏（msg24/28）→ 空回复重试 + prep max_tokens 3200；③引擎协议只在 prep.ready 附加，创作会话延续句（needPrep=false）上下文无协议→模型写【照片位N】纯文本而非 ::: photo（新增 creativeSession 强制注入协议）；④gen_svg 瞬态空结果加原样重试。验证：tsc/build/cargo 42/compose/E2E 全绿；live-conformance CONFORM OK（A/B）；真实链路复刻 REGRESSION OK（C 澄清链无兜底泄漏收敛 ready / D 延续句注入协议产出 7 ::: photo 0 乱码渲染虚线占位）；release 重建补记
 ## 2026-09-07
+- [Change] 规则：用户明确"每次更新都要更新桌面版 release"——CLAUDE.md 新增铁律 7 + REQUIREMENTS 〇节 2（永久禁令）：代码变更验证后必 tauri build 重建 release + 冒烟（29 轮曾漏建，已补）
+- [Build] 第 29 轮后全功能 release 重建——pnpm tauri build --bundles nsis（2026-09-08 00:15）：release exe 14.9MB + setup 4.3MB（含第 29 轮全部改动）；release exe 启动冒烟存活后关闭 OK
+- [Change] 第 29 轮：注入内容审阅改造（docs/ai-context 审阅驱动）——persona 精简至 ~30% 通用助手化、工艺细则迁新知识点 排版引擎/engine-write-protocol（注册表置顶 + App digest 兜底）；prep 必取引擎协议 + 澄清理解型可跨轮 + WRITE 允许正文前说明（2.1/2.2）；SVG 提示复杂度契约（分层/明暗/材质/细节密度）+ gen_svg CLARIFY 有界回问（新增 refine_brief 命令）；ChatPane 删用户可见 mock、verify-ui 改 sendPrompt 文本驱动；live-conformance 注入引擎协议 + 修历史累积 bug；tsc/build/compose/cargo 40/E2E 全绿；真实模型 CONFORM OK（A 校园 7 照片位 / B 插画 0 照片位，0 泄漏）
 - [New Feature] 第 28 轮：真实产物合格性修复 + 验收闸门（实机审计驱动）——风格名归一（校园风→校园）；::: photo 照片位（口径 A，预览虚线占位、抑制无素材误报）+ persona 配图来源分支；prep 3 轮不收敛降级直接撰写（不再把兜底话术当回复）；新增 scripts/live-conformance.mjs 真实模型合规闸门——A 照片位/B 插画双场景全绿；build/compose/E2E/cargo 38 全绿
 ## 2026-09-06
 - [Build] 第 27 轮后全功能 release 重建——pnpm tauri build --bundles nsis：release exe 14.2MB + setup 4.1MB（2026-09-06 23:46）；启动冒烟存活后关闭 OK；含到第 27 轮全部功能

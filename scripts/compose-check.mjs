@@ -149,11 +149,16 @@ const aliasTheme = composeMarkdown('[[theme:校园风]]\n\n[[banner:开学典礼
 check('alias theme 校园风 hits campus palette', aliasTheme.html.includes('background:#2f6fed;padding:24px 18px') && aliasTheme.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
 check('alias theme no unknown-style warning', !aliasTheme.warnings.some((w) => w.includes('未收录')))
 
-// 第 28 轮：照片位（口径 A）——::: photo 渲染为可替换占位块，且存在时抑制"无素材"误报
+// 第 28 轮：照片位（::: photo）渲染为可替换占位块。第 31 轮：照片位与装饰插画并存口径——
+// 纯照片位不报"未包含美术素材"硬错，但软提示补装饰插画；照片位 + 已落地插画 → 素材告警清零
 const photoDoc = '::: photo 活动现场全景\n主席台与观众席，拍一张横幅视角\n:::\n\n正文内容。'
 const pr = composeMarkdown(photoDoc, { mode: 'text' })
 check('photo block rendered', pr.html.includes('【照片位】') && pr.html.includes('dashed'))
-check('photo suppresses zero-art warning', !pr.warnings.some((w) => w.includes('未包含美术素材')))
+check('photo does not false-flag no-material', !pr.warnings.some((w) => w.includes('未包含美术素材')))
+check('photo-only soft-hints decorative art', pr.warnings.some((w) => w.includes('没有任何装饰插画')))
+const photoArtDoc = '::: photo 活动现场全景\n主席台与观众席\n:::\n\n::: art wide 横幅插画\n' + FLAG_SVG + '\n:::\n\n正文内容。'
+const par = composeMarkdown(photoArtDoc, { mode: 'text' })
+check('photo + art coexists no material warning', par.arts.length === 1 && !par.warnings.some((w) => w.includes('装饰插画')) && !par.warnings.some((w) => w.includes('素材用量偏低')))
 
 // 1a) 素材用量警告：0 处与不足 4 处均提示
 const zero = composeMarkdown('## 标题\n\n正文段落，没有任何素材。', { mode: 'text' })

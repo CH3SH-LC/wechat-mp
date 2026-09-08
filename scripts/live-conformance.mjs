@@ -1,11 +1,19 @@
 // live-conformance.mjs —— 第 28 轮：真实模型 → 排版引擎 → 产品规范断言（验收闸门，补"只证能力不证合规"盲区）
 // 用法：node scripts/live-conformance.mjs   （需真实 DEEPSEEK_API_KEY / ~/.dsh）
-// 覆盖：①兜底话术不泄漏进正文 ②风格名归一（带"风"尾缀不落空）③口径 A：给真实照片 → ::: photo 照片位；口径 B：无照片 → [[img]] 插画占位
+// 覆盖：①兜底话术不泄漏进正文 ②风格名归一（带"风"尾缀不落空）③口径 A：给真实照片 → ::: photo 照片位 + 装饰插画（[[img]]/[[deco]]）并存；口径 B：无照片 → [[img]]/[[deco]] 插画占位（零照片位）
 import os from 'os'
 import fs from 'fs'
 import path from 'path'
 import { PERSONA_RULES } from '../src/lib/persona.ts'
 import { composeMarkdown } from '../src/lib/compose.ts'
+
+// 第 29 轮：persona 已精简，工艺细则迁知识库；验收闸门必须复刻"prep 已取用引擎协议"的上下文，
+// 把 排版引擎/engine-write-protocol.md 全文注入（等价桌面 runPrep 取用后 digest 进撰写阶段），
+// 否则模型不知道 v2 语法/素材占位/::: photo——不是合规测试失效，是少了取用环节。
+const ENGINE_PROTOCOL = fs.readFileSync(
+  path.join(import.meta.dirname, '..', 'src', 'knowledge', '排版引擎', 'engine-write-protocol.md'),
+  'utf8',
+)
 
 function cred() {
   if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY.trim()
@@ -19,7 +27,7 @@ function cred() {
   }
 }
 
-async function chat(user) {
+async function chat(history) {
   const key = cred()
   const base = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
   const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'
@@ -32,8 +40,8 @@ async function chat(user) {
       reasoning_effort: 'max',
       max_tokens: 64000,
       messages: [
-        { role: 'system', content: PERSONA_RULES + REGISTRY },
-        { role: 'user', content: user },
+        { role: 'system', content: PERSONA_RULES + '\n\n## 已取用：排版引擎协议（本轮创作依据，冲突以本协议为准）\n' + ENGINE_PROTOCOL + REGISTRY },
+        ...history,
       ],
     }),
   })
@@ -65,16 +73,17 @@ const check = (name, ok, extra = '') => {
   if (!ok) failed++
 }
 
-// 真实产品是多轮对话：模型可能先澄清 1 轮再成稿——模拟到产出 v2 为止（最多 2 轮）
+// 真实产品是多轮对话：模型可能先澄清 1 轮再成稿——累积历史（保留原始需求）模拟到产出 v2 为止（最多 2 轮）
 async function chatUntilArticle(user) {
-  let msg = user
+  const history = [{ role: 'user', content: user }]
   let last = ''
   for (let t = 0; t < 2; t++) {
-    const reply = await chat(msg)
+    const reply = await chat(history)
     last = reply
     const f = reply.match(/```v2\n([\s\S]*?)```/)
     if (f) return { reply, body: f[1] }
-    msg = '请勿再澄清：以上要求已给全，请直接撰写正文，只输出一个 ```v2 代码块，不要再问。'
+    history.push({ role: 'assistant', content: reply })
+    history.push({ role: 'user', content: '请勿再澄清：以上要求已给全，请直接撰写正文，只输出一个 ```v2 代码块，不要再问。' })
   }
   return { reply: last, body: '' }
 }
@@ -84,10 +93,10 @@ if (!cred()) {
   process.exit(0)
 }
 
-// ---- 口径 A：用户会提供真实照片 → 应产出可替换照片位 ----
-console.log('== 场景 A：真实照片（7 张照片位）==')
+// ---- 口径 A：用户会提供真实照片 → 照片位 + 装饰插画并存（第 31 轮口径）----
+console.log('== 场景 A：真实照片（照片位 + 装饰插画并存）==')
 const userA =
-  '写一篇军训中期慰问推文：我们是学院官方号，活泼不呆板；学院：上海交通大学人工智能学院；内容：训练间隙老师带小蛋糕慰问，宋阳老师到场讲话。正文不少于 1500 字，风格走校园风。这次现场我们会拍不少照片，请在正文里放 7 个可替换的照片位（标注每处放什么照片），不要在文中用"此处建议配图"这种文字说明代替。已提供全部必要信息：请直接撰写正文，只输出一个 ```v2 代码块，不要澄清、不要解释。'
+  '写一篇军训中期慰问推文：我们是学院官方号，活泼不呆板；学院：上海交通大学人工智能学院；内容：训练间隙老师带小蛋糕慰问，宋阳老师到场讲话。正文不少于 1500 字，风格走校园风。这次现场我们会拍不少照片，请在正文里放 7 个可替换的照片位（标注每处放什么照片），不要在文中用"此处建议配图"这种文字说明代替。照片位是放我们拍的真实照片，但横幅、气泡、小节这类组件装饰位也要配装饰插画（[[img]]/[[deco]]），别让全文只剩照片空框。已提供全部必要信息：请直接撰写正文，只输出一个 ```v2 代码块，不要澄清、不要解释。'
 const wa = await chatUntilArticle(userA)
 const replyA = wa.reply
 const bodyA = wa.body
@@ -95,8 +104,11 @@ console.log('  reply len=' + replyA.length + ' fenceV2=' + !!wa.body)
 check('A: 无兜底话术泄漏进正文', !replyA.includes('（请补充需求，我再开始创作）'))
 if (bodyA) {
   const photoN = (bodyA.match(/^:::\s*photo\b/gm) || []).length
+  const imgN = (bodyA.match(/\[\[img:/g) || []).length
+  const decoN = (bodyA.match(/\[\[deco:/g) || []).length
   const noteN = (bodyA.match(/此处建议配图/g) || []).length
   check('A: 产出 ::: photo 照片位', photoN >= 1, 'photo=' + photoN + ' note=' + noteN)
+  check('A: 照片位与装饰插画并存（[[img]]/[[deco]]≥1）', imgN + decoN >= 1, 'photo=' + photoN + ' [[img]]=' + imgN + ' [[deco]]=' + decoN)
   const r = composeMarkdown(bodyA, {})
   const unknown = r.warnings.filter((w) => w.includes('未收录'))
   const hasTheme = /\[\[theme:([^\]]+)\]\]/.exec(bodyA)

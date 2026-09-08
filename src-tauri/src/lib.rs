@@ -4,7 +4,7 @@ mod publish;
 mod sessions;
 mod settings;
 
-use chat::{chat_stream, gen_svg, prep_turn};
+use chat::{chat_stream, gen_svg, prep_turn, refine_brief};
 use export::export_html;
 use publish::{publish_draft, WxTokenState};
 use sessions::{create_session, delete_session, list_sessions, open_session, rename_session, save_session};
@@ -24,6 +24,7 @@ pub fn run() {
             chat_stream,
             gen_svg,
             prep_turn,
+            refine_brief,
             export_html,
             save_settings,
             load_settings,

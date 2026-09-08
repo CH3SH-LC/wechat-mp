@@ -19,15 +19,16 @@ export interface PrepOutcome {
   exhausted?: boolean // 第 28 轮：工具循环 3 轮未收敛但应直接撰写（勿把兜底话术当回复）
 }
 
-// prep 阶段对模型的约束：只允许澄清问题或 READY（是否明确完全由模型判断）
+// prep 阶段对模型的约束（第 29 轮：理解型澄清 + 创作必取引擎协议；是否明确由模型判断，允许跨轮追问）
 export const PREP_INSTRUCTION =
-  '你的任务是：若创作需求尚不明确 → 仅输出你的澄清问题（一段话）并结束；' +
-  '若已明确 → 先用知识工具（load_knowledge / search_knowledge）取用本次创作真正需要的点文件，' +
-  '取完只输出 READY（仅此一词），不要撰写正文。稍后会另发指令让你开始撰写正文。'
+  '创作类请求的处理方式：先用知识工具取用点文件——必取 排版引擎/engine-write-protocol（本地渲染引擎协议：v2 语法/美术占位/风格声明/质量底线），' +
+  '再按需取 内容类型(type-*)、风格(style-*)、合规(comp-*)、文案(copy-*) 等本次创作真正用到的点。' +
+  '取完后若仍有影响成稿的关键点没弄清楚，就用自然对话问清楚（可以继续问，不必一次问完）；' +
+  '问清或获授权后输出 READY（仅此一词），随后会进入撰写阶段——正文可先用一两句自然说明，再以 ```v2 围栏给出。'
 
-// READY 后进入正文撰写的指令（由 App 在最终流式消息末尾追加）
+// READY 后进入正文撰写的指令（由 App 在最终流式消息末尾追加；第 29 轮：允许正文前自然说明，不再强制"不要解释"）
 export const WRITE_INSTRUCTION =
-  '开始撰写正文：只输出一个 ```v2 或 ```html 代码块，不要清单、不要解释'
+  '开始撰写正文：正文放进一个 ```v2 围栏代码块（不要 ```html）。正文前可以用普通文字自然说明（写好了/按什么风格/采纳什么默认）。'
 
 export function isReadinessMarker(text: string): boolean {
   return text.trim().toUpperCase() === 'READY'
@@ -95,12 +96,18 @@ export async function runPrep(messages: ChatMsg[]): Promise<PrepOutcome> {
     if (isReadinessMarker(text)) {
       return { mode: 'prep', ready: true, text: 'READY', digest: digestParts.length ? digestParts.join('\n\n') : undefined }
     }
-    // 无工具调用且非 READY → 模型在澄清/说明，直接回传给用户可见消息流
-    return { mode: 'prep', ready: false, text: text || '（请补充需求，我再开始创作）' }
+    if (text) {
+      // 无工具调用且有正文 → 模型在澄清/说明，直接回传给用户可见消息流
+      return { mode: 'prep', ready: false, text }
+    }
+    // 无工具调用、正文也为空（模型瞬时空回复 / 推理吃光预算）→ 本轮不算数：
+    // 不把"（请补充需求…）"当正式回复泄漏给用户，也当作未收敛继续下一轮重试
+    // （第 28 轮起禁止兜底话术当回复；第 31 轮补空正文重试，不中断澄清链）
+    continue
   }
 
-  // 超过 3 轮仍在请求工具（无 READY 也无澄清文字）→ 视为"知识收集未完但应尽快成稿"：
-  // 降级为直接撰写（ready:true，带上已取知识摘要），不再把兜底话术当正式回复（第 28 轮）。
+  // 超过 3 轮仍无 READY、无澄清正文（含空回复重试完）→ 视为"应尽快成稿"：
+  // 降级为直接撰写（ready:true，带上已取知识摘要），不把兜底话术当正式回复（第 28/31 轮）。
   return {
     mode: 'prep',
     ready: true,

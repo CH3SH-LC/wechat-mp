@@ -37,6 +37,7 @@ D:\deepseek-harness\wechat-mp-desktop/
 4. **真实验证文化**：UI 链路用 `scripts/verify-ui.mjs`（playwright）跑通并截图存证；Rust 逻辑用 cargo 单元测试 + live 冒烟（`--ignored`）。
 5. **零 emoji 内容**：产品文案与知识语料不使用 emoji。
 6. **绝对禁止前端对话状态机**（用户 2026-09-05 明确，永久有效）：不得用任何前端状态（pendingClarify / expectRef / askRef 之类）控制对话流程、澄清或路由——消息一律直通模型，由模型自主判断（需求澄清靠 persona 约束，不靠前端分流）。违者立即撤销重做。
+7. **每次更新必须重建桌面版 release**（用户 2026-09-08 明确，永久有效）：凡代码变更（含前端/Rust/persona/知识语料/mock）验证通过后，必须 `pnpm tauri build --bundles nsis` 重建 release exe + setup 并做启动冒烟，让 `src-tauri/target/release/` 始终与代码同步，不得只停在 dev/测试态。重建结果记入 PROGRESS（[Build] 标签）。
 
 ## 每次变更的文档同步规则
 **每次代码修复/重构/功能变更后，必须同步更新：**

@@ -785,10 +785,13 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     warnings.push('风格「' + themeName + '」未收录且正文未提供 [[palette]] 自定义色板，已回退默认双色系')
   }
   // 素材用量校验（第 16 轮：组件装饰全覆盖——数量下限提示，persona 负责产出）
-  // 第 28 轮：正文含照片位（::: photo，用户以真实照片配图）时不要求生成插画素材
+  // 第 28 轮：照片位（::: photo）视为"真实照片配图"，不报"未包含美术素材"硬错。
+  // 第 31 轮：照片位与装饰插画并存口径——纯照片位仍提示补组件装饰插画；有插画即不催数量。
   const photoUsed = /^:::\s*photo\b/m.test(String(md || ''))
   if (arts.length === 0 && !photoUsed) {
     warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
+  } else if (arts.length === 0 && photoUsed) {
+    warnings.push('正文只有照片位、没有任何装饰插画（[[img]]/[[deco]]）：真实照片是信息画面，横幅/气泡/小节等组件装饰位仍应配生成插画，与照片位错开同屏')
   } else if (arts.length < 4 && !photoUsed) {
     warnings.push('素材用量偏低（当前 ' + arts.length + ' 处，建议 5-8 处并覆盖各组件装饰位）')
   }

@@ -52,22 +52,48 @@ export function hasPlaceholders(v2: string): boolean {
   return /\[\[img:(?:wide|inline)\|[^\]]+\]\]/.test(v2) || /\[\[deco:[A-Za-z0-9_-]+\|[^\]]+\]\]/.test(v2)
 }
 
-// 生成一幅 SVG：桌面走 gen_svg 子智能体调用；浏览器用样例池（带短延迟模拟"子智能体在画"）
+// 第 29 轮 3.2：子智能体 CLARIFY 追问前缀（Rust gen_svg 识别 SVG_SYSTEM_PROMPT 第 10 条后返回）
+const CLARIFY_PREFIX = 'CLARIFY:'
+
+/**
+ * 桌面调 gen_svg：子智能体对说明要素不足时返回 "CLARIFY:<问题>" —— 先交回主模型 refine_brief 补 brief，
+ * 用补全后的说明重试一次（有界：每占位最多 1 次回问）；仍失败返回 null。
+ * 第 31 轮：gen_svg 偶发瞬态空结果（无 SVG 也非 CLARIFY，重跑即好）→ 对"结果非法"再原样重试一次。
+ * 浏览器模式不调 refine（演示链路），直接返回本地样例池 SVG。
+ */
 async function generateSvg(kind: 'wide' | 'inline' | 'deco', desc: string, theme?: string): Promise<string | null> {
-  let svg = ''
-  if (inTauri()) {
+  if (!inTauri()) {
+    await new Promise((r) => setTimeout(r, 40))
+    const s = mockSvg()
+    return /<svg\b[^>]*viewBox="[^"]*"/.test(s) && svgElementCount(s) >= 6 ? s : null
+  }
+
+  const callOnce = async (d: string): Promise<string | null> => {
     try {
-      svg = await invoke<string>('gen_svg', { kind, desc, theme: theme || null })
+      const svg = await invoke<string>('gen_svg', { kind, desc: d, theme: theme || null })
+      if (svg.startsWith(CLARIFY_PREFIX)) {
+        const question = svg.slice(CLARIFY_PREFIX.length).trim()
+        const refined = await invoke<string>('refine_brief', { desc: d, question, theme: theme || null })
+        if (refined && refined.trim()) {
+          const svg2 = await invoke<string>('gen_svg', { kind, desc: refined.trim(), theme: theme || null })
+          if (svg2.startsWith(CLARIFY_PREFIX)) return null // 回问后仍追问 → 不强画
+          return svg2 && /<svg\b[^>]*viewBox="[^"]*"/.test(svg2) && svgElementCount(svg2) >= 6 ? svg2 : null
+        }
+        return null
+      }
+      return svg && /<svg\b[^>]*viewBox="[^"]*"/.test(svg) && svgElementCount(svg) >= 6 ? svg : null
     } catch (e) {
       console.warn('gen_svg 失败：', e)
       return null
     }
-  } else {
-    await new Promise((r) => setTimeout(r, 40))
-    svg = mockSvg()
   }
-  if (svg && /<svg\b[^>]*viewBox="[^"]*"/.test(svg) && svgElementCount(svg) >= 6) return svg
-  return null
+
+  let svg = await callOnce(desc)
+  if (!svg) {
+    // 瞬态空/失败重试一次（第 31 轮防御）；仍无则交给占位失败文案
+    svg = await callOnce(desc)
+  }
+  return svg
 }
 
 // 把 v2 正文里的图位占位逐个换成完整的 ::: art / ::: art deco 块。

@@ -25,16 +25,20 @@ export function extractHtml(text: string): ExtractResult | null {
 export interface SplitResult {
   prose: string // 围栏外的说明文字（净化后的展示文本）
   code: string | null // 首个 ```html 围栏内容（直通通道）
-  v2: string | null // 首个 ```v2 围栏内容（v2 语法正文，需 compose）
+  v2: string | null // 末个 ```v2 围栏内容（v2 语法正文，需 compose）
+  v2Count: number // v2 围栏个数（>1 = 模型叠稿，需 collapseAssistantDraft 归一）
 }
 
-// 把助手回复拆成"说明文字 + 源码"：围栏从 prose 剥离；code/v2 取各自首个围栏。
+// 把助手回复拆成"说明文字 + 源码"：围栏从 prose 剥离；code 取首个 html 围栏，v2 取末个。
+// 第 31 轮 B：修订/补全回合模型常先写半稿再写最终稿（一个回合叠两篇 ```v2）——末个围栏才是
+// 最终正文，取末个避免"差稿进预览、好稿被吞"；v2Count 供上层判断是否需折叠。
 // 处理流中未闭合围栏：其前文字进 prose，代码段不完整时不作为 code/v2。
 export function splitAssistant(raw: string): SplitResult {
   const lines = raw.split('\n')
   const prose: string[] = []
   let code: string | null = null
   let v2: string | null = null
+  let v2Count = 0
   let cur: string[] = []
   let lang = ''
   let inFence = false
@@ -42,7 +46,10 @@ export function splitAssistant(raw: string): SplitResult {
     const c = cur.join('\n').trim()
     if (!c) return
     if (target === 'code' && code === null) code = c
-    if (target === 'v2' && v2 === null) v2 = c
+    if (target === 'v2') {
+      v2 = c
+      v2Count++
+    }
   }
   for (const ln of lines) {
     const t = ln.trim()
@@ -62,5 +69,14 @@ export function splitAssistant(raw: string): SplitResult {
     if (inFence) cur.push(ln)
     else prose.push(ln)
   }
-  return { prose: prose.join('\n').trim(), code, v2 }
+  return { prose: prose.join('\n').trim(), code, v2, v2Count }
+}
+
+// 第 31 轮 B：一个回合叠了多篇 ```v2 正文时归一为"全部说明文字 + 末篇围栏"，
+// 避免叠稿污染会话历史/预览（后续回合会把多篇旧文当上下文）。
+export function collapseAssistantDraft(raw: string): string {
+  if (!raw) return raw
+  const s = splitAssistant(raw)
+  if (s.v2Count <= 1 || s.v2 === null) return raw
+  return (s.prose ? s.prose + '\n\n' : '') + '```v2\n' + s.v2 + '\n```'
 }

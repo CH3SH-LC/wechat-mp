@@ -127,6 +127,24 @@ fn sse_tail_delta(buf: &str) -> Option<String> {
     sse_delta(tail)
 }
 
+/// 把新到的一块 SSE 网络字节送入行缓冲，抽取出所有已凑成完整行（以 \n 结尾）的 delta。
+/// 关键：网络 chunk 可能把多字节 UTF-8 字符（如中文）劈成两半——本函数**按字节累积**，
+/// 只对完整行一次性解码，避免对每块独立 from_utf8_lossy 造成行尾乱码（U+FFFD）。
+fn feed_sse_bytes(buf: &mut Vec<u8>, chunk: &[u8], mut on_delta: impl FnMut(String)) {
+    buf.extend_from_slice(chunk);
+    loop {
+        let Some(pos) = buf.iter().position(|&b| b == b'\n') else {
+            break; // 尚无完整行，留待下一块
+        };
+        // 取出含 \n 的一整行字节（含换行；去掉结尾 \n 再整体解码，保证不劈字符）
+        let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+        let line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]);
+        if let Some(delta) = sse_delta(line.trim()) {
+            on_delta(delta);
+        }
+    }
+}
+
 /// 流式对话核心：返回完整文本，同时逐段回调（测试可直接调用）
 async fn stream_chat(
     cfg: &LlmConfig,
@@ -157,33 +175,25 @@ async fn stream_chat(
     }
 
     let mut stream = res;
-    let mut buf = String::new();
+    let mut buf: Vec<u8> = Vec::new();
     let mut collected = String::new();
     while let Some(chunk) = stream
         .chunk()
         .await
         .map_err(|e| format!("响应流中断：{e}"))?
     {
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        loop {
-            match buf.find('\n') {
-                Some(pos) => {
-                    let line: String = buf[..pos].trim().to_string();
-                    buf.drain(..=pos);
-                    if let Some(delta) = sse_delta(&line) {
-                        collected.push_str(&delta);
-                        on_delta(delta);
-                    }
-                }
-                None => break,
-            }
-        }
+        feed_sse_bytes(&mut buf, &chunk, |d| {
+            collected.push_str(&d);
+            on_delta(d);
+        });
     }
     // EOF 冲刷（O-8 修复）：流结束后 buffer 残留的末块（无尾部换行）也应解析
-    let tail = sse_tail_delta(&buf);
-    if let Some(delta) = tail {
-        collected.push_str(&delta);
-        on_delta(delta);
+    if !buf.is_empty() {
+        let tail = sse_tail_delta(&String::from_utf8_lossy(&buf));
+        if let Some(delta) = tail {
+            collected.push_str(&delta);
+            on_delta(delta);
+        }
     }
     Ok(collected)
 }
@@ -200,15 +210,20 @@ pub async fn chat_stream(app: AppHandle, messages: Vec<ChatMsg>) -> Result<(), S
 
 // ---------- 图像子智能体：gen_svg（一次生成一幅插画 SVG，非流式） ----------
 
+// 第 29 轮重写：提示从"地板清单"升级为"复杂度契约"——图片要具体、有构图层次、
+// 有结构/明暗/材质/细节密度，能被当作一幅真正的插画，而不是几个几何图形的拼贴。
 const SVG_SYSTEM_PROMPT: &str = "\
 你是公众号插画师，输出可直接内嵌在推文 HTML 里的纯 SVG 插画。要求：\n\
-1. 一次只画一张具体可辨认的插画（真实物体/场景/生灵），不要抽象几何剪影；\n\
-2. 必须带 viewBox，元素坐标落在其范围内；\n\
-3. 可见图形元素（circle/rect/ellipse/line/path/polygon/polyline/image）合计不少于 6 个；\n\
-4. SVG 内零文字、零数字、零 emoji（不出现 <text>、数字标注或 emoji 字符）；\n\
-5. 背景透明，不要铺满底色块；\n\
-6. 低饱和同色系配色，主色不超过 4 种；若用户给定主题/风格词，则按其气质配色；\n\
-7. 整段回答只包含从 <svg 到 </svg> 的 SVG 原文：不解释、不用代码围栏（``` 或 markdown）、不加任何前后缀文字。";
+1. 一次只画一张**具体可辨认、有内容可看**的插画（真实物体/场景/生灵），不是抽象几何图形、图标或贴纸。\n\
+2. **分层构图**：画面要有前景 / 中景 / 背景（或明暗两层以上）的空间感；主体放在合理的构图上，不空、不糊。\n\
+3. **物体要“长出来”而不是贴上去**：每个主要物象都要画出结构轮廓与明暗体积（受光面/背光面、深浅过渡），可加材质纹理（木纹/布料/植被/光晕等）；纯描边色块、平面剪影不算完成。\n\
+4. 画面要有**细节密度**：横幅 / 大插画通常需要 20 个以上可见元素（circle/rect/ellipse/line/path/polygon/polyline/image），小插画（inline/deco）不少于 10 个才算充实；元素 ≤6 只是系统能通过的最低门槛，不要按最低门槛画。\n\
+5. 元素坐标落在 viewBox 范围内，必须带 viewBox。\n\
+6. SVG 内零文字、零数字、零 emoji（不出现 <text>、数字标注或 emoji 字符）。\n\
+7. 背景透明，不要铺满底色块；可用多个元素叠出场景，但背景用色块/剪影即可，主体要清晰。\n\
+8. 低饱和同色系配色，主色不超过 4 种；可用同色深浅表现体积与层次；若用户给定主题/风格词，按其气质配色。\n\
+9. 整段回答只包含从 <svg 到 </svg> 的 SVG 原文：不解释、不用代码围栏（``` 或 markdown）、不加任何前后缀文字。\n\
+10. 若“画面内容”说明缺少落笔所必需的核心信息（主体不明 / 不知画什么动作场景 / 多个可能画面互相冲突），不要硬画——只输出一行以 CLARIFY: 开头的问题，问最关键的一点（一句话），由创作主模型补足后再画；凡能合理画出的情况一律直接画，不要为问而问。";
 
 /// 按 kind 组装用户消息（纯函数，可测）
 fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>) -> Result<String, String> {
@@ -235,7 +250,8 @@ fn extract_svg(text: &str) -> Option<String> {
     svg_re().find(text).map(|m| m.as_str().to_string())
 }
 
-/// 解析 DeepSeek 返回体 JSON：choices[0].message.content → 抽出 SVG（纯函数，可测）
+/// 解析 DeepSeek 返回体 JSON：choices[0].message.content → 抽出 SVG（纯函数；第 29 轮起生产走 extract_svg，本函数仅测试/兼容）
+#[cfg(test)]
 fn svg_from_response(body: &str) -> Result<String, String> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| format!("解析响应 JSON 失败：{e}"))?;
@@ -253,12 +269,111 @@ fn image_model() -> String {
     read_env("DEEPSEEK_IMAGE_MODEL").unwrap_or_else(|| "deepseek-chat".to_string())
 }
 
-/// 非流式请求一次插画生成，返回解析好的 SVG 原文
-async fn complete_svg(cfg: &LlmConfig, messages: Vec<ChatMsg>) -> Result<String, String> {
+#[tauri::command]
+pub async fn gen_svg(
+    app: AppHandle,
+    kind: String,
+    desc: String,
+    theme: Option<String>,
+) -> Result<String, String> {
+    let _ = &app; // 非流式命令暂不需事件推送；保留 AppHandle 便于后续接入进度事件
+    let cfg = resolve_config()?;
+    let user = svg_user_prompt(&kind, &desc, theme.as_deref())?;
+    let messages = vec![
+        ChatMsg { role: "system".into(), content: Some(SVG_SYSTEM_PROMPT.to_string()), tool_call_id: None, tool_calls: vec![] },
+        ChatMsg { role: "user".into(), content: Some(user), tool_call_id: None, tool_calls: vec![] },
+    ];
+    // 第 29 轮 3.2：子智能体要素不足会输出 CLARIFY 追问（不是失败）→ 取全文分类；否则返回 SVG 原文
+    let text = raw_completion_text(&cfg, image_model(), messages).await?;
+    if let Some(q) = extract_clarify(&text) {
+        return Ok(format!("CLARIFY:{q}"));
+    }
+    extract_svg(&text).ok_or_else(|| {
+        let snippet: String = text.chars().take(160).collect();
+        format!("图像子智能体未返回 SVG（响应片段：{snippet}…）")
+    })
+}
+
+// ---------- 第 29 轮 3.2：图像子智能体有界回问（CLARIFY） ----------
+// 子智能体对占位说明要素不足时输出 "CLARIFY: <一句问题>"（见 SVG_SYSTEM_PROMPT 第 10 条）。
+// gen_svg 返回该追问标记；前端 image-agent 检测到后把问题交回主模型 refine_brief 补齐 brief，
+// 再重试一次。CLARIFY 前缀是文本协议标记（非错误），复用 Ok 返回，前端据此分流。
+
+/// 从一段文本判断是否为子智能体的 CLARIFY 追问，并取出问题（纯函数，可测）
+fn extract_clarify(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("CLARIFY:") {
+            let q = rest.trim().trim_matches('"').to_string();
+            if !q.is_empty() {
+                return Some(q);
+            }
+        }
+    }
+    None
+}
+
+/// 补 brief 命令（前端 CLARIFY 后调用一次）：主模型把占位说明补成可作画 brief
+#[tauri::command]
+pub async fn refine_brief(
+    _app: AppHandle,
+    desc: String,
+    question: String,
+    theme: Option<String>,
+) -> Result<String, String> {
+    let cfg = resolve_config()?;
+    complete_brief(&cfg, &desc, &question, theme.as_deref()).await
+}
+
+/// 非流式请求一段补 brief：主模型（cfg.model，与创作同款）回答图像子智能体的追问，
+/// 返回"补全后的占位说明"（仅文字，不画 SVG）。仅当子智能体 CLARIFY 时由前端调用一次。
+async fn complete_brief(cfg: &LlmConfig, original: &str, question: &str, theme: Option<&str>) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let sys = "你是公众号推文创作主模型。图像子智能体认为某个插图占位说明不足以作画，提了一个问题。\
+请结合原说明，把画面补成一句可直接作画的具体 brief：说清主体对象、动作/场景、构图氛围、色彩倾向（若给定风格词则保留其气质）。\
+只输出补全后的说明本身，不要解释、不要输出 SVG、不要输出代码围栏。";
+    let mut user = format!("原占位说明：{}\n\n子智能体问题：{}", original.trim(), question.trim());
+    if let Some(t) = theme.map(str::trim).filter(|s| !s.is_empty()) {
+        user.push_str(&format!("\n风格词：{t}"));
+    }
+    let body = serde_json::json!({
+        "model": cfg.model,
+        "stream": false,
+        "max_tokens": 1200,
+        "messages": [
+            { "role": "system", "content": sys },
+            { "role": "user", "content": user },
+        ],
+    });
+    let res = client
+        .post(format!("{}/chat/completions", cfg.base_url))
+        .header("Authorization", format!("Bearer {}", cfg.key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求 DeepSeek 失败：{e}"))?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(format!("DeepSeek API 错误 {status}：{text}"));
+    }
+    let text = res.text().await.map_err(|e| format!("读取响应失败：{e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("解析响应 JSON 失败：{e}"))?;
+    let content = v["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "补 brief 模型未返回说明".to_string())?;
+    Ok(content.to_string())
+}
+
+/// 非流式请求一次，返回 choices[0].message.content 全文（透传 model，纯网络无解析，供 gen_svg 复用）
+async fn raw_completion_text(cfg: &LlmConfig, model: String, messages: Vec<ChatMsg>) -> Result<String, String> {
     let client = reqwest::Client::new();
     let url = format!("{}/chat/completions", cfg.base_url);
     let body = serde_json::json!({
-        "model": image_model(),
+        "model": model,
         "stream": false,
         "max_tokens": 8000,
         "messages": messages,
@@ -276,24 +391,12 @@ async fn complete_svg(cfg: &LlmConfig, messages: Vec<ChatMsg>) -> Result<String,
         return Err(format!("DeepSeek API 错误 {status}：{text}"));
     }
     let text = res.text().await.map_err(|e| format!("读取响应失败：{e}"))?;
-    svg_from_response(&text)
-}
-
-#[tauri::command]
-pub async fn gen_svg(
-    app: AppHandle,
-    kind: String,
-    desc: String,
-    theme: Option<String>,
-) -> Result<String, String> {
-    let _ = &app; // 非流式命令暂不需事件推送；保留 AppHandle 便于后续接入进度事件
-    let cfg = resolve_config()?;
-    let user = svg_user_prompt(&kind, &desc, theme.as_deref())?;
-    let messages = vec![
-        ChatMsg { role: "system".into(), content: Some(SVG_SYSTEM_PROMPT.to_string()), tool_call_id: None, tool_calls: vec![] },
-        ChatMsg { role: "user".into(), content: Some(user), tool_call_id: None, tool_calls: vec![] },
-    ];
-    complete_svg(&cfg, messages).await
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("解析响应 JSON 失败：{e}"))?;
+    v["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "模型未返回内容".to_string())
 }
 
 // ---------- 创作前置：prep_turn（知识注册表 → 模型按需工具取用，非流式） ----------
@@ -363,7 +466,8 @@ async fn request_prep(cfg: &LlmConfig, messages: Vec<ChatMsg>) -> Result<PrepRep
         "messages": messages,
         "tools": tools,
         "stream": false,
-        "max_tokens": 1200,
+        // 第 31 轮：1200 → 3200。v4-flash 推理可能吃光小预算致 content 为空 → prep 无正文泄漏兜底话术。
+        "max_tokens": 3200,
     });
     let res = client
         .post(url)
@@ -448,6 +552,39 @@ mod tests {
         assert_eq!(sse_tail_delta("data: [DONE]"), None);
     }
 
+    #[test]
+    fn sse_multibyte_split_across_chunks_not_corrupted() {
+        // 网络 chunk 可能把多字节 UTF-8 字符（如中文「你」= E4 BD A0）劈成两半。
+        // feed_sse_bytes 按字节累积、凑完整行才解码——首块只含「你」的首字节（E4）、无 \n，
+        // 不应产出内容；第二块补齐剩余字节与 \n 后应解析出完整「你」，绝不出现 U+FFFD。
+        let line = "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n";
+        let prefix = "data: {\"choices\":[{\"delta\":{\"content\":\"";
+        let bytes = line.as_bytes();
+        let p = prefix.len(); // ASCII 前缀，字节长 == 字符长；「你」从此处开始
+        let mut buf: Vec<u8> = Vec::new();
+        let mut got = String::new();
+        feed_sse_bytes(&mut buf, &bytes[..p + 1], |d| got.push_str(&d));
+        assert!(got.is_empty(), "首块尚无换行，不应产出 delta");
+        feed_sse_bytes(&mut buf, &bytes[p + 1..], |d| got.push_str(&d));
+        assert_eq!(got, "你", "跨 chunk 的中文不应被 U+FFFD 破坏: {got:?}");
+        assert!(!got.contains('\u{FFFD}'), "不应产生替换字符");
+    }
+
+    #[test]
+    fn sse_multiple_deltas_across_arbitrary_splits() {
+        // 把一整个多 delta 流切成任意字节段喂入，结果应与整行解析一致（无丢失、无错位）
+        let line = "data: {\"choices\":[{\"delta\":{\"content\":\"你好世界\"}}]}\n";
+        let bytes = line.as_bytes();
+        let mut buf: Vec<u8> = Vec::new();
+        let mut got = String::new();
+        // 每 3 字节切一刀（必劈到中文多字节中间）
+        for chunk in bytes.chunks(3) {
+            feed_sse_bytes(&mut buf, chunk, |d| got.push_str(&d));
+        }
+        assert_eq!(got, "你好世界", "任意切分解析应一致: {got:?}");
+        assert!(!got.contains('\u{FFFD}'));
+    }
+
     #[tokio::test]
     #[ignore = "需要真实 DeepSeek API 与密钥（env DEEPSEEK_API_KEY 或 ~/.dsh/.credentials.yaml）"]
     async fn live_deepseek_smoke() {
@@ -512,6 +649,16 @@ mod tests {
     }
 
     #[test]
+    fn svg_prompt_requires_layered_complexity() {
+        // 第 29 轮 3.1：SVG 提示不再是"≥6 元素"地板，而是复杂度契约——分层/结构/明暗/细节密度必须有
+        assert!(SVG_SYSTEM_PROMPT.contains("分层构图"), "应要求前景/中景/背景层次");
+        assert!(SVG_SYSTEM_PROMPT.contains("结构轮廓与明暗体积"), "应要求结构轮廓与明暗体积");
+        assert!(SVG_SYSTEM_PROMPT.contains("细节密度"), "应要求细节密度");
+        assert!(SVG_SYSTEM_PROMPT.contains("20 个以上"), "横幅/大插画应引导到 20+ 元素量级");
+        assert!(SVG_SYSTEM_PROMPT.contains("≤6 只是系统能通过的最低门槛"), "应明确 ≥6 只是门槛而非目标");
+    }
+
+    #[test]
     fn svg_prompt_kind_ctx_and_theme() {
         let wide = svg_user_prompt("wide", "咖啡店一角", Some("杂志")).expect("ok");
         assert!(wide.contains("750 220"), "wide 应提示横幅 viewBox");
@@ -521,6 +668,19 @@ mod tests {
         assert!(deco.contains("角饰"));
         assert!(deco.contains("右下 1/3"));
         assert!(svg_user_prompt("banner", "x", None).unwrap_err().contains("未知图像类型"));
+    }
+
+    #[test]
+    fn clarify_extracted_from_image_agent_reply() {
+        // 3.2 有界回问：子智能体要素不足 → CLARIFY 前缀被识别；正常 SVG 回复不误判
+        assert_eq!(
+            extract_clarify("CLARIFY: 这幅横幅要画哪一季的校园场景？秋季还是四季通用？").as_deref(),
+            Some("这幅横幅要画哪一季的校园场景？秋季还是四季通用？")
+        );
+        assert_eq!(extract_clarify("  \nCLARIFY:\"画面里咖啡杯是拿铁还是美式？\"\n").as_deref(), Some("画面里咖啡杯是拿铁还是美式？"));
+        assert_eq!(extract_clarify("<svg viewBox=\"0 0 750 220\"><rect x=\"0\" y=\"0\" width=\"10\" height=\"10\"/></svg>"), None);
+        assert_eq!(extract_clarify("没有 CLARIFY 的普通文本"), None);
+        assert_eq!(extract_clarify("CLARIFY:"), None, "空问题不识别");
     }
 
     #[test]
@@ -695,18 +855,21 @@ mod tests {
     #[ignore = "需要真实 DeepSeek API 与密钥"]
     async fn live_gen_svg_draws_concrete_illustration() {
         let cfg = resolve_config().expect("应能解析到密钥配置");
-        let user = svg_user_prompt("wide", "清晨的咖啡店门头：木质招牌、暖黄灯光、门口一株绿植与花盆", Some("日系"))
+        let user = svg_user_prompt("wide", "清晨的咖啡店门头：木质招牌、暖黄灯光、门口一株绿植与花盆，门廊有地砖与盆栽层次", Some("日系"))
             .expect("prompt 应组装成功");
-        let svg = complete_svg(
+        let text = raw_completion_text(
             &cfg,
+            image_model(),
             vec![msg("system", SVG_SYSTEM_PROMPT), msg("user", &user)],
         )
         .await
-        .expect("图像子智能体应生成 SVG");
+        .expect("图像子智能体应返回内容");
+        assert!(extract_clarify(&text).is_none(), "该说明充足，不应回问: {text}");
+        let svg = extract_svg(&text).expect("应产出 SVG");
         assert!(svg.contains("viewBox="), "应带 viewBox");
         let tag_re = Regex::new(r#"(?i)<(circle|rect|ellipse|line|path|polygon|polyline|image)\b"#).expect("ok");
         let n = tag_re.find_iter(&svg).count();
         println!("LIVE SVG: elements={n} len={} head={}", svg.len(), svg.chars().take(60).collect::<String>());
-        assert!(n >= 6, "可见图形元素应 ≥6，实际 {n}");
+        assert!(n >= 10, "可见图形元素应 ≥10（复杂度契约），实际 {n}");
     }
 }

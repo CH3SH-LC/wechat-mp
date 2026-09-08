@@ -30,6 +30,12 @@ async function waitStreamDone(timeout = 30000) {
   await page.waitForTimeout(300)
 }
 
+// 第 29 轮：删用户可见 mock 按钮后，场景改用输入框直接发文本驱动（mock 链路仍在，语义不变）
+async function sendPrompt(text) {
+  await page.locator('textarea').fill(text)
+  await page.locator('textarea').press('Enter')
+}
+
 async function runScenario(name, trigger, expectFail) {
   await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForSelector('.chat-head .badge', { timeout: 20000 })
@@ -53,7 +59,7 @@ async function runScenario(name, trigger, expectFail) {
 let failed = 0
 const s1 = await runScenario(
   'ok',
-  () => page.locator('.chip-primary').click(),
+  () => sendPrompt('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写'),
   false,
 )
 for (const [name, ok] of s1.checks) {
@@ -73,7 +79,7 @@ try {
   const noMode = (await page.locator('.seg-btn').count()) === 0
   console.log(`  ${noStyle && noMode ? 'PASS' : 'FAIL'} - S1.9 no mode/style UI controls (styleSelect=${await page.locator('.style-select').count()})`)
   if (!noStyle || !noMode) failed++
-  await page.locator('.chip-primary').click()
+  await sendPrompt('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
   await page.waitForFunction(
     () => {
       const t = document.querySelector('.typing')
@@ -185,7 +191,7 @@ try {
 
 const s2 = await runScenario(
   'fail',
-  () => page.locator('.chip', { hasText: '违规输出检测' }).click(),
+  () => sendPrompt('演示质量检查：请故意输出包含 emoji、渐变与外链图的推文（违规输出检测）'),
   true,
 )
 for (const [name, ok] of s2.checks) {
@@ -376,6 +382,64 @@ try {
   await page.screenshot({ path: `${outDir}/wxmp-desktop-S9d.png` })
 } catch (e) {
   console.log('  FAIL - S9 conversational error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S10 自动质检自检（第 32 轮）：首稿缺组件/无素材（mock 故意返回半成品）→ 引擎检出"可修复质量项" →
+// 自动把问题清单喂回模型重写（同一气泡）→ 收敛到 q-ok 且只保留一版正文
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.sess-btn[data-ready="1"]', { timeout: 20000 })
+  if ((await page.locator('.session-rail').count()) === 0) {
+    await page.locator('.sess-btn').click()
+  }
+  await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
+  await page.locator('.session-rail .rail-new').click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  await page.locator('textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
+  await page.locator('textarea').press('Enter')
+
+  // 跨两轮流式（首稿不达标 → 自动修订稿）等终态：q-ok 且无生成中
+  let settled = false
+  for (let i = 0; i < 80; i++) {
+    const ok = await page.locator('.quality-strip.q-ok').count()
+    const typing = await page.locator('.typing').count()
+    if (ok > 0 && typing === 0) {
+      settled = true
+      break
+    }
+    await page.waitForTimeout(500)
+  }
+  await page.waitForTimeout(1200) // 让潜在第二轮完全落定
+  const finalOk = (await page.locator('.quality-strip.q-ok').count()) > 0
+  console.log(`  ${settled && finalOk ? 'PASS' : 'FAIL'} - S10 auto-revise converged to q-ok`)
+  if (!settled || !finalOk) failed++
+
+  const nUser = await page.locator('.msg-user').count()
+  const nAsst = await page.locator('.msg-assistant').count()
+  const singleTurn = nUser === 1 && nAsst === 1
+  console.log(`  ${singleTurn ? 'PASS' : 'FAIL'} - S10 rewrite stays in same bubble (user=${nUser} asst=${nAsst})`)
+  if (!singleTurn) failed++
+
+  // 修订稿应替换为合规正文（SAMPLE 特征：banner + steps 容器），不再含缺组件半成品；
+  // 且来源视图是单一连贯稿（恰一个 banner、无重复两稿）——chat 源码视图展示的是剥围栏后的正文
+  let replacedOk = false
+  let singleOk = false
+  if ((await page.locator('.src-toggle').count()) > 0) {
+    await page.locator('.src-toggle').first().click()
+    await page.waitForSelector('.src-view', { timeout: 10000 })
+    const src = await page.locator('.src-view').first().innerText()
+    const bannerN = (src.match(/\[\[banner:/g) || []).length
+    singleOk = bannerN === 1 && src.includes('::: steps') && !src.includes('又比刚才又亮了几分')
+    replacedOk = singleOk
+  }
+  console.log(`  ${replacedOk ? 'PASS' : 'FAIL'} - S10 final article replaced with compliant (not deficient)`)
+  if (!replacedOk) failed++
+  console.log(`  ${singleOk ? 'PASS' : 'FAIL'} - S10 single coherent article in source (banner×1 + steps)`)
+  if (!singleOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S10.png` })
+} catch (e) {
+  console.log('  FAIL - S10 auto-revise error:', String(e).slice(0, 200))
   failed++
 }
 

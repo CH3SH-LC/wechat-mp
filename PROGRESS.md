@@ -5,7 +5,119 @@
 
 ---
 
-## 2026-09-07
+## 2026-09-08
+
+### [New Feature] 第 32 轮：自动质检自检（检出即自动重写至合格）+ 修"叠两篇、预览取差稿"（用户口径确认驱动）
+
+背景 / 变更原因：用户报「目前能检测到组件不足，就是不做」。真实会话审计（`s1788872582600968000`，21:20，军训+照片+"不全"补插画）定位：同一助手回合**叠了两篇 ```v2 正文**（半稿 + 终稿），预览只取**首个**围栏 → 差稿（容器 1、触发"组件化不足"）进预览、好稿（容器 2+timeline+角饰、无组件化不足）被吞；且质检 warning 只进 UI、从不驱动模型修正。用户口径确认（AskUserQuestion）：**自动重写到合格**——引擎检出可修复质量项就自动喂回模型重写，不再只亮红灯。
+
+根因分析：
+- **技术层（数据选错）**：`splitAssistant` 只取**首个** ```v2 围栏渲染/落库。修订/补全回合模型常"先写半稿、再写终稿"（末个围栏才是最终意图，证据：msg46 fence#1 容器 1 → 组件化不足；fence#2 容器 2+无组件化不足）——首个围栏契约在"一稿流"时代成立，多稿叠出后把最差那篇当正文。
+- **流程层（无反馈回路）**：compose 的"组件化不足/素材缺失"等 warning 只显示在质量条，从不驱动模型改进；用户只能口头命令（"不全"），而口头命令又触发叠稿 → 死循环。
+- **历史污染**：叠稿原文原样进会话历史，后续回合把多篇旧文都当上下文，越叠越乱。
+
+修改文件：
+- Modify: `src/lib/extract.ts` — `splitAssistant.v2` 改取**末个** ```v2 围栏（并加 `v2Count`）；新增 `collapseAssistantDraft(raw)`（>1 篇 v2 时归一为"说明文字 + 末稿单围栏"，防历史污染）；4 个使用点（renderV2/applySession/流尾/ChatPane 源码视图）自动生效
+- Add: `src/lib/revise.ts` — `REVISE_MARKER='【自动质检】'`、`MAX_AUTO_REVISES=2`、`fixableWarnings(warnings)`（仅 组件化不足/未包含美术素材/素材用量偏低/照片位无装饰插画/气泡角饰 五类"改写法即可修"项触发；风格未收录/正文偏短/本地图不触发）、`buildReviseContent(v2, issues)`
+- Modify: `src/App.tsx` — turn 尾段重构为**有界自检回路**：候选稿 materialize→compose → fixableWarnings → 空=终稿预览展示；非空且未达上限=清空气泡与预览、把质检问题清单喂回模型重写同一气泡（busy 保持、可手动停止）→ 重新质检；无 v2(对话)/达上限/用户停止即结束；落库前 collapse 归一。纯产物质量门禁，无任何对话状态机（不加澄清/路由/expectRef 态）
+- Modify: `src/lib/chat.ts`（浏览器 mock 测试桩）— 末消息含 `REVISE_MARKER` → 返回合规 SAMPLE_V2；含"自检缺组件" → 返回 DEFICIENT_V2（容器 0、无素材、无气泡的缺组件样稿）
+- Modify: `scripts/verify-ui.mjs` — 新增 S10：新建会话 → 发"军训慰问（自检缺组件）直接写" → mock 首稿不达标 → 自动重写 → 断言收敛到 q-ok、同一气泡（user=1/asst=1）、末稿为合规单稿
+- Modify: `REQUIREMENTS.md` — 第 32 轮登记（口径确认后开发）
+
+验证：
+- `npx tsc --noEmit` / `pnpm build`：exit 0。
+- extract/revise 单测（tmp 脚本）：splitAssistant 取末围栏（v2Count=2）、collapse 多稿→单稿/单稿不变、fixableWarnings 只取可修复项、revise 提示含标记/问题/单围栏指令 —— 全 PASS。
+- `node scripts/compose-check.mjs`：COMPOSE OK。
+- `cargo test --lib`：42 passed / 0 failed / 4 ignored（纯回归）。
+- `node scripts/verify-ui.mjs docs/artifacts`（vite:1420）：VERIFY OK —— **S1-S10 全绿**，含 S10 自动质检自检（首稿缺组件→自动重写→q-ok 收敛/同气泡/合规单稿）；修复期间 S8 曾因"note 用闭包旧值把'注册表就绪'擦掉"回归、S10 曾因预览 HTML 为空致"清空"按钮 disabled，均已修（note 改 sessionNote 变量；S10 改新建会话）。
+- 真实模型 `scripts/tmp-live-revise.mjs`（验证后删除）：把缺组件样稿 + 质检问题经 `buildReviseContent` 喂给真实 DeepSeek → **单 v2 围栏、组件化不足消除（容器 3）、风格/事实保留** LIVE-REVISE OK。
+- release 重建：`pnpm tauri build --bundles nsis`（先停掉用户运行中的桌面实例解除 exe 占用）——release exe 14.9MB + setup 4.3MB；exe 启动冒烟存活后关闭 SMOKE OK。
+- 文档：REQUIREMENTS（第 32 轮）/PROGRESS/PROGRESS-LITE/STRUCTURE 同步。待提交。
+
+### [Debug] 第 31 轮：修复"依旧无法生成美术资产"——照片位与装饰插画并存口径（真实会话审计 + 用户口径确认驱动）
+
+背景 / 变更原因：用户报「这一轮问题是，依旧无法生成美术资产。解决问题」。此为第 3 次同类复发（28/30/31 轮均指向"素材/美术生成"）。审计真实持久化会话：4 个同为"军训慰问+插入不少照片"的会话跨 28/29/30 三代构建，产出分别是【照片位N】纯文本 / 模型手写 `::: art` SVG / 正确 `::: photo` ×9（30 轮修复后）。**关键发现**：30 轮协议注入修复后模型已能稳定产出合规 `::: photo`，但凡是"用户要照片"的推文，全文只有空虚线照片占位框、零装饰插画——预览只见大片空框 → 用户感知"依旧无法生成美术资产"。用户口径确认（AskUserQuestion）：**"照片位 + 装饰插画都要"**。
+
+根因分析（为什么 3 次复发、为什么之前没暴露）：
+- **技术层（口径缺陷）**：第 28 轮口径 A 过度一刀切——engine-write-protocol §三.3 原文"用户会提供真实照片 → 用照片位 `::: photo`，**不再生成插画、不写 `[[img]]`**"。把"插照片"话意路由成全空照片位文章，装饰美术归零。第 30 轮的修复只解决了"协议缺失 → 写不出 `::: photo`"，没有动"有照片 → 不写插画"这条口径，所以合规占位越稳定，空框文章越多。
+- **流程层（闸门盲区）**：live-conformance 场景 A 只断言"photo≥1 + 无兜底泄漏 + 无'未收录'回退"，从未断言"照片文章也应含装饰插画"；compose photoUsed 逻辑还全量抑制了"无素材"警告（28 轮为防误报加的）——于是"照片→零插画"从未被任何闸门拦下，反而被当成合规通过。28/30 两轮都验证了"占位语法正确"，却没人问"这推文到底有没有实际可见的图"。
+
+修改文件：
+- Modify: `src/knowledge/排版引擎/engine-write-protocol.md` — §二"图片"条：删除"确需真实配图用文字说明'此处建议配图：…'"，改指向 §三.3 并明令禁止文字说明占位；§三.3 配图来源分支重写为**并存口径**：用户给照片 → 真实画面用 `::: photo` 照片位（信息画面），**同时**用 `[[img]]/[[deco]]` 覆盖横幅/小节/气泡/分隔等组件装饰位（版面装饰）；照片多时插画 2-5 处即够、纯无照片才按 §三.1 的 5-8 处；照片位与插画同屏（约 120-150 字）不并存；"无照片严禁 ::: photo"反面约束保留
+- Modify: `src/lib/persona.ts` — 需求澄清维度"配图来源"同步并存措辞（问清会不会给真实照片：会给 → 照片处留位 + 装饰插画照配；不会 → 全由系统生成插画）
+- Modify: `src/lib/compose.ts` — 素材用量告警去 photoUsed 全量抑制：纯照片位且 arts=0 软提示"正文只有照片位、没有任何装饰插画（[[img]]/[[deco]]）"；照片+已落地插画并存时素材告警清零；无照片路径不变
+- Modify: `scripts/live-conformance.mjs` — 场景 A 断言升级为"照片位 ≥1 且 [[img]]/[[deco]] ≥1"（并存）；场景 B（无照片零照片位）不变；头注释同步
+- Modify: `scripts/compose-check.mjs` — photo 断言更新：纯照片位不报"未包含美术素材"硬错但软提示装饰插画；照片位 + 已落地 `::: art` → 素材告警清零（新增 2 项断言）
+- Modify: `REQUIREMENTS.md` — 第 31 轮登记（先记录后开发补记）
+
+验证：
+- `npx tsc --noEmit` / `pnpm build`：exit 0。
+- `node scripts/compose-check.mjs`：COMPOSE OK（新增 photo-only 软提示 + photo+art 并存零告警断言通过）。
+- `cargo test --lib`：42 passed / 0 failed / 4 ignored（本轮无 Rust 改动，纯回归）。
+- `node scripts/verify-ui.mjs docs/artifacts`（vite:1420 浏览器 mock）：VERIFY OK（S1-S9 全绿，含 S1.8 素材物料化渲染 data 图——预览链路未破坏）。
+- 真实模型 `node scripts/live-conformance.mjs`：**CONFORM OK**——场景 A（用户给照片，复刻真实军训需求）产出 **photo=6 + [[img]]=4 + [[deco]]=1**，照片位与装饰插画并存、0 文字说明占位、风格命中校园、虚线照片位正常渲染；场景 B（无照片）[[img]]=4/[[deco]]=1、零照片位，语义保持。
+- release 重建：`pnpm tauri build --bundles nsis`（首跑因用户桌面端实例仍在运行占用 exe os error 5，停进程后重跑成功）——release exe 14.9MB + setup 4.3MB；exe 启动冒烟存活后关闭 SMOKE OK。
+- 文档：REQUIREMENTS（第 31 轮，状态完成）/PROGRESS/PROGRESS-LITE/STRUCTURE 同步。待提交。
+
+### [Debug] 第 30 轮：修复"又生成不了美术素材"（真实持久化会话审计驱动）+ SSE 中文乱码
+
+背景 / 变更原因：用户报「能不能读取本地记录，为什么又生成不了美术素材了？修复这个问题」。读取本地记录定位：PROGRESS 第 15/24/28 轮均处理过"素材生成"回归，本轮"又"复发。审计最新真实持久化会话（`Documents/wechat-mp-workspace/sessions/s1788797870699219000.json`，2026-09-08 01:40 军训慰问多轮会话）定位 4 根因：
+
+1. **SSE 流式中文乱码（数据损坏，代码层面确凿）**：`chat.rs` stream_chat 对每个网络 chunk 独立 `String::from_utf8_lossy`（`buf.push_str(&String::from_utf8_lossy(&chunk))`）——reqwest/TCP chunk 边界若把多字节 UTF-8 中文（3 字节）劈成两半，两半各自解码都产生 U+FFFD。真实会话跨历史存在（4/15/31 处乱码），本轮最新稿 15 处，标题"训练场�"即成残字。
+2. **prep 空回复→兜底话术泄漏（msg24/28 症状）**：多轮澄清会话中 prep_turn（v4-flash + max_tokens 1200）偶发空 content（推理吃光预算，第 13-16 轮同族问题）→ `prep.ts` runPrep 旧逻辑 `text || '（请补充需求，我再开始创作）'` 把它当 ready:false 文本返回 → App 当助手消息展示给用户。该兜底话术无"？"→ 下一回合 needPrep 判定 `lastAssistant.content.includes('？')` 失效 → 衍生根因 3。
+3. **引擎协议注入空洞（素材/照片位灭失主因）**：第 29 轮 persona 精简后，v2 语法/`::: photo`/`[[img]]`/`[[theme]]` 占位全部只存在于知识文件 engine-write-protocol.md，且 App 仅在 `prep.ready` 分支强制附加。创作会话内"延续句"（msg29"哪里缺乏内容了"，isCreateRequest=false 且上一条兜底无"？" → needPrep=false）走 baseMsgs 直接流式、上下文无引擎协议 → 模型不知照片位语法 → 最终成稿（msg30）写【照片位N｜建议画面…】纯文本而非 `::: photo`，美术素材/照片位全灭。
+4. **gen_svg 瞬态空结果（防御）**：live 首跑 36s 无 SVG 无 CLARIFY（重跑成功）→ 真实链路偶发素材标失败。
+
+实现：
+1. Modify `src-tauri/src/chat.rs` — 重构 stream_chat：字符串逐块解码改为**字节缓冲 `feed_sse_bytes(buf:&mut Vec<u8>, chunk:&[u8], on_delta)`**，只对以 `\n` 结尾的完整行一次性 `from_utf8_lossy` 解码（行内绝不含 0x0A，不会劈字符）；EOF 残留仍冲刷。新增 2 单测：`sse_multibyte_split_across_chunks_not_corrupted`（首块只含"你"首字节 E4、无换行不产出，第二块补齐后整行解出"你"、零 U+FFFD）、`sse_multiple_deltas_across_arbitrary_splits`（每 3 字节切一刀必劈到中文仍一致）。request_prep max_tokens 1200→3200（防推理吃光致 prep content 空）。
+2. Modify `src/lib/prep.ts` — runPrep 循环：无 tool_calls 且正文为空（模型瞬时空回复/推理吃光）→ **continue 重试**（不返回兜底话术）；多轮仍未收敛 → exhausted 降级直接撰写（ready:true，带已取 digest）。非空澄清正文仍原样返回。兜底话术不再出现在任何用户可见助手消息。
+3. Modify `src/App.tsx` — 新增 `creativeSession = history.some(user 且 isCreateRequest)` 判定；prep 分支之后、流式之前：`inTauri && creativeSession && !needPrep && 上下文无 engine-write-protocol` → 注入引擎协议 user 消息（标注"若本回合决定撰写 v2 正文围栏，按协议产出 v2 语法与美术占位/照片位"）。不打断澄清链、不新增对话状态机（纯上下文注入，消息直通模型）。
+4. Modify `src/lib/image-agent.ts` — generateSvg 重构为 callOnce 二次：CLARIFY→refine_brief→重试逻辑保留；结果非法（无 viewBox/<6 元素/空）或 invoke 失败 → **原样重试一次**再判失败（瞬态防御）。浏览器 mock 路径不变。
+
+验证：
+- `npx tsc --noEmit` / `pnpm build`：exit 0。
+- `cargo test --lib`：42 passed / 0 failed / 4 ignored（新增 2 SSE 跨 chunk 单测确认运行）。
+- `node scripts/compose-check.mjs`：COMPOSE OK。
+- `node scripts/verify-ui.mjs docs/artifacts`（vite:1420 浏览器 mock）：VERIFY OK（S1-S9 全绿，App.tsx 改动不破坏回归；creativeSession 注入仅 inTauri 生效，浏览器路径跳过）。
+- 真实模型 `node scripts/live-conformance.mjs`：CONFORM OK（A 校园 7 `::: photo` 0 泄漏 / B [[img]]4+[[deco]]1 0 照片位 0 泄漏；首跑 A 偶发 fenceV2=false 为模型 flaky，重跑通过）。
+- 真实链路复刻 `scripts/tmp-regress-reg.mjs`（针对两处绕过 live-conformance 的修复，验证后删除）：
+  - 场景 C（多轮澄清链 + prep 空回复逻辑）：兜底话术未泄漏进任何助手回复，prep 最终收敛到 ready（rounds=3）——根因 2 修复生效。
+  - 场景 D（创作会话延续句注入引擎协议）：产出 7 个 `::: photo` 照片位、0 兜底泄漏、0 U+FFFD、compose 渲染虚线占位——根因 3 修复生效（此前该链路产出【照片位N】纯文本）。
+  - REGRESSION OK。
+- 文档：REQUIREMENTS（第 30 轮）/PROGRESS/PROGRESS-LITE/STRUCTURE 同步。待提交。
+- [Build 补记] 第 30 轮后 release 重建——`pnpm tauri build --bundles nsis`：release exe 14.2MB + setup 4.1MB（2026-09-08 02:22，含 30 轮全部改动）；release exe 启动冒烟存活后关闭 OK。首跑因第 29 轮 00:15 冒烟遗留的旧 exe 仍在运行（文件占用 os error 5）失败，停进程后重跑成功。
+
+
+
+背景 / 变更原因：用户审阅 `docs/ai-context/` 四份「注入给模型的内容」清单后给出意见并拍板三项路线（AskUserQuestion）：①persona 大幅精简至 ~30%、定位从"纯公众号排版专家"改为"通用 AI 助手 + 少量公众号能力"，工艺细则**迁知识库按需取用**（不就地删除靠引擎兜底）；②输出像正常助手——不再"只输出代码块不要解释"，允许正文前自然说明；③澄清是"真正理解"而非"按维度收问卷"，可跨轮追问；④图像子智能体 SVG 复杂度要求大幅上调（现要求只是地板）；⑤子智能体要向主智能体反要更清晰 brief，走**有界回问回路**；⑥不需要 mock——只删**用户可见演示**，内部测试桩保留。
+
+根因分析（既有设计与用户取向的落差）：
+- persona 与 round 25"注册表+按需取用"理念不一致——仍把 v2 语法表/素材铁律 v5/间距审美 v10/风格选型整套常驻 system，既占 token 又让 persona 读起来是"排版专家手册"而非通用助手；
+- WRITE_INSTRUCTION「只输出代码块、不要解释」压过 persona 允许的 ≤2 行说明，成稿观感机器化（splitAssistant 早已支持 prose+```v2 共存，技术上无必要禁说明）；
+- 澄清虽是 persona 层面允许多轮，但 PREP 的"不明确→问一轮即结束 / 明确→READY"二元措辞促成"一轮就开工"，未真正理解就出稿；
+- SVG_SYSTEM_PROMPT 只写 ≥6 元素等最低门槛，把"能通过"当"该达到"，无构图/明暗/材质/细节密度要求；
+- gen_svg 是单向一次性调用，说明不足只能硬画/画歪，子智能体无任何通道向"写了这行占位的主模型"追问；
+- 浏览器 mock（示例/违规按钮、SAMPLE/BAD、样例池）在桌面产品中无用户价值，还让 E2E 语义依赖点按钮。
+
+实现：
+1. **persona 精简**：`src/lib/persona.ts` PERSONA_RULES 重写为 ~30%——通用助手身份（"像任何好用的助手一样自然对话…由你自主判断"）+ 对话/创作判断 + 理解型澄清 + 创作细则指针 + 输出协议（允许 ```v2 前自然说明）；删除常驻的 v2 语法表/素材铁律/间距审美/结构/风格细则。兼容导出 buildSystemPrompt/KnowledgePick 保留（live 脚本引用）。
+2. **工艺细则迁知识库**：新增 `src/knowledge/排版引擎/engine-write-protocol.md`（桌面 compose v2 引擎唯一权威协议：产出形态/语法表/美术图位与照片位/结构语气审美/风格声明）；`retrieval.ts` 注册表把「排版引擎」组置顶（防 3500 字截断吞掉）、新增 `loadEngineProtocol()`；`App.tsx` prep.ready 撰写路径若 digest 未含引擎协议则 `loadEngineProtocol` 强制附加（compose 正确性不依赖模型自觉 load）。
+3. **输出/澄清（2.1/2.2）**：`prep.ts` PREP_INSTRUCTION 改为"必取 engine-write-protocol + 按需取 type/style/comp/copy；未理解可跨轮自然追问，理解或授权后 READY"；WRITE_INSTRUCTION 改为"正文 ```v2 围栏，正文前可自然说明"。
+4. **SVG 复杂度契约（3.1）**：`chat.rs` SVG_SYSTEM_PROMPT 重写为复杂度契约（分层构图/物体结构轮廓与明暗体积/材质纹理/细节密度：横幅 20+/小图 10+，≥6 只是门槛）；补单测 `svg_prompt_requires_layered_complexity`。
+5. **子问主有界回问（3.2）**：`chat.rs` SVG 提示第 10 条 CLARIFY 追问协议；`extract_clarify` 识别 `CLARIFY:`（单测 `clarify_extracted_from_image_agent_reply`）；gen_svg 重构为取全文→CLARIFY 优先返回/否则抽 SVG（删重复 complete_svg，svg_from_response 转 #[cfg(test)]）；新增 `refine_brief` 命令（主模型 cfg.model 把说明补成可作画 brief）+ 注册 lib.rs 14 命令；`image-agent.ts` generateSvg 检测 CLARIFY → invoke refine_brief → 重试 gen_svg 一次，仍追问则按失败处理。
+6. **删用户可见 mock（4）**：`ChatPane.tsx` 移除「示例：开学典礼宣传」「演示：违规输出检测」按钮与 MOCK_TOPICS import；QUICK_PROMPTS 保留。`chat.ts` mock/SAMPLE/BAD、样例 SVG 池、`needs.ts` 保留为内部测试桩；`verify-ui.mjs` S1/S1.9/S2 触发从点 `.chip` 改为 `sendPrompt()` 输入框发文本。
+7. **验证闸门**：`live-conformance.mjs` 注入 engine-write-protocol 全文进 system（等价 prep 已取用，否则精简 persona 下模型不知道 v2 语法）+ **修复既有历史累积 bug**（原 chatUntilArticle 第 2 轮用"请勿再澄清…"覆盖原始需求、丢 userA → 模型瞎选风格/无照片位；改累积对话历史）。
+
+验证：
+- `npx tsc --noEmit` / `pnpm build`：exit 0。
+- `cargo test --lib`：40 passed / 0 failed / 4 ignored（+2：SVG 复杂度契约、CLARIFY 提取）。
+- `node scripts/compose-check.mjs`：COMPOSE OK。
+- `node scripts/verify-ui.mjs docs/artifacts`（vite:1420 纯浏览器 mock）：VERIFY OK（S1/S1.9/S2 已走 sendPrompt 文本驱动；S1.8 五 data 素材、S2 检出 4 问题、S7/S8/S9 全绿）。
+- 真实模型 `node scripts/live-conformance.mjs`：**CONFORM OK**——A（军训慰问，校园 7 照片位，无兜底泄漏，无"未收录"回退，虚线占位渲染）；B（咖啡上新，[[img]]=4/[[deco]]=1、0 照片位、0 泄漏、风格被识别）。证明精简 persona + 引擎协议注入下产物仍合规。
+- 修复 live-conformance 历史 bug 后该脚本现能正确模拟多轮（此前第 28 轮场景 A 因模型首轮直出而掩盖此缺陷）。
+- REQUIREMENTS/STRUCTURE/PROGRESS/PROGRESS-LITE/docs(ai-context 四份+inventory) 已同步。待提交。
+- [Build 补记 2026-09-08 00:15] 第 29 轮后全功能 release 重建——`pnpm tauri build --bundles nsis`：release exe 14.9MB + setup 4.3MB（含 29 轮 persona 精简/引擎协议知识/refine_brief/复杂度契约/mock 删按钮改动）；release exe 启动冒烟存活后关闭 OK（libpng iCCP sRGB 警告为图标元数据无害）。
+- [规则] 用户 2026-09-08 明确"每次更新都需要更新这里的桌面版"——新增 **CLAUDE.md 铁律 7 + REQUIREMENTS 〇节 2（永久禁令）**：凡代码变更验证通过后必须 `pnpm tauri build --bundles nsis` 重建 release + 启动冒烟，target/release 始终与代码同步（第 29 轮曾漏建，用户指出后补建）。
 
 ### [New Feature] 第 28 轮：真实产物合格性修复 + 验收闸门（用户实机审计驱动）
 

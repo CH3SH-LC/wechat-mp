@@ -6,8 +6,8 @@ import PreviewPane from './components/PreviewPane'
 import SettingsPanel from './components/SettingsPanel'
 import SessionRail from './components/SessionRail'
 import { PERSONA_RULES, buildRegistrySystem } from './lib/persona'
-import { buildRegistry, ensureKnowledgeLoaded } from './lib/retrieval'
-import { extractHtml, splitAssistant } from './lib/extract'
+import { buildRegistry, ensureKnowledgeLoaded, loadEngineProtocol } from './lib/retrieval'
+import { collapseAssistantDraft, extractHtml, splitAssistant } from './lib/extract'
 import { composeMarkdown } from './lib/compose'
 import { themeDeclaration } from './lib/palettes'
 import { hasPlaceholders, materializePlaceholders } from './lib/image-agent'
@@ -17,6 +17,7 @@ import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
 import { isCreateRequest } from './lib/needs'
 import { WRITE_INSTRUCTION, runPrep } from './lib/prep'
 import type { PrepOutcome } from './lib/prep'
+import { MAX_AUTO_REVISES, buildReviseContent, fixableWarnings } from './lib/revise'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
 import './App.css'
 
@@ -248,12 +249,15 @@ export default function App() {
 
     // system = PERSONA_RULES + 知识注册表（目录，≤3500 字符）；加载失败退回纯 persona（不挡对话）
     let system: string
+    let sessionNote = ''
     try {
       const registry = await buildRegistry()
-      setNote(`注册表就绪 · ${registry.length} 字符目录 · 模型按需取用`)
+      sessionNote = `注册表就绪 · ${registry.length} 字符目录 · 模型按需取用`
+      setNote(sessionNote)
       system = buildRegistrySystem(registry)
     } catch {
-      setNote('知识库加载失败，已退回通用人设')
+      sessionNote = '知识库加载失败，已退回通用人设'
+      setNote(sessionNote)
       system = PERSONA_RULES
     }
 
@@ -268,6 +272,10 @@ export default function App() {
     // 创作前置判定：明确写推文，或历史最后一条助手反问过（用户在补需求）→ 桌面先跑 prep
     const lastAssistantHist = [...history].reverse().find((m) => m.role === 'assistant')
     const needPrep = isCreateRequest(raw) || (lastAssistantHist?.content.includes('？') ?? false)
+    // 第 31 轮：历史中任一条用户消息是创作请求 → 本会话处于创作态。即使本轮 needPrep=false
+    // （如继续追问/回复澄清的延续句不命中创作词），模型仍可能在回复里直接产出 ```v2 正文，
+    // 若无引擎协议会写不出 ::: photo / [[img]] / [[theme]] → 美术素材与照片位全灭。
+    const creativeSession = history.some((m) => m.role === 'user' && isCreateRequest(m.content))
 
     // prep 阶段累积消息（含已执行 tool 结果）；默认即 baseMsgs（无 prep 直接走流式）
     let streamMsgs: ChatMsg[] = baseMsgs
@@ -281,9 +289,17 @@ export default function App() {
       }
       if (prep.mode === 'prep' && prep.ready) {
         // READY：把实际取用知识点摘要 + 撰写指令拼进流式续写（不透传工具回合消息）
-        const digestNote = prep.digest
+        // 第 29 轮：persona 已精简，v2 契约迁知识库——digest 若缺 engine-write-protocol 则强制附加
+        // （引擎协议是 compose 正确性的确定性来源，不依赖模型是否自觉 load；loadEngineProtocol 只读缓存）
+        let digestNote = prep.digest
           ? `\n\n## 已取用知识点（来自知识工具，作为本次创作依据，冲突以库为准）\n${prep.digest}\n`
           : ''
+        if (!digestNote.includes('engine-write-protocol')) {
+          const proto = await loadEngineProtocol()
+          if (proto) {
+            digestNote += `\n\n## 排版引擎协议（必读：v2 语法/美术占位/风格声明/质量底线，冲突以本协议为准）\n${proto}\n`
+          }
+        }
         streamMsgs = [...baseMsgs, { role: 'user', content: digestNote + WRITE_INSTRUCTION }]
       } else if (prep.mode === 'prep' && !prep.ready) {
         // 模型输出澄清问题（未取工具或未收敛）：追加为助手消息，不做预览；意外含 ```v2 则渲染
@@ -296,6 +312,27 @@ export default function App() {
         setBusy(false)
         if (currentId) persistNow(currentId, [...history, userMsg, clarifyMsg])
         return
+      }
+    }
+
+    // 第 31 轮：创作会话的延续回合（needPrep=false 未走 prep，如"哪里缺乏内容了"这类追问）
+    // 也可能直接产出 ```v2 正文；若上下文无引擎协议，模型写不出 ::: photo / [[img]] / ::: art /
+    // [[theme]] → 美术素材与照片位缺失。给这类回合兜底附加协议（仅当正文撰写可能发生且尚未含协议时）。
+    if (
+      inTauri() &&
+      creativeSession &&
+      !needPrep &&
+      !streamMsgs.some((m) => m.content?.includes('engine-write-protocol'))
+    ) {
+      const proto = await loadEngineProtocol()
+      if (proto) {
+        streamMsgs = [
+          ...streamMsgs,
+          {
+            role: 'user',
+            content: `\n（若本回合你决定撰写 v2 正文围栏，以下为本地渲染引擎协议，按它产出 v2 语法与美术占位/照片位）\n## 排版引擎协议\n${proto}\n`,
+          },
+        ]
       }
     }
 
@@ -312,36 +349,97 @@ export default function App() {
       return
     }
     stopRef.current = null
-    // 流结束：素材生成（若正文含图位占位）→ compose 预览 → 终检；素材生成期间保持 busy="生成中"；纯对话不触碰预览
-    const draft = draftRef.current
-    const { v2 } = splitAssistant(draft)
-    if (v2 && hasPlaceholders(v2)) {
-      const matured = await materializePlaceholders(v2, themeDeclaration(v2))
-      const p = await renderV2(matured)
-      if (p) {
-        const seq = ++artSeqRef.current
-        if (artSeqRef.current === seq) {
-          setHtml(p.html)
-          setQuality(checkHtml(p.html))
-          setWarnings(p.warnings)
+    // ---- 流结束：自动质检自检（第 32 轮）→ 终稿预览 → 落库 ----
+    // 归一叠稿（一个回合多篇 ```v2 时保留末篇+说明文字，避免污染历史/预览），取末个 v2 为候选正文。
+    // 候选经引擎质检：仍含"可修复质量项"（组件化/素材/气泡角饰）且有界内 → 把问题清单喂回模型，
+    // 重写同一助手气泡；纯对话 / 无 v2 / 达到上限 / 用户停止则结束。这是产物质量门禁，非对话状态机。
+    let draftRaw = collapseAssistantDraft(draftRef.current)
+    let done = false
+    let aborted = false
+    for (let round = 0; round <= MAX_AUTO_REVISES && !done; round++) {
+      const { v2 } = splitAssistant(draftRaw)
+      if (!v2) {
+        // 无 v2（纯对话 / ```html 直通）：沿用旧预览逻辑，不进自检
+        const final = resolvePreview(draftRaw)
+        if (final) {
+          const seq = ++artSeqRef.current
+          const html2 = final.arts.length ? await renderArtPlaceholders(final.html, final.arts) : final.html
+          if (artSeqRef.current === seq) {
+            setHtml(html2)
+            setQuality(checkHtml(html2))
+            setWarnings(final.warnings)
+          }
         }
+        done = true
+        break
       }
-    } else {
-      const final = resolvePreview(draft)
-      if (final) {
-        const seq = ++artSeqRef.current
-        const html2 = final.arts.length ? await renderArtPlaceholders(final.html, final.arts) : final.html
-        if (artSeqRef.current === seq) {
-          setHtml(html2)
-          setQuality(checkHtml(html2))
-          setWarnings(final.warnings)
+      // 素材生成 + 排版质检（含图位占位才先交给图像子智能体）
+      let preview: { html: string; warnings: string[] } | null
+      if (hasPlaceholders(v2)) {
+        const matured = await materializePlaceholders(v2, themeDeclaration(v2))
+        preview = await renderV2(matured)
+      } else {
+        const c = resolvePreview(draftRaw)
+        preview = c ? { html: c.arts.length ? await renderArtPlaceholders(c.html, c.arts) : c.html, warnings: c.warnings } : null
+      }
+      const fix = preview ? fixableWarnings(preview.warnings) : []
+      const atCap = round === MAX_AUTO_REVISES
+      if (!preview || fix.length === 0 || atCap || !busyRef.current) {
+        if (preview) {
+          const seq = ++artSeqRef.current
+          if (artSeqRef.current === seq) {
+            setHtml(preview.html)
+            setQuality(checkHtml(preview.html))
+            setWarnings(preview.warnings)
+          }
         }
+        if (!busyRef.current) aborted = true
+        done = true
+        break
       }
+      // 自动修订一版：清空气泡与旧预览 → 质检问题清单喂回 → 重写流
+      setNote('自动质检：根据问题修订正文中…')
+      setHtml(null)
+      setQuality(null)
+      setWarnings([])
+      draftRef.current = ''
+      updateAssistant('')
+      const revise = buildReviseContent(v2, fix)
+      try {
+        if (inTauri()) {
+          await sendChatRust([...streamMsgs, { role: 'user', content: revise }])
+        } else {
+          await new Promise<void>((resolve) => {
+            stopRef.current = sendChatMock(
+              [...streamMsgs, { role: 'user', content: revise }],
+              (d) => updateAssistant(draftRef.current + d),
+              resolve,
+            )
+          })
+        }
+      } catch (err) {
+        if (!busyRef.current) {
+          aborted = true
+          done = true
+          break
+        }
+        fail(err)
+        return
+      }
+      stopRef.current = null
+      if (!busyRef.current) {
+        aborted = true
+        done = true
+        break
+      }
+      draftRaw = collapseAssistantDraft(draftRef.current)
     }
+    setNote(sessionNote)
     busyRef.current = false
     setBusy(false)
-    if (currentId) {
-      const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: draftRef.current }]
+    if (currentId && !aborted) {
+      const finalRaw = collapseAssistantDraft(draftRaw)
+      const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: finalRaw }]
       persistNow(currentId, saveMsgs)
     }
   }

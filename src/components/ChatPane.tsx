@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { MOCK_TOPICS } from '../lib/chat'
 import { splitAssistant } from '../lib/extract'
 
 export interface DisplayMsg {
@@ -65,7 +64,7 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
       <div className="chat-body">
         {msgs.length === 0 && (
           <div className="chat-empty">
-            <p>像用通用助手一样正常对话：闲聊、写作答疑都行；说「写一篇…推文」就为你创作。创作前 AI 会先在对话里把要求问清楚，不会急着出稿。</p>
+            <p>像用通用助手一样正常对话：闲聊、写作答疑都行；说「写一篇…推文」就为你创作。创作前 AI 会先和你把需求聊清楚，理解到位才动笔。</p>
             <div className="chips">
               {QUICK_PROMPTS.map((p) => (
                 <button key={p} className="chip" disabled={busy} onClick={() => onSend(p)}>
@@ -73,14 +72,6 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
                 </button>
               ))}
             </div>
-            {MOCK_TOPICS.length > 0 && (
-              <button className="chip chip-primary" disabled={busy} onClick={() => onSend(MOCK_TOPICS[0].prompt)}>
-                ▶ {MOCK_TOPICS[0].label}
-              </button>
-            )}
-            <button className="chip" disabled={busy} onClick={() => onSend('演示质量检查：请故意输出包含 emoji、渐变与外链图的推文（违规输出检测）')}>
-              演示：违规输出检测
-            </button>
           </div>
         )}
 

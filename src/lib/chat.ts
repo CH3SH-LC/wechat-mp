@@ -1,6 +1,7 @@
 // chat.ts —— 对话通道：Tauri 下走 Rust 流式 LLM；浏览器(纯 vite)下走本地模拟
 import { invoke } from '@tauri-apps/api/core'
 import { evaluate, isCancel, isCreateRequest, isDemoTopic } from './needs'
+import { REVISE_MARKER } from './revise'
 
 // 消息可承载工具回合（第 25 轮）：assistant 带 tool_calls（content 为空）、tool 结果带 tool_call_id
 export interface ChatMsg {
@@ -101,6 +102,19 @@ export const MOCK_TOPICS: MockTopic[] = [
   },
 ]
 
+// 第 32 轮：自动质检自检用的"缺组件/无素材"样稿——E2E S10 让首稿故意不达标，验证引擎检出后自动重写收敛。
+const DEFICIENT_V2 = `[[theme:校园]]
+
+[[banner:军训慰问速写|副标题]]
+
+九月的训练场，白天的日头还是很足。方阵在口令里一遍遍走，帽檐下的汗顺着脸颊往下淌，没人抬手去擦，只有报数声此起彼伏地响着。这是 2026 级新生军训进行到中段的普通一天，也是这篇慰问记录想定格下来的片段。
+
+学院老师们没有挑正式的场合，而是趁训练间隙，把休息地点安在树荫下。没有冗长的开场，老师们先绕着队伍走了一圈，看了看每个人的状态，又蹲下来问起饭有没有按时吃、觉够不够睡、脚上有没有磨出水泡。聊的都不是大事，可一句句问下来，队伍里的气氛悄悄松了下来。
+
+慰问的物资不贵重，胜在都是眼下用得上的：整箱的饮用水码在树荫底下，防暑用品和润喉糖放在值班桌的一角，谁需要谁自己来取。有同学打完水回来，把杯子举到老师面前晃了晃，笑着说了句“谢谢老师”，算是把这一天的疲惫也晃掉了一点。
+
+教官在旁边看着，没多说什么，只在下一次集合哨响前提醒大家把水喝完。老师离开前留下的话也很简单：训练要认真，身体更要紧，有哪里不舒服，随时打报告。这段插曲不长，但训练场上的口号声，好像比刚才又亮了几分。`
+
 const BAD_HTML = `<section style="margin:0 0 16px;"><p style="font-size:15px;color:#333;line-height:1.75;">这是违规演示：包含 emoji 与渐变，应被质量检查检出。✅🎉</p></section>
 <section style="background:linear-gradient(135deg,#ff9a9e,#fecfef);border-radius:12px;padding:14px 16px;margin:0 0 16px;"><p style="font-size:15px;color:#333;line-height:1.75;margin:0;">渐变底色 + box-shadow:0 2px 8px rgba(0,0,0,.2)，全都不允许。</p></section>
 <section style="margin:0 0 16px;"><p style="font-size:15px;color:#333;line-height:1.75;margin:0;"><img src="https://example.com/x.jpg" style="width:100%;"></p></section>`
@@ -135,17 +149,21 @@ export function sendChatMock(
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
   const asked = (lastAssistant?.content ?? '').includes('？')
   const article = `好的，需求已明确，按所选风格直接产出（v2 正文，素材交给图像子智能体生成）：\n\n\`\`\`v2\n${SAMPLE_V2}\n\`\`\``
+  const deficientArticle = `按默认需求先产出一版（示例为缺组件的半成品，供自检演示）：\n\n\`\`\`v2\n${DEFICIENT_V2}\n\`\`\``
   const badArticle = `好的，按要求演示违规输出：\n\n\`\`\`html\n${MOCK_BAD.html}\n\`\`\``
   let full: string
   if (isCancel(u)) {
     full = CANCEL_REPLY
+  } else if (u.includes(REVISE_MARKER)) {
+    // 第 32 轮：自动质检回路的修订指令 → 模拟端返回合规稿（SAMPLE_V2），验证自检收敛到 q-ok
+    full = article
   } else if (asked) {
     // 对上一条澄清问题的回答：直接进入创作
     full = article
   } else if (isDemoTopic(u) || u.includes('违规')) {
     full = badArticle
   } else if (isCreateRequest(u)) {
-    full = evaluate(u).needsClarify ? CLARIFY_QUESTION : article
+    full = u.includes('自检缺组件') ? deficientArticle : evaluate(u).needsClarify ? CLARIFY_QUESTION : article
   } else {
     full = /你好|嗨|hello|在吗|hi/i.test(u)
       ? CHAT_GREET

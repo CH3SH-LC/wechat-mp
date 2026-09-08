@@ -172,6 +172,7 @@ function shortHead(e: KnowledgeEntry, max = 18): string {
 
 // 子方向展示优先级（注册表按此排序，保证核心创作类别不被截断在末尾）
 const REGISTRY_GROUP_ORDER = [
+  '排版引擎', // 第 29 轮：本地 compose 引擎协议（v2 语法/素材占位/风格声明）——创作必读，置顶防截断
   '文本/内容类型',
   '文本/文案',
   '文本/合规',
@@ -259,6 +260,16 @@ function findEntry(entries: KnowledgeEntry[], raw: string): KnowledgeEntry | nul
     entries.find((e) => e.head.replace(/^#+\s*/, '').toLowerCase().includes(raw.toLowerCase())) ??
     null
   )
+}
+
+/**
+ * 第 29 轮：本地排版引擎协议全文（engine-write-protocol）——compose 正确性的确定性来源。
+ * 创作撰写阶段若 digest 未含该协议（如 prep 未取用/降级），由 App 强制附加进上下文，不依赖模型自觉 load。
+ */
+export async function loadEngineProtocol(): Promise<string | null> {
+  const entries = await ensureKnowledgeLoaded()
+  const e = entries.find((x) => x.name === 'engine-write-protocol')
+  return e ? e.text : null
 }
 
 /**

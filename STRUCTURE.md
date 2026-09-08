@@ -1,6 +1,6 @@
 # wechat-mp-desktop 项目结构
 
-> 最后更新：2026-09-06
+> 最后更新：2026-09-07
 > 新增、删除、重命名文件或目录时必须同步更新本文件。
 
 ---
@@ -19,43 +19,45 @@ wechat-mp-desktop/
 ├── vite.config.ts         # Vite 配置（端口 1420 strictPort，Tauri 专用）
 ├── public/                # 静态资源（空占位）
 ├── scripts/
-│   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright）
+│   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright；S1-S9 回归 + S10 自动质检自检收敛）
 │   ├── compose-check.mjs  # composeMarkdown 转换器断言（node 直跑 TS）
 │   ├── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
 │   ├── live-knowledge-probe.mjs # 三层知识路由注入的真实模型验证（读库点文件 → persona → 模型 → compose）
 │   ├── live-style-choice.mjs    # 风格选型验证（同质注入 × 三主题，检查 theme 选择与反模板化）
-│   └── live-conformance.mjs # 第28轮 真实模型合规验收闸门：A 照片位(::: photo)/B 插画([[img]]) + 风格别名 + 无兜底泄漏（真机跑）
+│   └── live-conformance.mjs # 第28轮 真实模型合规验收闸门：A 照片位+装饰插画并存(::: photo + [[img]]/[[deco]]) / B 无照片纯插画 + 风格别名 + 无兜底泄漏（真机跑；第31轮场景A断言并存）
 ├── docs/
 │   ├── REQUIREMENTS-understanding.md  # 需求文档（目标态，2026-09-06 依 8 项意见修订；▲ 标未实现待迭代）
 │   ├── information/     # 需求报告（…quality-r17.md、knowledge-routing.md、style-choice.md、art-concrete.md）
 │   └── artifacts/       # 验证产物归档（E2E 截图 + compose/注入/风格选型样例；verify-ui/compose-check 默认输出至此）
 ├── src/                   # 前端源码
 │   ├── main.tsx           # React 入口
-│   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢
+│   ├── App.tsx            # 主布局：顶栏 + 对话栏 + 预览栏；状态中枢（第30轮：creativeSession 判定——创作会话延续句强制注入引擎协议）
 │   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳）
 │   ├── components/
-│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开+busy 两档）+ 输入（第 23 轮无模式/风格控件）
+│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开+busy 两档）+ 输入（无模式/风格控件、无 mock 演示按钮）
 │   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出/清空/发布草稿箱（桌面）
 │   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
 │   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
 │   ├── lib/
-│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（移植 DSH compose；::: art 素材 + 元素/用量/组件化校验 + 主题色 + ::: photo 照片位占位）
+│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（::: art 素材 + ::: photo 照片位 + 校验）
 │   │   ├── palettes.ts    # 风格主题表（知识库 8 风格色板：日系/国潮/校园/科技/极简/商务/手账/森系）
 │   │   ├── artRender.ts   # SVG 素材 → PNG data URI（canvas 2x；回退 svg data URI）
-│   │   ├── image-agent.ts # 第24轮 图像子智能体编排：hasPlaceholders/materializePlaceholders（图位→gen_svg/样例池→回填 ::: art 块）
-│   │   ├── persona.ts     # 统一系统提示词（对话+创作一体；```v2 协议 + 素材铁律 v5 图位 + 语气/结构/风格 v5 规则 + 知识工具用法 + buildRegistrySystem）
-│   │   ├── needs.ts       # 请求启发式（模拟端近似 + 澄清触发评估：isCreateRequest/isCancel/evaluate）
-│   │   ├── retrieval.ts   # 知识取用：ensureKnowledgeLoaded 懒加载缓存 + buildRegistry（注册表目录，≤3500 字）+ runKnowledgeTool（本地执行 load_knowledge/search_knowledge，供 prep 工具循环）；旧"请求前条件注入 retrieve"已删
-│   │   ├── prep.ts        # 第25轮 创作前置工具循环：runPrep（桌面 tool_calls→runKnowledgeTool→回传；READY/澄清）+ PREP/WRITE_INSTRUCTION
-│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地模拟；ChatMsg 支持 tool 回合（v2+art+theme 样例与违规直通演示）
-│   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2)
+│   │   ├── image-agent.ts # 图像子智能体编排：hasPlaceholders/materializePlaceholders + CLARIFY→refine_brief 有界回问 + 非法结果原样重试一次（瞬态防御）
+│   │   ├── persona.ts     # 统一系统提示词（第29轮精简为通用助手内核：对话/创作判断/理解型澄清/输出协议；工艺细则迁知识库）
+│   │   ├── needs.ts       # 请求启发式（浏览器 mock 近似 + isCreateRequest 真实桌面 prep 触发判定）
+│   │   ├── retrieval.ts   # 知识取用：懒加载 + buildRegistry(注册表，≤3500 字，排版引擎组置顶) + loadEngineProtocol + runKnowledgeTool
+│   │   ├── prep.ts        # 创作前置工具循环：runPrep + PREP/WRITE_INSTRUCTION（理解型澄清/允许正文前说明；空回复重试不泄漏兜底话术）
+│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地 mock（内部测试桩，无用户可见演示入口；第32轮 mock 支持 REVISE_MARKER→合规稿 / 自检缺组件→缺组件样稿）
+│   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2=末个围栏) + collapseAssistantDraft(叠稿归一)
+│   │   ├── revise.ts      # 第32轮 自动质检自检：fixableWarnings(五类可修项) + buildReviseContent + REVISE_MARKER/MAX_AUTO_REVISES=2（产物质量门禁，非对话状态机）
 │   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
 │   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
 │   │   ├── sessions.ts    # 多会话：Tauri→sessions 命令 / 浏览器→localStorage（含旧键迁移）
 │   │   └── settings.ts    # API 设置 + 公众号配置（wx_appid/wx_secret）：Tauri→save/load_settings / 浏览器→localStorage
-│   └── knowledge/         # 知识语料 149 文件（三层：文本/视觉/插图/其它 + 00-GUIDE/design-logic）
+│   └── knowledge/         # 知识语料（文本/视觉/插图/其它 + 00-GUIDE/design-logic + 排版引擎协议）
 │       ├── 00-GUIDE.md    # 三层路由总表
 │       ├── design-logic-components.md
+│       ├── 排版引擎/      # 第29轮新增：engine-write-protocol.md（桌面 compose v2 引擎协议：语法/素材占位/风格/审美）
 │       ├── 文本/ 视觉/ 插图/ 其它/   # 四方面 + 各方向 00-索引 + 点文件
 └── src-tauri/             # Rust 后端
     ├── Cargo.toml         # 依赖：tauri2/reqwest(rustls)/serde + dev tokio
@@ -64,8 +66,8 @@ wechat-mp-desktop/
     ├── icons/             # 应用图标
     └── src/
         ├── main.rs        # 入口（调 lib::run）
-        ├── lib.rs         # Builder + 13 命令注册（chat_stream/gen_svg/prep_turn/publish_draft/export/sessions/settings）+ WxTokenState setup
-        ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式、图像 gen_svg、创作前置 prep_turn（tools/tool_calls）、单测+live
+        ├── lib.rs         # Builder + 14 命令注册（chat_stream/gen_svg/refine_brief/prep_turn/publish_draft/export/sessions/settings）+ WxTokenState setup
+        ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式（字节缓冲按行解码防中文乱码）、图像 gen_svg（复杂度契约+CLARIFY 追问）、refine_brief（主模型补 brief）、创作前置 prep_turn（tools/tool_calls）、单测+live
         ├── export.rs      # 导出 HTML（workspace/exports/，文件名消毒，4 单测）
         ├── sessions.rs    # 多会话（workspace/sessions/<id>.json + state.json；旧 draft 迁移；5 单测）
         ├── settings.rs    # API 设置 + 公众号配置（workspace/settings.json，损坏→默认，2+ 单测）
