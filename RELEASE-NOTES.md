@@ -21,7 +21,8 @@
 
 ## 安装包
 
-- 文件名：`智序_0.1.0_x64-setup.exe`（NSIS）
+- 本地 NSIS 构建产物：`智序_0.1.0_x64-setup.exe`（4.2MB）
+- GitHub Release 下载资产：`zhixu-0.1.0-x64-setup.exe`（GitHub 资产名不支持中文，内容与本地产物相同）
 - 系统要求：Windows 10/11（64 位）；个人开发者未签名，SmartScreen 提示时选「更多信息 → 仍要运行」
 - 数据位置：`文档/wechat-mp-workspace/`（会话/文档/素材/导出/设置），卸载不删除
 

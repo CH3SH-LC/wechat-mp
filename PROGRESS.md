@@ -38,6 +38,7 @@ key 泄露检查（全量）：HEAD 264 跟踪文件 + 全历史 27 commits 逐 
 - 已知备注：NSIS 静默卸载 /S 在无交互会话下未执行文件清理（退出码 0），验证环境的安装实例已手动清理（目录+卸载注册项）；交互式卸载闭环此前在第 6 轮验证过。
 - REQUIREMENTS/PROGRESS-LITE/STRUCTURE 同步完成；发布轮提交与推送结果见条目尾注。
 - 提交与推送（尾注）：发布基线 commit `7a3025f`（54 文件 +3935/-173；含 33/34 轮与 V3-R1~R3 全部累积 + 发布物料 + 四文件同步），补记 commit `21f6c47`（RELEASE-NOTES.md 更新为 0.1.0 正式版说明）。远端 `CH3SH-LC/wechat-mp`（公开，默认分支切换为 **main**）：main = 本桌面版（本地 main 跟踪 origin/main，与远端一致）；旧 DSH 预设内容服务端复制为 **dsh** 分支（c4d9694，与删除前 master 完全相同，skills/test/research/preset.yml 齐全）后删除原 master。提醒：本地旧预设仓库（D:\deepseek-harness\wechat-mp）若再从该目录 `git push origin master` 会重建远端 master，如需继续维护预设请先将其分支改名或改推 dsh。
+- GitHub Release（尾注二）：`v0.1.0`（main，标题「智序 0.1.0（公众号推文助手）」，notes=RELEASE-NOTES.md）→ https://github.com/CH3SH-LC/wechat-mp/releases/tag/v0.1.0 ；安装包资产 `zhixu-0.1.0-x64-setup.exe`（4,420,634B）。踩坑记录：GitHub **release 资产名不支持中文**（上传/改名都会服务端静默剥除 CJK，如 智序_…→_…），故资产用 ASCII 名，本地 NSIS 产物仍为中文文件名（内容相同）；README/RELEASE-NOTES 已注明两者关系（f2bceb6 待推送）。
 
 ### [New Feature] V3-R3：推文素材复用改造——库直通创作 + [[asset]] 引用固化 + 改版影响扫描（V3 设计 D5/D7 落地）
 

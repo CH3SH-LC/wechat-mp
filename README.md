@@ -27,7 +27,7 @@
 
 ### 直接使用（最终用户）
 
-1. 获取 Windows 安装包（NSIS 产物 `智序_<版本>_x64-setup.exe`，如 `智序_0.1.0_x64-setup.exe`），双击安装（个人开发者未签名，SmartScreen 提示时选「更多信息 → 仍要运行」）。
+1. 获取 Windows 安装包：GitHub Release 页（本仓库 Releases → v0.1.0）下载资产 `zhixu-0.1.0-x64-setup.exe`（GitHub 资产名限 ASCII；本地 NSIS 构建产物文件名为 `智序_0.1.0_x64-setup.exe`，内容相同），双击安装（个人开发者未签名，SmartScreen 提示时选「更多信息 → 仍要运行」）。
 2. 打开「公众号推文助手」，右上角「设置」填入你自己的 DeepSeek API Key（到 <https://platform.deepseek.com> 创建），保存。
 3. 在输入框直接说想写什么即可。详细图文教程见软件内「使用手册」。
 

@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-09
+- [Build] GitHub Release v0.1.0 发布（main，标题「智序 0.1.0」）——资产 zhixu-0.1.0-x64-setup.exe 4.2MB；踩坑：GitHub 资产名不支持中文（服务端剥除 CJK），README/RELEASE-NOTES 注明本地中文产物名与 ASCII 资产名关系
 - [Build] 发布推送完成：CH3SH-LC/wechat-mp 默认分支切 main（桌面版 21f6c47，含 0.1.0 发布说明），旧 DSH 预设原样存 dsh 分支（c4d9694）后删 master；RELEASE-NOTES.md 更新 0.1.0
 - [New Feature] 发布轮（29-34 轮 + V3-R1~R3 累积变更统一提交 + 发布物料）：「智序」品牌化（productName 智序/窗口与顶栏/persona 自述/mock 问候/README/手册）+ 使用手册入安装包（manual.rs open_manual + tauri bundle.resources + 顶栏按钮，CDP 实机点击→默认浏览器打开「智序 · 使用手册」验证通过）+ key 泄露全量扫描零命中 + NSIS 智序_0.1.0_x64-setup.exe 4.2MB（使用手册.html 随包确认，安装闭环+启动冒烟）+ E2E S1-S14 全绿×2 + cargo 57+4 零警告
 - [Change] GitHub 远端结构决策（用户拍板）：CH3SH-LC/wechat-mp 被旧 DSH 预设占用 → 预设内容迁远端 dsh 分支保留、桌面版推 main 并切换默认分支；README 关联项目段同步改写
