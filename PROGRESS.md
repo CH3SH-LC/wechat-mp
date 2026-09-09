@@ -37,6 +37,7 @@ key 泄露检查（全量）：HEAD 264 跟踪文件 + 全历史 27 commits 逐 
 - 真实链路（real-world-verify 门禁）：release exe（15,240,192B ≈ 14.5MB）安装闭环——NSIS `智序_0.1.0_x64-setup.exe`（4,420,634B）静默安装至 `%LOCALAPPDATA%\智序\`，确认 **使用手册.html 随包安装**（资源落点=程序目录根，find_manual 首候选命中）；已装 exe 启动冒烟进程存活；WebView2 CDP 接管真实应用 → 「使用手册」按钮可见 → 真实点击 → 无错误 alert → 默认浏览器打开手册（Edge 窗口标题「智序 · 使用手册」）——手册入口全链路真实验证通过。
 - 已知备注：NSIS 静默卸载 /S 在无交互会话下未执行文件清理（退出码 0），验证环境的安装实例已手动清理（目录+卸载注册项）；交互式卸载闭环此前在第 6 轮验证过。
 - REQUIREMENTS/PROGRESS-LITE/STRUCTURE 同步完成；发布轮提交与推送结果见条目尾注。
+- 提交与推送（尾注）：发布基线 commit `7a3025f`（54 文件 +3935/-173；含 33/34 轮与 V3-R1~R3 全部累积 + 发布物料 + 四文件同步），补记 commit `21f6c47`（RELEASE-NOTES.md 更新为 0.1.0 正式版说明）。远端 `CH3SH-LC/wechat-mp`（公开，默认分支切换为 **main**）：main = 本桌面版（本地 main 跟踪 origin/main，与远端一致）；旧 DSH 预设内容服务端复制为 **dsh** 分支（c4d9694，与删除前 master 完全相同，skills/test/research/preset.yml 齐全）后删除原 master。提醒：本地旧预设仓库（D:\deepseek-harness\wechat-mp）若再从该目录 `git push origin master` 会重建远端 master，如需继续维护预设请先将其分支改名或改推 dsh。
 
 ### [New Feature] V3-R3：推文素材复用改造——库直通创作 + [[asset]] 引用固化 + 改版影响扫描（V3 设计 D5/D7 落地）
 

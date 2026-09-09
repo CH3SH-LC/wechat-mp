@@ -5,6 +5,7 @@
 
 ---
 ## 2026-09-09
+- [Build] 发布推送完成：CH3SH-LC/wechat-mp 默认分支切 main（桌面版 21f6c47，含 0.1.0 发布说明），旧 DSH 预设原样存 dsh 分支（c4d9694）后删 master；RELEASE-NOTES.md 更新 0.1.0
 - [New Feature] 发布轮（29-34 轮 + V3-R1~R3 累积变更统一提交 + 发布物料）：「智序」品牌化（productName 智序/窗口与顶栏/persona 自述/mock 问候/README/手册）+ 使用手册入安装包（manual.rs open_manual + tauri bundle.resources + 顶栏按钮，CDP 实机点击→默认浏览器打开「智序 · 使用手册」验证通过）+ key 泄露全量扫描零命中 + NSIS 智序_0.1.0_x64-setup.exe 4.2MB（使用手册.html 随包确认，安装闭环+启动冒烟）+ E2E S1-S14 全绿×2 + cargo 57+4 零警告
 - [Change] GitHub 远端结构决策（用户拍板）：CH3SH-LC/wechat-mp 被旧 DSH 预设占用 → 预设内容迁远端 dsh 分支保留、桌面版推 main 并切换默认分支；README 关联项目段同步改写
 - [New Feature] V3-R3 推文素材复用改造——素材库直通创作：引擎协议§三改"素材智能体制作入库、你检索复用"(新增 [[asset:分类|名称|用途]] 库引用语法、风格仅软参考、绝不手写 SVG)、persona 配图条款、image-agent 升级素材解析器([[asset]] 按 id/名查库内联计 used+residual、传统占位先语义检索库强命中才转引用、未命中才委托 gen_svg、桌面现场补做自动入库 origin=article-fallback)、App 终稿固化快照(assetSnapshots {svg,ver} 随文档保存)+"库素材引用缺失"可修复警告、revise 增 key、chat.rs PREP_TOOLS 增 search_assets + gen_svg 增 divider/heading kind、prep 本地执行 search_assets 进 digest、mock 增素材库复用样本、工坊替换源影响扫描+逐篇"用新版更新"重渲染文档(快照 ver 跟进)、E2E S14、live-conformance 场景 C(真实模型引用 [[asset:bubble|…]] 复用不手写 SVG)；验证 E2E S1-S14 VERIFY OK、live A/B/C CONFORM OK、cargo 54、compose OK、release exe15.3+setup4.4 冒烟 OK
