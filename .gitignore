@@ -26,3 +26,6 @@ dist-ssr
 # Tauri / Rust
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# E2E/导出整图样例（占用大；证据截图已按名归档 docs/artifacts）
+docs/artifacts/tuiwen-*.png

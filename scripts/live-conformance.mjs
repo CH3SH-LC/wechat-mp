@@ -109,6 +109,9 @@ if (bodyA) {
   const noteN = (bodyA.match(/此处建议配图/g) || []).length
   check('A: 产出 ::: photo 照片位', photoN >= 1, 'photo=' + photoN + ' note=' + noteN)
   check('A: 照片位与装饰插画并存（[[img]]/[[deco]]≥1）', imgN + decoN >= 1, 'photo=' + photoN + ' [[img]]=' + imgN + ' [[deco]]=' + decoN)
+  const bubbleA = (bodyA.match(/^>\s*\[!/gm) || []).length
+  const bubbleTitleA = /^>\s*\[![A-Z]+\|?[^\]]*\]\s*\S+/m.test(bodyA)
+  check('A: 含 ≥1 提示气泡且带标题句（第33轮小组件写法）', bubbleA >= 1 && bubbleTitleA, 'bubble=' + bubbleA)
   const r = composeMarkdown(bodyA, {})
   const unknown = r.warnings.filter((w) => w.includes('未收录'))
   const hasTheme = /\[\[theme:([^\]]+)\]\]/.exec(bodyA)
@@ -137,9 +140,98 @@ if (bodyB) {
   console.log('  B markers: [[img]]=' + imgN + ' [[deco]]=' + decoN + ' photo=' + photoN + ' note=' + noteN + ' warnings=' + r.warnings.length)
   check('B: 用图位占位（[[img]]/[[deco]]）而非文字说明', imgN + decoN >= 1 && noteN === 0, 'img=' + imgN)
   check('B: 不用照片位冒充（用户无照片）', photoN === 0)
+  const bubbleB = (bodyB.match(/^>\s*\[!/gm) || []).length
+  const bubbleTitleB = /^>\s*\[![A-Z]+\|?[^\]]*\]\s*\S+/m.test(bodyB)
+  check('B: 含 ≥1 提示气泡且带标题句（第33轮小组件写法）', bubbleB >= 1 && bubbleTitleB, 'bubble=' + bubbleB)
   check('B: 声明风格被识别', !r.warnings.some((w) => w.includes('未收录')))
 } else {
   check('B: 产出 v2 围栏正文', false)
+}
+
+// V3-R3：新增场景 C——给出"个人素材库清单"，真实模型应先引用库素材（[[asset:…]]）而非一律占位
+console.log('== 场景 C：素材库清单 → 模型引用 [[asset]] 复用 ==')
+const ASSET_DIGEST_C =
+  '\n## 个人素材库（已入库可复用素材；命中即用 [[asset:分类|名称|用途说明]] 引用，风格只是参考）\n' +
+  '- bubble｜bubble-flower-corner｜右下角一朵小花的气泡角饰｜右下角画一朵五瓣小花、花心金黄，其余留白，适用于 KEY/TIP 气泡右下角（usage=deco）\n' +
+  '- divider｜divider-fern-line｜蕨叶细横分割线｜两侧对称的细叶横条，用于段落换场（usage=wide）\n'
+
+async function chatC(history) {
+  const key = cred()
+  const base = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com'
+  const model = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash'
+  const res = await fetch(base + '/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key },
+    body: JSON.stringify({
+      model,
+      stream: true,
+      reasoning_effort: 'max',
+      max_tokens: 64000,
+      messages: [
+        { role: 'system', content: PERSONA_RULES + '\n\n## 已取用：排版引擎协议（本轮创作依据，冲突以本协议为准）\n' + ENGINE_PROTOCOL + REGISTRY + ASSET_DIGEST_C },
+        ...history,
+      ],
+    }),
+  })
+  if (!res.ok) throw new Error('HTTP ' + res.status + ': ' + (await res.text()).slice(0, 300))
+  const text = await res.text()
+  let out = ''
+  for (const line of text.split('\n')) {
+    const l = line.trim()
+    if (!l.startsWith('data:')) continue
+    const d = l.slice(5).trim()
+    if (!d || d === '[DONE]') continue
+    try {
+      const j = JSON.parse(d)
+      const c = j.choices?.[0]?.delta?.content
+      if (c) out += c
+    } catch {
+      /* keep-alive */
+    }
+  }
+  return out
+}
+
+const userC =
+  '写一篇咖啡店新品上新的宣传推文，日系风，700 字左右。配图要求：气泡装饰优先复用你个人素材库里已有的素材（上面清单里右下角一朵小花的气泡角饰正好合适，直接引用它；分割线若有合适位置也可引用清单里的蕨叶分割线），正文里对该气泡先用 [[asset:bubble|bubble-flower-corner|右下角一朵小花的气泡角饰]] 定义、再用 > [!KEY|bubble-flower-corner] 引用；其余实在没有合适库素材的插画位才用 [[img]]/[[deco]] 占位。已提供全部必要信息：请直接撰写正文，只输出一个 ```v2 代码块，不要澄清、不要解释。'
+const wc = await chatUntilArticleCustom(userC, chatC)
+const bodyC = wc.body
+console.log('  reply len=' + wc.reply.length + ' fenceV2=' + !!wc.body)
+check('C: 无兜底话术泄漏', !wc.reply.includes('（请补充需求，我再开始创作）'))
+if (bodyC) {
+  const assetRef = (bodyC.match(/\[\[asset:bubble\|bubble-flower-corner\|/g) || []).length
+  const bubbleUsesCorner = (bodyC.match(/^>\s*\[!KEY\|bubble-flower-corner\]/gm) || []).length
+  check('C: 复用库素材引用 [[asset:bubble|bubble-flower-corner|…]]', assetRef >= 1, 'asset=' + assetRef)
+  check('C: 气泡引用同名称角饰', bubbleUsesCorner >= 1, 'bubble=' + bubbleUsesCorner)
+  check('C: 未手写 SVG（无 <svg 原文）', !bodyC.includes('<svg'))
+  // 桌面"素材解析器"职责（把 [[asset]] 引用落位为素材块；真实实现已由 E2E S14 验证）：
+  // 这里最小复刻——把库引用行替换为对应的 ::: art deco 块（附库内最小合法 SVG），再交 compose 断言引擎可用
+  const DUMMY_LIB_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" fill="none"><circle cx="240" cy="220" r="40" fill="#f2c76e"/><circle cx="228" cy="196" r="9" fill="#e8b48a"/><circle cx="252" cy="208" r="9" fill="#e8b48a"/><circle cx="240" cy="232" r="9" fill="#e8b48a"/><path d="M240 180 q8 18 0 40 q-8 -22 0 -40z" fill="#c96f4a"/><rect x="120" y="120" width="60" height="60" rx="10" fill="#5f8d8a"/></svg>'
+  const parsedForCompose = bodyC.replace(/^\[\[asset:bubble\|bubble-flower-corner\|[^\]]*\]\]$/gm, (ln) => {
+    if (ln.includes('[[asset:bubble|bubble-flower-corner|')) {
+      return '::: art deco bubble-flower-corner\n' + DUMMY_LIB_SVG + '\n:::'
+    }
+    return ln
+  })
+  const r = composeMarkdown(parsedForCompose, {})
+  check('C: compose 无"气泡角饰未定义"警告', !r.warnings.some((w) => w.includes('气泡角饰')), 'warnings=' + r.warnings.length)
+} else {
+  check('C: 产出 v2 围栏正文', false)
+}
+
+async function chatUntilArticleCustom(user, chatFn) {
+  const history = [{ role: 'user', content: user }]
+  let last = ''
+  for (let t = 0; t < 2; t++) {
+    const reply = await chatFn(history)
+    last = reply
+    const f = reply.match(/```v2\n([\s\S]*?)```/)
+    if (f) return { reply, body: f[1] }
+    history.push({ role: 'assistant', content: reply })
+    history.push({ role: 'user', content: '请勿再澄清：以上要求已给全，请直接撰写正文，只输出一个 ```v2 代码块，不要再问。' })
+  }
+  return { reply: last, body: '' }
 }
 
 console.log(failed === 0 ? 'CONFORM OK' : `CONFORM FAILED (${failed})`)

@@ -102,6 +102,24 @@ export const MOCK_TOPICS: MockTopic[] = [
   },
 ]
 
+// V3-R3：模拟"素材库复用"——把气泡角饰占位改为引用素材库里最新入库的 bubble 素材
+// （E2E S14 先用素材工坊制作入库一个气泡素材，再走本条链路验证 [[asset]] 引用被解析复用 + 固化快照）。
+function buildReuseV2(): string {
+  let bubbleId = 'blossom'
+  try {
+    const lib = JSON.parse(localStorage.getItem('wxmp-assets-v1') || '{}')
+    const metas = Object.values((lib.items || {}) as Record<string, { meta: { id: string; category: string; createdAt: string } }>).map((a) => a.meta)
+    const top = metas.filter((m) => m.category === 'bubble').sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0]
+    if (top) bubbleId = top.id
+  } catch {
+    // 无库则退回 blossom 传统路径（未被解析时引擎会按未定义角饰警告）
+  }
+  return SAMPLE_V2.replace('[[deco:blossom|花簇小角饰]]', `[[asset:bubble|${bubbleId}|右下角一朵小花的气泡角饰（KEY 气泡用，素材库复用）]]`).replace(
+    '> [!KEY|blossom]',
+    `> [!KEY|${bubbleId}]`,
+  )
+}
+
 // 第 32 轮：自动质检自检用的"缺组件/无素材"样稿——E2E S10 让首稿故意不达标，验证引擎检出后自动重写收敛。
 const DEFICIENT_V2 = `[[theme:校园]]
 
@@ -126,9 +144,9 @@ export const MOCK_BAD: MockTopic = {
 }
 
 // 模拟文案（浏览器演示：闲聊 / 反问澄清 / 成文 / 取消）
-const CLARIFY_QUESTION = '好的，先把要求问清楚再写：这篇推文是什么类型（活动宣传还是资讯介绍）？想要什么风格？大概多少字？需要配图吗？还有发布到哪里（导出/草稿箱）？你逐项告诉我即可。'
+const CLARIFY_QUESTION = '好的，先把要求问清楚再写：这篇推文是什么类型（活动宣传还是资讯介绍）？想要什么风格？大概多少字？需要配图吗？还有发布方式（导出图片或 HTML，由你自己上传）？你逐项告诉我即可。'
 const CANCEL_REPLY = '好的，那先不写了。需要的时候随时告诉我主题就行。'
-const CHAT_GREET = '你好，我是公众号推文助手。你可以像用通用助手一样和我聊天：问公众号写作的问题、聊选题想法都行；说「写一篇…推文」，我会先把要求问清楚再帮你产出可直接发布的推文并实时预览。'
+const CHAT_GREET = '你好，我是智序（公众号推文助手）。你可以像用通用助手一样和我聊天：问公众号写作的问题、聊选题想法都行；说「写一篇…推文」，我会先把要求问清楚再帮你产出可直接发布的推文并实时预览。'
 const CHAT_QA = '可以。公众号写作的通用要点：开头三秒抓住读者，正文短段落加小标题分层，重点加粗，结尾留行动号召，全文不用 emoji 和花哨装饰（演示环境为本地模拟回复）。需要针对具体场景展开，或直接写一篇，告诉我就行。'
 const CHAT_DEFAULT = '明白。想继续聊公众号写作，还是让我写一篇推文？告诉我主题、目标读者、风格倾向即可。'
 
@@ -148,7 +166,9 @@ export function sendChatMock(
   const u = user?.content ?? ''
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
   const asked = (lastAssistant?.content ?? '').includes('？')
-  const article = `好的，需求已明确，按所选风格直接产出（v2 正文，素材交给图像子智能体生成）：\n\n\`\`\`v2\n${SAMPLE_V2}\n\`\`\``
+  const wrapArticle = (v2: string) => `好的，需求已明确，按所选风格直接产出（v2 正文，素材交给素材智能体生成）：\n\n\`\`\`v2\n${v2}\n\`\`\``
+  const article = wrapArticle(SAMPLE_V2)
+  const reuseArticle = wrapArticle(buildReuseV2())
   const deficientArticle = `按默认需求先产出一版（示例为缺组件的半成品，供自检演示）：\n\n\`\`\`v2\n${DEFICIENT_V2}\n\`\`\``
   const badArticle = `好的，按要求演示违规输出：\n\n\`\`\`html\n${MOCK_BAD.html}\n\`\`\``
   let full: string
@@ -163,7 +183,9 @@ export function sendChatMock(
   } else if (isDemoTopic(u) || u.includes('违规')) {
     full = badArticle
   } else if (isCreateRequest(u)) {
-    full = u.includes('自检缺组件') ? deficientArticle : evaluate(u).needsClarify ? CLARIFY_QUESTION : article
+    full = u.includes('自检缺组件') ? deficientArticle
+      : u.includes('素材库复用气泡角饰') ? reuseArticle
+      : evaluate(u).needsClarify ? CLARIFY_QUESTION : article
   } else {
     full = /你好|嗨|hello|在吗|hi/i.test(u)
       ? CHAT_GREET

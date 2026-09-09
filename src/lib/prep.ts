@@ -5,6 +5,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { ChatMsg, ChatToolCall, inTauri } from './chat'
 import { runKnowledgeTool } from './retrieval'
+import { ASSET_CATEGORIES, searchAssets } from './asset-library'
 
 export interface PrepReply {
   text: string | null
@@ -36,6 +37,34 @@ export function isReadinessMarker(text: string): boolean {
 
 async function prepInvoke(messages: ChatMsg[]): Promise<PrepReply> {
   return await invoke<PrepReply>('prep_turn', { messages })
+}
+
+// V3-R3：search_assets 工具本地执行（个人素材库检索），返回给模型看的库条目清单
+async function runPrepTool(call: { name: string; args: string }): Promise<string> {
+  if (call.name === 'search_assets') {
+    try {
+      const args = (JSON.parse(call.args || '{}') || {}) as Record<string, unknown>
+      const q = String(args.query ?? '').trim()
+      if (!q) return 'search_assets 缺少参数 query（描述想要什么素材）。'
+      const catRaw = String(args.category ?? '').trim()
+      const cat = ASSET_CATEGORIES.find((c) => c.label === catRaw || c.key === catRaw)?.key
+      const hits = await searchAssets(q, {
+        category: cat || undefined,
+        style: args.style ? String(args.style) : undefined,
+      })
+      if (!hits.length) {
+        return '个人素材库未检索到匹配素材。可改用 [[img]]/[[deco]] 占位（系统会先检索库、无命中则委托素材智能体现场制作并自动入库）。'
+      }
+      const lines = hits.map(
+        (m) =>
+          `- ${ASSET_CATEGORIES.find((c) => c.key === m.category)?.label ?? m.category}｜${m.name}｜${m.title}｜${m.desc}（usage=${m.usage}，style=${m.style.join('/') || '任意'}，version=${m.version}）`,
+      )
+      return `个人素材库命中（风格只是参考，语义与安放位贴合即可用；引用写法 [[asset:分类|名称|用途说明]]）：\n${lines.join('\n')}`
+    } catch (e) {
+      return `素材库检索失败：${String(e)}`
+    }
+  }
+  return runKnowledgeTool(call)
 }
 
 /**
@@ -82,9 +111,9 @@ export async function runPrep(messages: ChatMsg[]): Promise<PrepOutcome> {
         ),
       }
       convo.push(assistantCall)
-      // 逐个机械执行本地知识工具（读取内存知识库，不抛错——失败返回提示串）
+      // 逐个机械执行本地工具（知识库 / 个人素材库检索，不抛错——失败返回提示串）
       for (const c of reply.calls) {
-        const result = await runKnowledgeTool({ name: c.name, args: c.args })
+        const result = await runPrepTool(c)
         const toolMsg: ChatMsg = { role: 'tool', tool_call_id: c.id, content: result }
         convo.push(toolMsg)
         digestParts.push(`【${c.name} ${c.args}】\n${result}`)

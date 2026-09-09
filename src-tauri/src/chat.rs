@@ -225,13 +225,15 @@ const SVG_SYSTEM_PROMPT: &str = "\
 9. 整段回答只包含从 <svg 到 </svg> 的 SVG 原文：不解释、不用代码围栏（``` 或 markdown）、不加任何前后缀文字。\n\
 10. 若“画面内容”说明缺少落笔所必需的核心信息（主体不明 / 不知画什么动作场景 / 多个可能画面互相冲突），不要硬画——只输出一行以 CLARIFY: 开头的问题，问最关键的一点（一句话），由创作主模型补足后再画；凡能合理画出的情况一律直接画，不要为问而问。";
 
-/// 按 kind 组装用户消息（纯函数，可测）
+/// 按 kind 组装用户消息（纯函数，可测；V3-R2 增 divider/heading 素材工坊分类 kind）
 fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>) -> Result<String, String> {
     let ctx = match kind {
         "wide" => "整行横幅插画（建议 viewBox=\"0 0 750 220\"，横向构图铺满）",
         "inline" => "小节旁的小插画（建议 viewBox=\"0 0 360 240\" 或 \"0 0 300 300\"）",
         "deco" => "推文气泡右下角的小装饰素材——角饰（建议 viewBox=\"0 0 300 300\"，图形集中在右下 1/3，小巧精致，如花簇/枝叶局部）",
-        other => return Err(format!("未知图像类型：{other}（应为 wide / inline / deco）")),
+        "divider" => "横向窄条分隔装饰素材——换场花饰/分割线（建议 viewBox=\"0 0 750 120\"，横向构图，左右对称或韵律重复，整体压扁矮，不占高度）",
+        "heading" => "小节标题旁的横向装饰小插画（建议 viewBox=\"0 0 360 160\"，如花枝/书签/路标小物件，留白多、不喧宾夺主）",
+        other => return Err(format!("未知图像类型：{other}（应为 wide / inline / deco / divider / heading）")),
     };
     let mut msg = format!("请画一幅插画，用作：{ctx}。画面内容：{}", desc.trim());
     if let Some(t) = theme.map(str::trim).filter(|s| !s.is_empty()) {
@@ -416,10 +418,12 @@ pub struct ToolCall {
     pub args: String,
 }
 
-/// 知识工具声明（DeepSeek function-calling，OpenAI 格式）：随 prep_turn 请求发送
+/// 工具声明（DeepSeek function-calling，OpenAI 格式）：随 prep_turn 请求发送。
+/// V3-R3：新增 search_assets（个人素材库检索）——创作配图先检索库、命中即用 [[asset]] 引用复用。
 const PREP_TOOLS: &str = r#"[
   {"type":"function","function":{"name":"load_knowledge","description":"读取三层知识库某点文件的全文（点文件名如 style-guochao / type-promo / comp-banned / module-bubble）。创作前按需取用：内容类型模板、风格色板、合规红线、模块规范。","parameters":{"type":"object","properties":{"name":{"type":"string","description":"点文件名（去 .md 后缀），如 style-guochao"}},"required":["name"]}}},
-  {"type":"function","function":{"name":"search_knowledge","description":"按主题检索应取用哪些点文件，返回文件名清单。创作前不确定该读哪些点时使用。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索主题，如 促销活动 或 咖啡店开业"}},"required":["query"]}}}
+  {"type":"function","function":{"name":"search_knowledge","description":"按主题检索应取用哪些点文件，返回文件名清单。创作前不确定该读哪些点时使用。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索主题，如 促销活动 或 咖啡店开业"}},"required":["query"]}}},
+  {"type":"function","function":{"name":"search_assets","description":"检索你的个人素材库（本机已入库、可复用的具体 SVG 素材：气泡角饰/分割线/开篇横幅/小节装饰/插画等，条目带分类与语义描述）。创作需要配图素材时先检索库：命中（描述贴合）就用 [[asset:分类|名称|用途说明]] 直接引用复用，不要再现场生成；库里没有合适的才写 [[img]]/[[deco]] 占位。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"想要什么素材的自然语言描述，如 右下角一朵小花的气泡角饰"},"category":{"type":"string","description":"可选：限定在某分类内找（bubble/divider/deco/banner/heading/art-inline/art-wide/photo-frame）"},"style":{"type":"string","description":"可选：风格软偏好词，如 日系"}},"required":["query"]}}}
 ]"#;
 
 /// 解析 DeepSeek 非流式返回体：choices[0].message 的 content 与 tool_calls（纯函数，可测）
@@ -667,6 +671,10 @@ mod tests {
         let deco = svg_user_prompt("deco", "花簇", None).expect("ok");
         assert!(deco.contains("角饰"));
         assert!(deco.contains("右下 1/3"));
+        let divider = svg_user_prompt("divider", "花叶横条", None).expect("ok");
+        assert!(divider.contains("750 120"), "divider 应提示横向窄条 viewBox");
+        let heading = svg_user_prompt("heading", "小书签", None).expect("ok");
+        assert!(heading.contains("360 160"));
         assert!(svg_user_prompt("banner", "x", None).unwrap_err().contains("未知图像类型"));
     }
 

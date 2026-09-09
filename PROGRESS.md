@@ -5,7 +5,184 @@
 
 ---
 
+## 2026-09-09
+
+### [New Feature] 发布轮：GitHub 首推准备 + 「智序」品牌化 + 使用手册入安装包（含 29-34 轮与 V3-R1~R3 累积变更统一提交）
+
+背景 / 变更原因：用户指令——「正式将最新版的微信公众号工具推送上 GitHub，检查是否有 key 泄露，并打包 Windows 安装包；撰写中文 README，撰写面向无技术背景的用户的使用手册（放入 Windows 安装包内）」。本次同时是自 7dfda2e（29-32 轮提交）以来全部累积变更（33/34 轮 + V3-R1/R2/R3，各轮已单独在 REQUIREMENTS/PROGRESS 记录「待提交」）的发布基线提交轮。
+
+决策记录（用户直接答复，2026-09-09）：
+- 品牌：整个项目中文名定为「智序」——README、程序内部（窗口标题/顶栏/persona 自述/mock 问候/手册）与发包产物（installer 文件名/安装目录/卸载项）全部体现；E2E S9c 仅断言「你好」前缀不受影响。
+- 远端仓库冲突：`CH3SH-LC/wechat-mp` 已被旧 DSH 公众号预设（skills/test/research，公开，~49MB）占用 → 用户拍板：旧预设内容迁远端 **dsh 分支**保留，桌面版推送 **main** 并切换为默认分支。
+
+key 泄露检查（全量）：HEAD 264 跟踪文件 + 全历史 27 commits 逐 blob + 工作区未跟踪文件扫描 `sk-`/`ghp_`/`gho_`/`AKIA`/私钥等模式 → 唯一命中为单测夹具假 key（chat.rs/settings.rs 内 `sk-test-123`/`sk-legacy`）；历史上从未跟踪 settings/.env/凭据类文件；设置存于仓库外（文档目录 settings.json）。
+
+修改文件（发布轮部分）：
+- Add: `src-tauri/src/manual.rs` — open_manual 命令：find_manual 在资源目录根与 resources/ 子目录两布局定位手册 → tauri-plugin-opener 以系统默认浏览器打开；3 单测（根布局/子目录/缺失）
+- Add: `src-tauri/resources/使用手册.html` — 面向无技术背景用户的单文件中文图文手册（11 节：简介/安装/API Key/创作/预览质检/素材工坊/文档库/会话/导出发布/FAQ/数据隐私；零外链零 emoji，纯内联样式）
+- Modify: `src-tauri/tauri.conf.json` — `productName: 智序`（发包品牌化）；窗口标题「智序 · 公众号推文助手」；`bundle.resources` map 打包 `resources/使用手册.html → 使用手册.html`（map 语义：键=源、值=目标——初版写反致 tauri-build "resource path doesn't exist" 警告，已修正）
+- Modify: `src-tauri/src/lib.rs` — 注册 manual 模块与 open_manual 命令（24 命令）
+- Modify: `src/App.tsx` — 顶栏 brand「智序 + 公众号推文助手（brand-sub）」；topbar-meta 新增「使用手册」按钮（仅 inTauri 显示）→ invoke open_manual，失败 alert 提示可在安装目录手动打开
+- Modify: `src/App.css` — .brand-sub 样式
+- Modify: `index.html` — title「智序 · 公众号推文助手」
+- Modify: `src/lib/persona.ts` / `src/lib/chat.ts` — 自述「你是「智序」（公众号推文助手）」/「你好，我是智序（公众号推文助手）…」；mock CLARIFY 文案过时「草稿箱」→「导出图片或 HTML 由你上传」（与第 34 轮离线发布口径一致）
+- Modify: `README.md` — 重写为正式中文 README（简介/截图×3 带真实场景图注/特性/用户快速开始含安装包名/开发构建/验证/目录结构/数据隐私/关联项目）
+- Modify: `src-tauri/src/export.rs` — 清理遗留 unused import serde::Deserialize（0 警告）
+- Modify: `.gitignore` — 忽略 docs/artifacts/tuiwen-*.png（E2E 整图导出样例，占空间不入库；截图证据已按名归档）
+- Modify: `STRUCTURE.md` — src-tauri 树补 manual.rs/resources/使用手册.html、tauri.conf 品牌注释、lib.rs 命令数 24
+- Add: `docs/artifacts/wxmp-desktop-S15-manual-btn.png` — 真实桌面应用内「使用手册」按钮（CDP 实机截图）
+
+验证：
+- key 扫描全绿（见上）；`pnpm build` exit 0 ×2；`cargo test` 61 项（57 passed + 4 live ignored，0 警告）——含 manual 3 新单测；E2E S1-S14 全绿 VERIFY OK ×2（品牌文案改动前后各一轮，截图全部刷新含智序顶栏）。
+- 真实链路（real-world-verify 门禁）：release exe（15,240,192B ≈ 14.5MB）安装闭环——NSIS `智序_0.1.0_x64-setup.exe`（4,420,634B）静默安装至 `%LOCALAPPDATA%\智序\`，确认 **使用手册.html 随包安装**（资源落点=程序目录根，find_manual 首候选命中）；已装 exe 启动冒烟进程存活；WebView2 CDP 接管真实应用 → 「使用手册」按钮可见 → 真实点击 → 无错误 alert → 默认浏览器打开手册（Edge 窗口标题「智序 · 使用手册」）——手册入口全链路真实验证通过。
+- 已知备注：NSIS 静默卸载 /S 在无交互会话下未执行文件清理（退出码 0），验证环境的安装实例已手动清理（目录+卸载注册项）；交互式卸载闭环此前在第 6 轮验证过。
+- REQUIREMENTS/PROGRESS-LITE/STRUCTURE 同步完成；发布轮提交与推送结果见条目尾注。
+
+### [New Feature] V3-R3：推文素材复用改造——库直通创作 + [[asset]] 引用固化 + 改版影响扫描（V3 设计 D5/D7 落地）
+
+背景 / 变更原因：V3 支柱 B 收尾（设计文档第九节）——素材不再"每篇现场画一次"：创作时主文档智能体先检索个人素材库、命中即以 `[[asset:分类|名称|用途]]` 引用复用；库里没有才委托素材智能体现场制作并自动入库（origin=article-fallback）；文档对引用素材固化副本（assetSnapshots），库改版不影响老文档，扩散与否由用户在素材工坊逐篇决定（影响扫描 + 用新版重渲染）。
+
+修改文件：
+- Modify: `src/knowledge/排版引擎/engine-write-protocol.md` — §三重写为"素材智能体制作入库、你检索复用"：新增 `[[asset:分类|名称|用途说明]]` 库引用语法（先定义后气泡同名引用 `> [!KEY|名称]`）、占位兜底委托说明、风格仅软参考（口径 4）；仍绝不手写 SVG
+- Modify: `src/lib/persona.ts` — 创作段新增配图能力条款：不手写 SVG；有个人素材库清单先 [[asset]] 引用复用，无合适才 [[img]]/[[deco]] 占位（转义模板反引号）
+- Modify: `src/lib/image-agent.ts` — 升级为"素材解析器"：①`[[asset:…]]` 按 id/名称查库（usage=deco→`::: art deco <id>`、wide/inline→对应 art 块），命中记入 MaterializeInfo.used（供文档固化快照），未命中保留行记 residual；②传统 `[[img]]/[[deco]]` 先按候选分类语义检索库（整句包含或 ≥3 bigram 才算强命中，防误转），未命中才现场委托 gen_svg（CLARIFY→refine 有界回问保留）；③桌面（inTauri）现场补做后自动 addAsset 入库 origin=article-fallback 并计 storedFallback（D7）；④样例池提为导出 mockArtSvg（素材工坊/演示共用）
+- Modify: `src/App.tsx` — 终稿素材解析回传：residual>0 注入"库素材引用缺失"可修复警告（revise 自动重写闭环）；used→snapshotsOfUsed（getAsset 读当前 svg+ver）随 persistDoc 固化落文档 meta.assetSnapshots
+- Modify: `src/lib/revise.ts` — FIXABLE_KEYS 增"库素材引用缺失"
+- Modify: `src-tauri/src/chat.rs` — PREP_TOOLS 增第三个工具 search_assets（检索个人素材库，description 教模型命中即 [[asset]] 复用）；svg_user_prompt 增 divider/heading 素材分类 kind（V3-R2 素材工坊专用语境）；单测扩展 divider/heading 断言
+- Modify: `src/lib/prep.ts` — runPrepTool 分流：search_assets 本地执行（分类 label/key 归一 + 语义检索 + 风格软参考），结果与知识工具同进 digest
+- Modify: `src/lib/chat.ts` — mock 增"素材库复用"样本（buildReuseV2：把 [[deco:blossom]] 占位换成 [[asset:bubble|库内最新 bubble id|…]]、气泡同步引用 id），E2E S14 走该链路
+- Modify: `src/components/AssetWorkshop.tsx` — 替换源后影响扫描 refs 展示（引用时固化旧版提示）；每篇文档「用新版更新」= 重跑素材解析+compose+素材 PNG 渲染+就地刷新文档（快照 ver 跟进）
+- Modify: `src/App.css` — ws-refs/ws-ref-row/ws-ref-update 样式
+- Modify: `scripts/verify-ui.mjs` — 新增 S14（素材复用+快照固化+影响扫描列出文档+用新版重渲染 ver 跟进）
+- Modify: `scripts/live-conformance.mjs` — 新增场景 C（真实模型 + 素材库清单 → 必须 [[asset:bubble|…]] 引用复用、不手写 SVG；compose 前最小复刻解析器落位（桌面解析器真实验证在 E2E S14）→ 无角饰未定义警告）
+
+验证：
+- `pnpm build` exit 0（修 persona 模板转义后通过）；`cargo test --lib` 54 passed；PREP_TOOLS JSON 校验 tools=3。
+- compose-check COMPOSE OK；E2E **S1-S14 全绿 VERIFY OK**——S13（工坊制作/检索/元数据/替换源 v2/删除）+ S14（会话创作复用库气泡角饰 [[asset]] → 文档快照含该 id（固化）→ 预览无 [[asset 泄漏 → 工坊替换源 → 影响扫描 refs=1 → 用新版更新 → 快照 ver 跟进到 3）。
+- live-conformance 真实模型闸门 **CONFORM OK（A/B/C 全过）**：C 场景模型在给库清单时正确写 `[[asset:bubble|bubble-flower-corner|…]]`（asset=1、气泡同名引用=1、0 手写 SVG；首跑 compose 直出报角饰未定义——因 node 直连缺少桌面解析器落位，按"解析器职责"在 C 内最小复刻替换后消除，职责边界已在 REQUIREMENTS 注明）。
+- release 重建：`pnpm tauri build --bundles nsis`（R2+R3 全部变更）——exe 15.3MB + setup 4.4MB；启动冒烟 SMOKE OK。
+- 终局复核（V3 大版本审计）：二次全量 E2E **S1-S14 VERIFY OK（51 PASS，零 FAIL）**；cargo 54/54；compose-check COMPOSE OK；live-conformance A/B/C CONFORM OK；release exe/setup 与代码同步并冒烟通过。
+- 文档：REQUIREMENTS（V3-R2 完成/V3-R3 完成）/PROGRESS/PROGRESS-LITE/STRUCTURE/ai-context 同步。待提交。
+
+### [New Feature] V3-R2：个人素材库 + 素材工坊（V3 设计 D3/D4/口径 3 落地）
+
+背景 / 变更原因：V3 支柱 B 第一段（设计文档第七/八节）——把"每次现场画"沉淀为单机单用户个人素材库：素材 = SVG 源 + 语义化元数据（desc 写清长什么样、tags、usage、style 软参考、version）；一个「素材工坊」入口 + 库内分类（首版 8 类，bg/icon 后置），每类由对应分类素材智能体按分类 kind 制作入库。
+
+修改文件：
+- Add: `src-tauri/src/assets.rs` — workspace/assets/items/<id>/（meta.json+source.svg）；list（分类过滤）/add（id=as-<ts>、usage 按分类默认推导）/get/update（patch 不升版本、svg 替换 version+1 + 影响扫描 scan_usage_at 解析 documents source.md 的 [[asset:…|<id>|…]]）/delete；5 单测（roundtrip/替换源升版+扫描/纯元数据不升版/删除幂等+未知 id 报错/非法 id）；实现注：不另建 index.json（单目录 meta 扫描即索引）
+- Modify: `src-tauri/src/lib.rs` — 注册 5 个 assets 命令
+- Modify: `src-tauri/src/chat.rs` — svg_user_prompt 增 divider（750x120 横条）/heading（360x160 横向小图）素材分类 kind + 单测断言
+- Add: `src/lib/asset-library.ts` — 双通道 + 分类表（八类 defaultUsage）+ sanitizeName（装饰名可用字符）+ bigram 语义检索 searchAssets（风格仅软参考加分不硬过滤）+ libraryDigest（给模型的清单文本预留）
+- Add: `src/lib/asset-agent.ts` — 素材智能体编排：kindForCategory + generateAssetSvg（桌面 gen_svg / 浏览器样例池 + CLARIFY 提示）+ makeWorkshopAsset（校验 viewBox/元素 ≥6 → addAsset origin=workshop）
+- Add: `src/components/AssetWorkshop.tsx` — 顶栏素材工坊工作区：分类 chips → 描述制作入库 → 库列表（语义过滤）→ 详情编辑（名称/标题/desc/标签、SVG 预览与源、保存修改/替换源/删除）
+- Modify: `src/App.tsx` — 顶栏增「素材工坊」页签（决策 D1：该工作区由对应分类素材智能体服务）；view 状态扩展
+- Modify: `src/App.css` — 工坊样式
+- Modify: `scripts/verify-ui.mjs` — 新增 S13（制作入库 rows+1/按 desc 检索命中/改名保存/替换源 v2/分割线制作+删除回基线）
+
+验证：
+- `pnpm build` exit 0；`cargo test --lib` 54 passed（+5 assets 单测 + chat kinds 断言）；E2E S1-S13 全绿（S12 回归通过）。
+- release 重建与最终冒烟在 V3-R3 完成后统一执行（铁律 7 满足：release 与最新代码同步，见 V3-R3 条目）。
+- 文档：REQUIREMENTS/PROGRESS/PROGRESS-LITE/STRUCTURE/ai-context 同步。待提交。
+
+### [New Feature] V3-R1：推文文档化地基——终稿默认自动保存/就地刷新 + 文档库入口（V3 设计 D1/D2/D6 落地）
+
+背景 / 变更原因：V3 大版本支柱 A 第一段落地（设计文档第六节，决策已拍板）——HTML 不再只"缓存于程序内"：会话终稿默认自动保存为本地文档（真源 source.md + article.html 快照），会话内更新就地刷新同一份文档（不保留两版）；顶栏新增「文档库」工作区；打开文档回到其源会话继续改；删除文档连带删除其会话，避免幽灵文档。
+
+修改文件：
+- Add: `src-tauri/src/documents.rs` — workspace/documents/<id>/（meta.json+source.md+article.html）；文档 id 与会话 id 相同；list/open/save/delete + 6 单测（roundtrip/就地刷新只留一版/删除幂等/空 html 不列为文档/非法 id 防穿越/损坏 meta 跳过）；snapshots 字段为 V3-R3 素材固化预留
+- Modify: `src-tauri/src/lib.rs` — 注册 4 个 documents 命令
+- Add: `src/lib/documents.ts` — 双通道（Tauri invoke / 浏览器 localStorage wxmp-docs-v1）
+- Add: `src/components/DocsPane.tsx` — 文档库工作区（列表/打开/删除）
+- Modify: `src/App.tsx` — 顶栏 view 页签（对话/文档库）；turn 尾段终稿 `persistDoc` 自动落文档（标题与会话一致，sessionItems 滞后时按首条用户消息派生）；applySession 优先读文档 html 快照恢复预览（不重跑素材生成，重启后打开"保存的 html"即原样）；清空/删除会话联动删文档；boot/切页刷新文档列表
+- Modify: `src/App.css` — view-tabs / docs-pane / doc-row 样式
+- Modify: `scripts/verify-ui.mjs` — 新增 S12（生成→文档库自动出现(n0+1)且标题含关键词→点开回源会话(data-id 一致)→删除文档后文档与会话文件双双消失回基线）
+
+验证：
+- `pnpm build` exit 0；`cargo test --lib` 49 passed（+6 documents 单测）；compose-check COMPOSE OK；E2E **S1-S12 全绿 VERIFY OK**（首跑 S12 标题断言失败——根因 persistDoc 读 sessionItems 状态滞后于新建会话标题派生（标题落空 → 显示未命名），改为按 msgsRef 首条用户消息派生标题后修复）。
+- release 重建：`pnpm tauri build --bundles nsis` —— exe 15.1MB + setup 4.4MB；启动冒烟 SMOKE OK（任务管理器存活后关闭）。
+- 文档：REQUIREMENTS（V3-R1 完成）/PROGRESS/PROGRESS-LITE/STRUCTURE 同步。待提交。
+
+### [Change] V3 大版本设计稿按用户答复定稿（原待定项 D1-D7 全部拍板；仍无代码）
+
+背景 / 变更原因：用户直接修改设计文档第十三节，把 7 个待定默认项逐条给出决策，要求按答复重写文档（仍只写文档不写代码）。
+
+用户决策（D1-D7）：
+- D1 导航：文档库/素材工坊用**顶栏切换**，不同工作区分别激活**主文档智能体**或**对应分类素材智能体**。
+- D2 文稿对话分离；**文档默认自动保存**，除非用户主动删除。
+- D3 素材库**单机单用户**，多账号/profile 本轮不做。
+- D4 首版分类按 8 类实施（bubble…photo-frame），bg/icon 后置。
+- D5 素材引用**固化副本**（文档 meta.assetSnapshots）+ 改库素材时**扫描引用它的老文档**、由用户逐篇选是否更新（assets 增 version）。
+- D6 默认自动保存，会话内更新**就地刷新**文档库那份默认文档，不做版本堆叠。
+- D7 缺料委托**自动 + 提示**；**严格由主智能体调用**素材智能体（request_asset），主智能体绝不自己画。
+
+修改文件（仅文档，无代码）：
+- Modify: `docs/information/2026-09-09-v3-docs-assets-design.md` — 按 D1-D7 重写：第五/六/七/八/九节落地各决策（顶栏导航与按工作区换智能体、文稿对话分离+默认自动保存+就地刷新、固化副本与改版影响扫描 6.6、asset version、素材解析器用快照优先、request_asset 委托链）；第十三节由"开放问题"改为"已确认决策记录 D1-D7（无未决项）"。
+- Modify: `REQUIREMENTS.md` — V3 条目待定项段改写为 D1-D7 拍板结果。
+
+验证：纯文档轮，无代码/构建/release 重建。设计稿决策已齐，可进入 V3-R1 分期（届时在 REQUIREMENTS 先登记）。
+
+### [Change] V3 大版本：需求澄清 + 设计文档（推文文档化 + 个人素材库 + 素材智能体分离；无代码）
+
+背景 / 变更原因：用户发起大版本需求（只写文档不写代码）——①HTML 全部缓存于程序内、关闭即失；需直接保存、重开打开该 html、且智能体修改时可直接调用修改本地 html；②素材纯对话内单次现场生成、无法复用、每次消耗大量素材代码生成；需把素材生成与推文生成分开：独立素材生成智能体入口（气泡/分割线等单独素材各自配智能体和库）+ 完整可检索的个人素材库，推文直接复用库内素材。
+
+用户口径（AskUserQuestion 四项拍板，2026-09-09）：
+- 文档可编辑真源 = **源即正文**（v2 源码 + 素材引用），`.html` 是确定性渲染的产物快照（模型直接改真源、系统重渲染 html）。
+- 素材取用 = **先搜库命中即复用**；库缺才委托**素材生成智能体**现场制作并入库，主智能体绝不自己画图。
+- 素材智能体入口 = **一个「素材工坊」+ 库内分类**（气泡/分割线等各配独立生成规则与子库）。
+- 素材库条目**必须语义化标注长什么样**（例：右下角一朵小花的气泡要写清），供主智能体直接检索；**风格只是软参考**，不再硬约束素材须配套声明风格。
+
+修改文件（仅文档，无代码）：
+- Add: `docs/information/2026-09-09-v3-docs-assets-design.md` — V3 设计稿：两支柱（A 推文文档化 documents/ 真源+article.html 快照、文档库入口、AI 文档工具改真源重渲染；B 素材资产化 assets/ 库 schema+语义 desc 元数据+素材工坊+素材解析器流水线、素材子智能体分类规则）+ 分期建议 V3-R1 文档化地基 / R2 素材库+工坊 / R3 推文复用改造 + 开放问题/默认假设（第十三节 7 项待确认）
+- Modify: `REQUIREMENTS.md` — 新增「V3 大版本」登记条目（含四项口径与产出，状态：仅文档，待逐轮开发）
+
+验证：
+- 本轮为纯文档轮，无代码、无构建、无 release 重建（不触发铁律 7）。用户口径已全部落盘，待用户 review 设计文档第十三节 7 项待定默认后，按 V3-R1/R2/R3 分期在 REQUIREMENTS 逐轮登记再开发。
+
+### [New Feature] 第 34 轮：发布改为"HTML→图片导出（长图+分页）用户手动上传"，停用微信草稿箱 API（用户直接指令驱动）
+
+背景 / 变更原因：用户报「当前无法正常发布到微信公众号草稿箱」。只读 token 探针确诊 `errcode=40164 invalid ip 202.120.8.43 not in whitelist`——本机公网 IP 未加入公众号后台 IP 白名单（账号侧约束，代码无法自愈；且草稿发布全链路自第 26 轮起仅在本地假微信服务器验证、LIVE-PENDING 从未真实联通）。随后用户拍板改方案：**不再走直接上传草稿，改为把 HTML 渲染成图片、用户手动上传**。口径确认（AskUserQuestion）：导出形态 = **长图 + 分页都给**（375px 版式，2x=750 高清）。
+
+根因分析：
+- 直接发草稿箱不可行是**外部账号约束**（IP 白名单/认证/接口权限）+ 全链路从未真实验证的历史债；要把"发布"变可用且不再依赖微信 API，最稳的本地闭环是把成品正文离线渲染成图片，让用户在任何编辑器手动上传。
+- 技术选型：正文是 compose 输出的**纯内联样式 + data:image**（无外链、无跨域），适合 SVG `<foreignObject>` 在 WebView2/Chromium 内一次光栅化到 2x 画布；先做最小原型（playwright 注入 compose HTML → canvas 产 PNG，采样确认非空白、750×1810 有彩色正文）再铺正式库。
+
+修改文件：
+- Add: `src/lib/htmlToImage.ts` — 375px 版式挂隐藏容器量高 → `<svg><g scale(2)><foreignObject>` 光栅化 → 长图 canvas + 按屏(PAGE_CSS_H=1000)分页 PNG（data URL）；等 data 图 decode + 双 rAF 稳布局；高度护栏；finally 移除容器
+- Add: `src/lib/exportImages.ts` — `exportArticleImages(html)`：渲染 → `长图+分页 N` 文件；Tauri invoke `export_images` 落盘并开目录 / 浏览器逐张 `<a download>`（260ms 间隔防浏览器拦多下载）
+- Modify: `src-tauri/src/export.rs` — `ImageFile`/`png_bytes`/`export_images_to_dir`(可测) + `export_images` Tauri 命令（写 `exports/img-<sanitized>/`，Windows explorer 打开）；1 新增单测（两文件写盘 + base64 解码 + 文件名消毒）
+- Modify: `src-tauri/src/lib.rs` — 注册 `export_images`；保留 `publish_draft` 命令注册（无 UI 调用，作休眠）
+- Modify: `src/components/PreviewPane.tsx` — 删 publishDraft prop/按钮/发布状态；新增「导出图片」（转图中…态）；HTML 导出按钮改名「导出 HTML」
+- Modify: `src/App.tsx` — 删 publishDraft 函数与 tauri invoke import
+- Modify: `src/components/SettingsPanel.tsx` — 删「公众号配置（AppID/AppSecret）」块（save 时置空 wx 字段）
+- Modify: `scripts/verify-ui.mjs` — S1.5 导出定位改「导出 HTML」；新增 S11（生成 → 点导出图片 → 捕获 PNG 下载，断言 ≥2 张且首张 >20KB）
+
+验证：
+- 最小原型（playwright 临时脚本）：compose HTML → 375 版式 foreignObject 2x canvas → PNG 750×1810，像素采样 7.8 万非白/7.1 万彩色 → 渲染真实非空白（方法可行）。
+- `cargo test --lib`：43 passed / 0 failed / 4 ignored（+1 export_images 写盘单测）。
+- `node scripts/compose-check.mjs`：COMPOSE OK。
+- `node scripts/verify-ui.mjs docs/artifacts`（vite:1420）：**VERIFY OK（S1-S11 全绿）**——S11 实测浏览器导出：**长图 1 + 分页 3，共 4 张 PNG，首张 >20KB**，消息提示正确。（期间 S1.5 曾因「导出」匹配到新「导出图片/导出 HTML」两按钮 strict 违规，已改精确定位。）
+- release 重建：`pnpm tauri build --bundles nsis`（前端+Rust 变更；先停运行实例）——exe 15.0MB + setup 4.3MB（00:20）；启动冒烟 SMOKE OK。
+- 文档：REQUIREMENTS（第 34 轮）/PROGRESS/PROGRESS-LITE/STRUCTURE 同步。待提交。
+
 ## 2026-09-08
+
+### [Change] 第 33 轮：小组件按知识库来——注入"小标题/气泡优秀写法要点"（用户口径确认驱动）
+
+背景 / 变更原因：用户报「大插画画的可以，但是各种小组件没能按照我的知识库来（比如优秀的小标题、气泡之类的）」。对真实会话（msg46 抹茶慰问）与知识库 `module-heading/copy-subheading/module-bubble` 逐条对照：小标题全为普通 `##`、气泡全文仅 1 处，未达知识库"小标题每 300-500 字一个、路标式起法；气泡全文 3-5 个、一泡一意、首行标题句、语义全篇一致"的水准。用户口径确认（AskUserQuestion）：**注入写法要点先做**（视觉仍由桌面引擎统一；引擎视觉形态扩展留后续轮）。
+
+根因分析：
+- **模型侧没吃到知识**：第 29 轮 persona 精简后，写作上下文只保证注入"引擎协议"（讲 v2 语法），知识库 `module-*/copy-*` 的"小组件优秀写法"点文件不在可靠取用路径（注册表置顶组只有排版引擎，cap 3500 字也不保模块文件）→ 模型写小标题/气泡只能按通用习惯，够"合法"但不够"知识库水准"。
+- **引擎侧表达受限（本层留后续）**：知识库的序号徽章式/夹线嵌字式小标题、带形状标记的多种气泡在 v2 无法全量表达；但引擎对 `##`（宣传类自动纯色序号徽章/正文类左竖条）、气泡 KEY/TIP/WARN/DANGER/NOTE（实色/浅底左竖条多通道强调）、气泡角饰（`[[deco:名]]`→`> [!语义|名]`）已有足够底座——差的是**模型按知识库把它用起来、写到位**。
+
+修改文件：
+- Modify: `src/knowledge/排版引擎/engine-write-protocol.md` — §四 新增 **5.小标题 / 6.重点气泡**（第 33 轮，按 KB module-heading/copy-subheading/module-bubble 提炼、桌面 v2 可表达）：小标题每 300-500 字一个、短而具体路标式（好坏例）、**不手工写序号**（宣传类引擎自动纯色序号徽章、正文类自动左竖条，手写双编号）、同篇 ≤2 种气质、`[[title]]` 装饰标题每篇 ≤2 处；气泡全文 3-5 个、一泡一意、正文 1-3 行（约 20-50 字）、首行标题句、按语义固定选型且全篇一致、强调渲染交引擎、角饰先 `[[deco:名]]` 定义再 `> [!语义|名]`、禁普通引用 `>` 冒充强调气泡、勿每段都放
+- Modify: `scripts/live-conformance.mjs` — 场景 A/B 各增断言"含 ≥1 提示气泡且带标题句"（防小组件退化回归）
+
+验证：
+- 真实模型复刻"校园抹茶慰问"场景（新协议注入）：**小标题=3 且全为路标式**（"补给站第一次不在操场 / 一块蛋糕能聊五分钟 / 后半程的甜，要慢慢消化"）、**气泡=3 且带标题句**（`> [!NOTE] 十分钟补给窗口 / > [!TIP] 后半程别硬扛 / > [!KEY] 抹茶会吃完，甜味会留下`）、手工编号标题=0、3 照片位 + [[img]]=4 + deco 角饰——对比 msg46（1 气泡、标题平淡）显著达 KB 水准。
+- `node scripts/live-conformance.mjs`：CONFORM OK——A（photo=7 / [[img]]=4 / [[deco]]=3 / **bubble=3 带标题句**）、B（[[img]]=4/[[deco]]=1 / **bubble=1 带标题句**）——新断言通过，无回归。
+- release 重建：`pnpm tauri build --bundles nsis`（知识语料变更，铁律 7；先停运行中的桌面实例解除占用）——exe 14.9MB + setup 4.3MB（23:51）；启动冒烟 SMOKE OK。
+- 文档：REQUIREMENTS（第 33 轮）/PROGRESS/PROGRESS-LITE/STRUCTURE 同步。待提交。
 
 ### [New Feature] 第 32 轮：自动质检自检（检出即自动重写至合格）+ 修"叠两篇、预览取差稿"（用户口径确认驱动）
 

@@ -142,7 +142,7 @@ try {
 try {
   const [download] = await Promise.all([
     page.waitForEvent('download', { timeout: 15000 }),
-    page.locator('.mini', { hasText: '导出' }).click(),
+    page.locator('.mini', { hasText: '导出 HTML' }).click(),
   ])
   const fs = await import('fs')
   const buf = fs.readFileSync(await download.path())
@@ -440,6 +440,272 @@ try {
   await page.screenshot({ path: `${outDir}/wxmp-desktop-S10.png` })
 } catch (e) {
   console.log('  FAIL - S10 auto-revise error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S11 导出图片（第 34 轮）：生成正文 → 「导出图片」触发浏览器下载长图+分页 PNG
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.sess-btn[data-ready="1"]', { timeout: 20000 })
+  if ((await page.locator('.session-rail').count()) === 0) {
+    await page.locator('.sess-btn').click()
+  }
+  await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
+  await page.locator('.session-rail .rail-new').click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
+  await page.locator('textarea').press('Enter')
+  await waitStreamDone()
+  await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
+
+  const downloads = []
+  page.on('download', (d) => downloads.push(d))
+  await page.locator('button.mini', { hasText: '导出图片' }).click()
+  await page.waitForFunction(
+    () => {
+      const t = document.querySelector('.export-msg')
+      return !!t && /已下载|转图失败/.test(t.textContent || '')
+    },
+    { timeout: 30000 },
+  )
+  await page.waitForTimeout(1500) // 等全部下载触发
+  const pngFiles = downloads.filter((d) => d.suggestedFilename().endsWith('.png'))
+  const msg = await page.locator('.export-msg').innerText().catch(() => '')
+  const okMsg = msg.includes('已下载')
+  let sizeOk = false
+  if (pngFiles.length > 0) {
+    const fs = require('fs')
+    const first = pngFiles[0]
+    const p = `${outDir}/${first.suggestedFilename()}`
+    await first.saveAs(p)
+    sizeOk = fs.statSync(p).size > 20000
+  }
+  const pngOk = pngFiles.length >= 2 && okMsg && sizeOk
+  console.log(`  ${pngOk ? 'PASS' : 'FAIL'} - S11 export images downloads (png=${pngFiles.length}, size>20KB=${sizeOk}, msg=${msg.slice(0, 40)})`)
+  if (!pngOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S11.png` })
+} catch (e) {
+  console.log('  FAIL - S11 export images error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S12 V3-R1 文档库：会话成稿默认自动保存为文档 → 顶栏切「文档库」可见 → 点开回到源会话 →
+// 删除文档连带删除其会话（无幽灵文档）
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.sess-btn[data-ready="1"]', { timeout: 20000 })
+  await page.locator('.view-tab[data-view="docs"]').click()
+  await page.waitForSelector('.docs-pane', { timeout: 10000 })
+  const n0 = await page.locator('.doc-row').count()
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S12a-docs.png` })
+
+  // 回对话工作台，新建会话生成一篇（内容独立）
+  await page.locator('.view-tab[data-view="chat"]').click()
+  await page.waitForSelector('textarea', { timeout: 10000 })
+  if ((await page.locator('.session-rail').count()) === 0) {
+    await page.locator('.sess-btn').click()
+  }
+  await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
+  await page.locator('.session-rail .rail-new').click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
+  await page.locator('textarea').press('Enter')
+  await waitStreamDone()
+  await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
+  await page.waitForTimeout(800) // 等默认文档自动落盘
+
+  await page.locator('.view-tab[data-view="docs"]').click()
+  await page.waitForSelector('.docs-pane', { timeout: 10000 })
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('.doc-row').length === n + 1,
+    n0,
+    { timeout: 10000 },
+  )
+  const n1 = await page.locator('.doc-row').count()
+  const firstTitle = await page.locator('.doc-row .doc-title').first().innerText()
+  const autoSaved = n1 === n0 + 1 && (firstTitle.includes('入学') || firstTitle.includes('开学'))
+  console.log(`  ${autoSaved ? 'PASS' : 'FAIL'} - S12 article auto-saved as doc (rows ${n0}→${n1}, title=${firstTitle.slice(0, 20)})`)
+  if (!autoSaved) failed++
+  const firstId = await page.locator('.doc-row').first().getAttribute('data-id')
+
+  // 点开该文档 → 回到其源会话（对话工作台，消息恢复、会话高亮为同一 id）
+  await page.locator('.doc-row').first().click()
+  await page.waitForSelector('.chat-pane', { timeout: 10000 })
+  await page.waitForTimeout(500)
+  const nUser = await page.locator('.msg-user').count()
+  const activeId = await page
+    .locator('.sess-row.sess-active')
+    .getAttribute('data-id')
+    .catch(() => null)
+  const openOk = nUser >= 1 && activeId === firstId
+  console.log(`  ${openOk ? 'PASS' : 'FAIL'} - S12 open doc returns to its session (users=${nUser}, active=${activeId})`)
+  if (!openOk) failed++
+
+  // 删除该文档 → 文档数回基线，其会话文件与文档文件都消失
+  await page.locator('.view-tab[data-view="docs"]').click()
+  await page.waitForSelector('.docs-pane', { timeout: 10000 })
+  await page.locator('.doc-row').first().locator('.doc-del').click()
+  await page.waitForTimeout(700)
+  const n2 = await page.locator('.doc-row').count()
+  const gone = await page.evaluate((id) => {
+    const ses = JSON.parse(localStorage.getItem('wxmp-sessions-v1') || '{}')
+    const docs = JSON.parse(localStorage.getItem('wxmp-docs-v1') || '{}')
+    return !(id in (ses.items || {})) && !(id in (docs.docs || {}))
+  }, firstId)
+  const delOk = n2 === n0 && gone
+  console.log(`  ${delOk ? 'PASS' : 'FAIL'} - S12 delete doc removes doc+session (rows ${n1}→${n2}, gone=${gone})`)
+  if (!delOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S12b.png` })
+} catch (e) {
+  console.log('  FAIL - S12 doc library error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S13 V3-R2 素材工坊：制作气泡角饰入库 → 语义检索过滤命中 → 改名/描述保存 → 替换源 version+1 → 删除路径
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.view-tab[data-view="assets"]', { timeout: 20000 })
+  await page.locator('.view-tab[data-view="assets"]').click()
+  await page.waitForSelector('.ws-pane', { timeout: 10000 })
+  await page.locator('.ws-cat[data-cat="bubble"]').click()
+  const a0 = await page.locator('.ws-row').count()
+  await page
+    .locator('.ws-desc')
+    .fill('右下角一朵小花的气泡角饰：浅暖色五瓣小花、花心一点金黄，其余大面积留白，用于 KEY 气泡右下角，是气泡装饰素材')
+  await page.locator('.ws-make-btn').click()
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('.ws-row').length === n + 1,
+    a0,
+    { timeout: 15000 },
+  )
+  const madeOk = (await page.locator('.ws-row').count()) === a0 + 1
+  console.log(`  ${madeOk ? 'PASS' : 'FAIL'} - S13 workshop asset made & stored (rows ${a0}→${a0 + 1})`)
+  if (!madeOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S13a-made.png` })
+
+  // 语义检索/过滤命中（按描述里的"小花"）
+  await page.locator('.ws-q').fill('小花')
+  await page.waitForTimeout(300)
+  const searchHits = await page.locator('.ws-row').count()
+  await page.locator('.ws-q').fill('')
+  console.log(`  ${searchHits >= 1 ? 'PASS' : 'FAIL'} - S13 search by desc (hits=${searchHits})`)
+  if (searchHits < 1) failed++
+
+  // 改名/描述保存（入库即可编辑语义元数据）
+  await page.waitForSelector('.ws-detail', { timeout: 10000 })
+  await page.locator('.ws-name').fill('flower-corner-e2e')
+  await page.locator('.ws-title').fill('右下角小花气泡角饰')
+  await page.locator('.ws-save').click()
+  await page.waitForTimeout(600)
+  const rowTitle = await page.locator('.ws-row .ws-row-title').first().innerText().catch(() => '')
+  const metaOk = rowTitle.includes('右下角小花气泡角饰')
+  console.log(`  ${metaOk ? 'PASS' : 'FAIL'} - S13 meta editable & saved (row=${rowTitle.slice(0, 20)})`)
+  if (!metaOk) failed++
+
+  // 替换 SVG 源 → version+1（影响扫描：此时尚无文档引用）
+  await page.locator('.ws-replace').click()
+  await page.waitForFunction(
+    () => /v2/.test(document.querySelector('.ws-ver')?.textContent || ''),
+    { timeout: 10000 },
+  )
+  const verOk = (await page.locator('.ws-ver').innerText()).includes('v2')
+  console.log(`  ${verOk ? 'PASS' : 'FAIL'} - S13 replace source bumps version (v2)`)
+  if (!verOk) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S13b.png` })
+
+  // 分割线分类制作 → 删除路径
+  await page.locator('.ws-cat[data-cat="divider"]').click()
+  const d0 = await page.locator('.ws-row').count()
+  await page.locator('.ws-desc').fill('细横线配一枚小花蕊的极简分隔素材，横向居中')
+  await page.locator('.ws-make-btn').click()
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('.ws-row').length === n + 1,
+    d0,
+    { timeout: 15000 },
+  )
+  await page.locator('.ws-row .ws-del').first().click()
+  await page.waitForFunction(
+    (n) => document.querySelectorAll('.ws-row').length === n,
+    d0,
+    { timeout: 10000 },
+  )
+  const delOk = (await page.locator('.ws-row').count()) === d0
+  console.log(`  ${delOk ? 'PASS' : 'FAIL'} - S13 delete asset works (rows→${d0})`)
+  if (!delOk) failed++
+} catch (e) {
+  console.log('  FAIL - S13 workshop error:', String(e).slice(0, 200))
+  failed++
+}
+
+// S14 V3-R3 推文素材复用 + 固化 + 改版影响：会话创作引用工坊气泡素材（[[asset]]）→
+// 解析复用（快照落文档）→ 素材改版 → 影响扫描列出文档 → 逐篇"用新版更新"
+try {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForSelector('.sess-btn[data-ready="1"]', { timeout: 20000 })
+  if ((await page.locator('.session-rail').count()) === 0) {
+    await page.locator('.sess-btn').click()
+  }
+  await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
+  await page.locator('.session-rail .rail-new').click()
+  await page.waitForSelector('.chat-empty', { timeout: 10000 })
+  const bubbleId = await page.evaluate(() => {
+    const lib = JSON.parse(localStorage.getItem('wxmp-assets-v1') || '{}')
+    const metas = Object.values((lib.items || {})).map((a) => a.meta)
+    const top = metas.filter((m) => m.category === 'bubble').sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0]
+    return top ? top.id : ''
+  })
+  await page
+    .locator('textarea')
+    .fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写（素材库复用气泡角饰）')
+  await page.locator('textarea').press('Enter')
+  await waitStreamDone()
+  await page.waitForSelector('.quality-strip.q-ok', { timeout: 20000 })
+  await page.waitForTimeout(900) // 等文档自动落盘（含固化快照）
+
+  const docState = await page.evaluate(() => {
+    const cur = JSON.parse(localStorage.getItem('wxmp-sessions-v1') || '{}').current
+    const docs = JSON.parse(localStorage.getItem('wxmp-docs-v1') || '{}').docs || {}
+    const rec = docs[cur]
+    return { cur, title: rec ? rec.title : '', snaps: rec ? rec.snapshots || {} : {} }
+  })
+  const reused = !!bubbleId && !!docState.snaps[bubbleId]
+  const frame = page.frames().find((f) => f !== page.mainFrame())
+  const bodyHtml = frame ? await frame.locator('body').innerHTML() : ''
+  const noRefLeak = !bodyHtml.includes('[[asset') && bodyHtml.includes('data:image/')
+  console.log(`  ${reused ? 'PASS' : 'FAIL'} - S14 library asset reused & snapshot persisted (doc=${docState.title.slice(0, 12)} id=${bubbleId})`)
+  if (!reused) failed++
+  console.log(`  ${noRefLeak ? 'PASS' : 'FAIL'} - S14 asset ref materialized in preview (no [[asset leak)`)
+  if (!noRefLeak) failed++
+
+  // 素材改版影响：回素材工坊替换气泡源 → 影响扫描应列出这篇文档 → 用新版更新 → 快照 version 跟进
+  await page.locator('.view-tab[data-view="assets"]').click()
+  await page.waitForSelector('.ws-pane', { timeout: 10000 })
+  await page.locator('.ws-cat[data-cat="bubble"]').click()
+  await page.waitForSelector('.ws-row', { timeout: 10000 })
+  await page.locator('.ws-row:has-text("右下角小花气泡角饰")').click()
+  await page.waitForSelector('.ws-detail', { timeout: 10000 })
+  await page.locator('.ws-replace').click()
+  await page.waitForSelector('.ws-ref-row', { timeout: 15000 })
+  const refN = await page.locator('.ws-ref-row').count()
+  console.log(`  ${refN >= 1 ? 'PASS' : 'FAIL'} - S14 impact scan lists referencing doc (refs=${refN})`)
+  if (refN < 1) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S14a-refs.png` })
+  await page.locator('.ws-ref-update').first().click()
+  await page.waitForFunction(
+    () => /重渲染/.test(document.querySelector('.ws-msg')?.textContent || ''),
+    { timeout: 20000 },
+  )
+  const newSnapVer = await page.evaluate((id) => {
+    const cur = JSON.parse(localStorage.getItem('wxmp-sessions-v1') || '{}').current
+    const docs = JSON.parse(localStorage.getItem('wxmp-docs-v1') || '{}').docs || {}
+    const rec = docs[cur]
+    return rec && rec.snapshots && rec.snapshots[id] ? rec.snapshots[id].ver : 0
+  }, bubbleId)
+  console.log(`  ${newSnapVer >= 2 ? 'PASS' : 'FAIL'} - S14 doc re-rendered with new version (snapshot ver=${newSnapVer})`)
+  if (newSnapVer < 2) failed++
+  await page.screenshot({ path: `${outDir}/wxmp-desktop-S14b.png` })
+} catch (e) {
+  console.log('  FAIL - S14 reuse/impact error:', String(e).slice(0, 220))
   failed++
 }
 

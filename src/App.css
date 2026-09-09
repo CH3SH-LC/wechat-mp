@@ -29,6 +29,7 @@ body {
   flex: 0 0 auto;
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
+.brand-sub { font-weight: 400; font-size: 12px; color: var(--sub); letter-spacing: 1px; }
 .logo {
   width: 18px; height: 18px; border-radius: 5px;
   background: linear-gradient(135deg, #2f6fed, #4f8ff7);
@@ -192,6 +193,120 @@ body {
 
 .topbar-settings { border-color: var(--accent); color: var(--accent); }
 .sess-btn { border-color: var(--border); color: var(--text); font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- V3-R1 顶栏工作区切换 + 文档库 ---------- */
+.view-tabs { display: flex; gap: 2px; background: #eef1f4; border-radius: 10px; padding: 3px; }
+.view-tab {
+  border: none; background: transparent; border-radius: 8px; padding: 5px 16px;
+  font-size: 13px; font-weight: 600; color: var(--sub); cursor: pointer;
+}
+.view-tab:hover { color: var(--accent); }
+.view-tab.view-tab-active { background: #fff; color: var(--text); box-shadow: 0 1px 4px rgba(20, 30, 45, 0.12); }
+
+.docs-workspace { grid-template-columns: 1fr; }
+.docs-pane {
+  display: flex; flex-direction: column; min-height: 0; background: var(--panel);
+  width: 100%;
+}
+.docs-head {
+  display: flex; align-items: center; gap: 8px; padding: 12px 20px;
+  border-bottom: 1px solid var(--border); font-weight: 700; font-size: 15px;
+}
+.docs-head .hint { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--sub); }
+.docs-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 20px; display: flex; flex-direction: column; gap: 8px; align-content: flex-start; }
+.docs-empty { color: var(--sub); font-size: 13px; text-align: center; padding: 40px; }
+.doc-row {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer; background: #fff;
+  max-width: 760px;
+}
+.doc-row:hover { border-color: var(--accent); }
+.doc-main { flex: 1; min-width: 0; }
+.doc-title { font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc-meta { font-size: 11px; color: var(--sub); margin-top: 2px; }
+.doc-del { flex: 0 0 auto; }
+
+/* ---------- V3-R2 素材工坊 ---------- */
+.ws-pane { display: flex; flex-direction: column; min-height: 0; width: 100%; background: var(--panel); }
+.ws-head {
+  display: flex; align-items: center; gap: 8px; padding: 12px 20px;
+  border-bottom: 1px solid var(--border); font-weight: 700; font-size: 15px;
+}
+.ws-head .hint { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--sub); max-width: 640px; text-align: right; }
+.ws-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(340px, 46%) 1fr; }
+.ws-left { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--border); padding: 12px 16px; gap: 10px; }
+.ws-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.ws-cat {
+  border: 1px solid var(--border); background: #fff; border-radius: 20px; padding: 4px 13px;
+  font-size: 12.5px; cursor: pointer; color: var(--text);
+}
+.ws-cat:hover { border-color: var(--accent); color: var(--accent); }
+.ws-cat-active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ws-make { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: #fbfcfe; }
+.ws-make-title { font-size: 12.5px; font-weight: 700; margin-bottom: 6px; color: var(--text); }
+.ws-desc, .ws-svg, .ws-desc-editor {
+  width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; font-family: inherit; font-size: 12.5px; line-height: 1.55; outline: none;
+}
+.ws-desc:focus, .ws-svg:focus, .ws-desc-editor:focus { border-color: var(--accent); }
+.ws-make-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.ws-make-btn { margin-left: auto; padding: 7px 16px; font-size: 13px; }
+.ws-note { font-size: 11px; color: var(--sub); }
+.ws-search { display: flex; align-items: center; gap: 8px; }
+.ws-q {
+  flex: 1; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  font-size: 12.5px; outline: none; font-family: inherit;
+}
+.ws-q:focus { border-color: var(--accent); }
+.ws-list { flex: 1 1 auto; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.ws-empty, .ws-empty-right { color: var(--sub); font-size: 12.5px; padding: 18px; text-align: center; }
+.ws-row {
+  display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; cursor: pointer;
+}
+.ws-row:hover { border-color: var(--accent); }
+.ws-row-active { border-color: var(--accent); background: #eef3fb; }
+.ws-row-main { flex: 1; min-width: 0; }
+.ws-row-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-row-desc {
+  font-size: 12px; color: #4a5563; line-height: 1.5; margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ws-row-meta { font-size: 10.5px; color: var(--sub); margin-top: 3px; }
+.ws-del { flex: 0 0 auto; }
+.ws-right { min-height: 0; overflow-y: auto; padding: 14px 18px; background: #fbfcfe; }
+.ws-detail { display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
+.ws-detail-head { display: flex; align-items: center; gap: 10px; }
+.ws-ver { font-weight: 700; font-size: 13.5px; }
+.ws-ver-tag { font-size: 11px; color: var(--sub); }
+.ws-preview {
+  background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; display: flex; justify-content: center;
+}
+.ws-preview img { max-width: 320px; max-height: 220px; }
+.ws-fields { display: flex; flex-direction: column; gap: 9px; }
+.ws-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text); }
+.ws-fields input {
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+  font-size: 12.5px; outline: none; font-family: inherit; font-weight: 400;
+}
+.ws-fields input:focus { border-color: var(--accent); }
+.ws-actions { display: flex; gap: 10px; align-items: center; }
+.ws-save { padding: 7px 18px; font-size: 13px; }
+.ws-svg-editor-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text); }
+.ws-svg { font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 400; }
+.ws-refs { border: 1px solid #f0c8a0; background: #fff8ef; border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.ws-refs-title { font-size: 11.5px; font-weight: 700; color: #8a5a20; }
+.ws-ref-row { display: flex; align-items: center; gap: 10px; }
+.ws-ref-title { flex: 1; min-width: 0; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-ref-update { flex: 0 0 auto; border-color: var(--green); color: var(--green); }
+.ws-msg {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 40;
+  background: #1f2d3d; color: #fff; border-radius: 10px; padding: 10px 18px;
+  font-size: 12.5px; max-width: 72vw; line-height: 1.6; box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+
+
 
 /* ---------- 会话菜单 ---------- */
 .session-panel {

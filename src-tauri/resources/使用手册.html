@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>智序 · 使用手册</title>
+<style>
+  :root {
+    --ink: #2b2f36; --sub: #6b7280; --line: #e5e7eb; --bg: #f7f8fa;
+    --card: #ffffff; --accent: #0f766e; --accent-bg: #eef7f6;
+    --warn-bg: #fff8e6; --warn-line: #f0d48a; --warn-ink: #7a5a12;
+    --danger-bg: #fdeeee; --danger-line: #eec4c4; --danger-ink: #8c3a3a;
+    --ok-bg: #e9f7ef; --ok-ink: #1f7a4d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 16px 80px; background: var(--bg); color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 15px; line-height: 1.85;
+  }
+  .wrap { max-width: 780px; margin: 0 auto; }
+  header.hero {
+    background: linear-gradient(135deg, #0f766e, #115e59);
+    color: #fff; border-radius: 0 0 14px 14px; padding: 34px 28px 30px; margin: 0 -16px 0;
+  }
+  header.hero h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 1px; }
+  header.hero p { margin: 0; opacity: .92; font-size: 14px; }
+  .badge {
+    display: inline-block; background: rgba(255,255,255,.18); border: 1px solid rgba(255,255,255,.35);
+    padding: 1px 10px; border-radius: 999px; font-size: 12px; margin-top: 10px;
+  }
+  nav.toc {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 20px; margin: 18px 0; font-size: 13.5px;
+  }
+  nav.toc b { color: var(--accent); font-size: 13px; }
+  nav.toc ol { margin: 6px 0 0; padding-left: 22px; columns: 2; column-gap: 30px; }
+  nav.toc a { color: var(--ink); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); text-decoration: underline; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px 26px; margin: 18px 0;
+  }
+  h2 {
+    font-size: 19px; margin: 0 0 14px; padding-bottom: 10px;
+    border-bottom: 2px solid var(--accent-bg); color: #0c5c57;
+    display: flex; align-items: center; gap: 10px;
+  }
+  h2 .no {
+    flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--accent);
+    color: #fff; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  h3 { font-size: 16px; margin: 22px 0 8px; color: var(--ink); }
+  p { margin: 10px 0; }
+  ul, ol { margin: 8px 0; padding-left: 24px; }
+  li { margin: 5px 0; }
+  code {
+    background: #f1f3f5; border: 1px solid var(--line); border-radius: 5px;
+    padding: 1px 7px; font-size: 13.5px; font-family: Consolas, monospace;
+  }
+  .box {
+    border-radius: 10px; padding: 12px 16px; margin: 12px 0; font-size: 14px;
+  }
+  .note { background: var(--accent-bg); border-left: 4px solid var(--accent); }
+  .warn { background: var(--warn-bg); border-left: 4px solid var(--warn-line); color: var(--warn-ink); }
+  .danger { background: var(--danger-bg); border-left: 4px solid var(--danger-line); color: var(--danger-ink); }
+  .ok { background: var(--ok-bg); border-left: 4px solid var(--ok-ink); color: var(--ok-ink); }
+  .box b { font-weight: 700; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f3f6f5; }
+  .step { counter-increment: s; }
+  .steps { counter-reset: s; list-style: none; padding-left: 0; }
+  .steps li.step {
+    position: relative; padding-left: 44px; margin: 14px 0;
+  }
+  .steps li.step::before {
+    counter-increment: s; content: counter(s);
+    position: absolute; left: 0; top: 2px; width: 30px; height: 30px;
+    background: var(--accent-bg); color: var(--accent); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px;
+  }
+  .top { text-align: right; font-size: 12.5px; margin: 6px 0 0; }
+  .top a { color: var(--sub); text-decoration: none; }
+  .top a:hover { color: var(--accent); }
+  footer { text-align: center; color: var(--sub); font-size: 12.5px; margin-top: 26px; }
+  .keys { display: inline-block; background: #fff; border: 1px solid var(--accent); color: var(--accent);
+    border-radius: 6px; padding: 0 8px; font-size: 13px; }
+  @media (max-width: 640px) {
+    nav.toc ol { columns: 1; }
+    section { padding: 16px 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>智序 · 使用手册</h1>
+  <p>智序（公众号推文助手）使用教程：一篇写给零基础用户的图文说明，从安装、配置，到创作、导出、发布的全过程。</p>
+  <span class="badge">适用版本：0.1.x（2026-09 发布版）</span>
+</header>
+
+<nav class="toc">
+  <b>目录</b>
+  <ol>
+    <li><a href="#s1">这个软件是做什么的</a></li>
+    <li><a href="#s2">安装与启动</a></li>
+    <li><a href="#s3">第一次使用：填入 API 密钥</a></li>
+    <li><a href="#s4">创作你的第一篇推文</a></li>
+    <li><a href="#s5">右侧预览与质量提示</a></li>
+    <li><a href="#s6">素材工坊：你的插画素材库</a></li>
+    <li><a href="#s7">文档库：作品自动保存</a></li>
+    <li><a href="#s8">多任务会话管理</a></li>
+    <li><a href="#s9">导出成品并发布到公众号</a></li>
+    <li><a href="#s10">常见问题（FAQ）</a></li>
+    <li><a href="#s11">数据存放在哪里（隐私说明）</a></li>
+  </ol>
+</nav>
+
+<section id="s1">
+  <h2><span class="no">1</span>这个软件是做什么的</h2>
+  <p><b>智序</b>（本软件，全称"公众号推文助手"）是一个安装在电脑上的桌面软件。你像聊天一样告诉它想写什么，它会帮你起草一篇排版好的微信公众号推文，并在右侧的「手机屏幕」里实时给你看效果。</p>
+  <ul>
+    <li><b>对话创作</b>：自然语言提出需求，它会先澄清细节再成稿，也支持后续修改。</li>
+    <li><b>专业排版</b>：内置公众号排版知识库与排版引擎，标题、小标题、提示气泡、分隔线、插画等自动成套，成品接近人工排版效果。</li>
+    <li><b>实时预览</b>：右侧按 375 像素的手机宽度渲染，所见即所得。</li>
+    <li><b>插画素材库</b>：内置「素材工坊」，让 AI 专门制作小插画并入库，后续推文直接复用，风格统一。</li>
+    <li><b>自动保存</b>：每篇完成的推文自动存入「文档库」，随时打开继续改。</li>
+    <li><b>导出发布</b>：一键导出高清长图或分页图片，手动上传到公众号后台即可发布。</li>
+  </ul>
+  <div class="box warn"><b>需要说明：</b>创作过程需要联网——你的对话内容会发送给 DeepSeek（AI 服务商）处理，请勿输入个人敏感信息（身份证号、密码等）。软件本身不收集任何统计信息，详见 <a href="#s11">第 11 节</a>。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>安装与启动</h2>
+  <ol class="steps">
+    <li class="step">拿到安装包：文件名为 <code>wechat-mp-desktop-x.x.x-setup.exe</code>（一个以 <code>-setup</code> 结尾的文件）。</li>
+    <li class="step">双击安装包开始安装。若 Windows 弹出蓝色提示「已保护你的电脑」（SmartScreen），是因为该软件由个人开发者制作、尚未购买微软签名证书——点击「更多信息」，再点「仍要运行」即可继续。</li>
+    <li class="step">按提示选择安装位置（默认即可），等待安装完成，勾选「运行公众号推文助手」启动软件。</li>
+    <li class="step">安装后桌面和开始菜单会出现「公众号推文助手」图标，以后从这里双击打开。</li>
+  </ol>
+  <div class="box note"><b>卸载：</b>打开 Windows「设置 → 应用 → 已安装的应用」，搜索「公众号推文助手」，点击卸载即可。卸载不会删除你的作品文档（见 <a href="#s11">第 11 节</a>）。</div>
+  <div class="box note"><b>更新：</b>拿到新版本安装包后直接双击安装（覆盖安装），你之前保存的文档、素材、设置都会保留。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>第一次使用：填入 API 密钥</h2>
+  <p>本软件不提供 AI 服务，它调用的是 <b>DeepSeek</b> 的人工智能接口。要使用，需要先有一个自己的 DeepSeek「钥匙」（API 密钥）。这个过程只做一次，约需 5 分钟。</p>
+  <ol class="steps">
+    <li class="step">打开 DeepSeek 开放平台网站：<code>platform.deepseek.com</code>，注册账号并登录。</li>
+    <li class="step">在「API Keys（API 密钥）」页面点击「创建 API Key」，给钥匙起个名字（如 home），复制生成的密钥。它长得像一串 <code>sk-</code> 开头的字母数字，例如 <code>sk-xxxxxxxx…</code>。密钥只显示这一次，请妥善保存。</li>
+    <li class="step">回到本软件，点右上角「设置」，在「AI 模型设置」里把密钥粘贴到「API 密钥」一栏，然后点「保存」。</li>
+    <li class="step">保存成功后，直接开始对话即可（密钥立即生效，无需重启）。</li>
+  </ol>
+  <div class="box warn"><b>关于费用：</b>DeepSeek 平台按用量计费，新账号通常有赠送额度；用量很少时费用极低。若提示余额不足或鉴权失败，请到平台「用量/充值」页面查看。</div>
+  <div class="box note"><b>密钥安全：</b>密钥只保存在你自己的电脑上（具体位置见 <a href="#s11">第 11 节</a>），本软件不会把它上传到任何地方，也不会随软件源码公开。不要把密钥文件发给别人。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>创作你的第一篇推文</h2>
+  <ol class="steps">
+    <li class="step">打开软件后，在左下角输入框用<b>平常说话的方式</b>提出需求。例如：<br>
+      「帮我写一篇公众号推文，主题是咖啡店新品桂花拿铁，面向年轻上班族，口语一点，要配插画」
+    </li>
+    <li class="step">按 <span class="keys">Enter</span> 发送（<span class="keys">Shift + Enter</span> 换行）。右上角状态会显示「思考中…」/「生成中…」——AI 在构思和撰写，请稍等。</li>
+    <li class="step">如果需求还不够清楚，AI 会先用文字问你几个问题（比如文章多长、要不要放真实照片），你<b>逐条回答</b>，它会自动接着写。</li>
+    <li class="step">成稿后，右侧「手机屏幕」会立刻显示排版效果。满意就保存（会自动保存，见 <a href="#s7">第 7 节</a>）；不满意就直接在输入框里说，例如「第二段再口语一点」「加一个小标题」「插画换成卡通风格」，它会修改给你看。</li>
+  </ol>
+  <h3>怎么提需求更高效</h3>
+  <ul>
+    <li>说清<b>主题 + 读者 + 想要的感觉</b>，效果最好：「给新手妈妈写奶粉选购避坑指南，温暖、有条理，1200 字」。</li>
+    <li>要不要<b>真实照片</b>请提前说：AI 会给照片留好位置并配装饰插画；没照片时会全部用生成的插画。</li>
+    <li>风格不限：你可以指定「小红书风」「国潮」「简约商务」，AI 会按内容选择并统一渲染。</li>
+  </ul>
+  <div class="box warn"><b>内容提示：</b>AI 是写作帮手，不是事实核查员。发布前请人工核对数字、政策、价格等关键信息，医疗、金融等内容请遵守平台规则。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>右侧预览与质量提示</h2>
+  <p>右侧就是成品效果：一个手机屏幕样式的 375px 宽预览，顶上一行小按钮：</p>
+  <table>
+    <tr><th>按钮</th><th>作用</th></tr>
+    <tr><td>百分比（如 100%）</td><td>放大 / 缩小预览（循环切换）</td></tr>
+    <tr><td>复制 HTML</td><td>把排版后的网页代码复制到剪贴板（供进阶使用）</td></tr>
+    <tr><td>导出图片</td><td>把全文转成高清长图 + 分页图片，并自动打开所在文件夹——<b>推荐用它发布</b>（见 <a href="#s9">第 9 节</a>）</td></tr>
+    <tr><td>导出 HTML</td><td>把排版后的页面保存成单个 .html 文件</td></tr>
+    <tr><td>清空</td><td>删除当前对话与其自动保存的文档（需确认）</td></tr>
+  </table>
+  <p>生成过程中，软件会自动做<b>质量检查</b>：发现"组件太少、没有插画、气泡缺角饰"等可修问题时，会自己把问题清单喂给 AI 重写一次（最多两轮），直到合格为止。底部提示条含义：</p>
+  <ul>
+    <li><b>绿色「质量检查通过」</b>：可以放心导出。</li>
+    <li><b>黄色提示</b>：剩余是一些软性建议（如文章偏短、风格名称未收录），可改可不改。</li>
+  </ul>
+  <p>想看文字源码：在左侧对话气泡上点「查看 HTML 源码」即可展开收起。</p>
+  <div class="box danger"><b>注意「清空」按钮：</b>它会把当前这篇对话连同文档库里的成品一起删除，且不可恢复。想留底稿请先「导出图片」或把内容复制出来。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>素材工坊：你的插画素材库</h2>
+  <p>公众号排版好看的秘密，是各种小插画：气泡上的角饰、分隔线、小图标、横幅、题图插画…… <b>素材工坊</b>让 AI 单独制作这些小素材并存进你的素材库，以后每篇推文都能复用，越用越顺手。</p>
+  <ol class="steps">
+    <li class="step">点顶栏「素材工坊」进入工坊界面。</li>
+    <li class="step">先选一个分类（气泡角饰、分割线、装饰花边、横幅、小标题图、文章插图、宽幅插图、照片相框），然后在描述框里<b>尽量说清素材长什么样</b>，例如：「右下角一朵粉色小花的气泡角饰，扁平插画风，留白多」。描述越具体，成品越贴近想象。</li>
+    <li class="step">点「制作入库」。AI 绘制完成后素材会出现在素材列表里，可以给它起名、写描述方便日后检索。</li>
+    <li class="step">创作推文时不用管素材：AI 会<b>自动从素材库检索复用</b>你的素材；库里的不够用时，它才会现场委托制作并自动入库。</li>
+  </ol>
+  <h3>维护素材的小知识</h3>
+  <ul>
+    <li><b>检索</b>：列表上方可输入关键词，按语义查找（如搜"小花"能命中描述里写了小花的素材）。</li>
+    <li><b>替换源（重新制作）</b>：对某个素材不满意，可以用新描述重做。它会先扫描「哪些历史推文引用了这个素材」，由你逐篇选择是否用新版更新——旧文档不会被悄悄改动。</li>
+    <li><b>删除</b>：删除素材不会破坏已发布的推文（推文里保存的是当时素材的固化副本）。</li>
+  </ul>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>文档库：作品自动保存</h2>
+  <ul>
+    <li>每篇<b>成稿的推文会自动保存</b>成一份文档，标题用你的第一句话自动命名。你什么都不用做，顶栏会提示「已自动保存」。</li>
+    <li>点顶栏「文档库」可以看到所有作品。点某篇文档，会<b>回到它原来的对话</b>，预览同步恢复，你可以继续修改——修改后文档就地刷新，不会出现"两版并存"。</li>
+    <li>删掉某篇文档（连同它的对话）用文档库里的删除按钮；清空操作见 <a href="#s5">第 5 节</a>。</li>
+  </ul>
+  <div class="box note"><b>文档存在哪：</b>作品文件位于电脑「文档」文件夹下的 <code>wechat-mp-workspace</code> 目录（详见 <a href="#s11">第 11 节</a>），重装系统前请先备份这个文件夹。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s8">
+  <h2><span class="no">8</span>多任务会话管理</h2>
+  <ul>
+    <li>左侧「会话栏」每一条对话就是一个独立会话：写咖啡推广、写公司通知、写节日祝福……互不干扰，各自自动保存。</li>
+    <li>顶栏「展开会话栏 / 收起会话栏」控制侧栏显示；「新建」开新对话；点某条会话可随时切回继续写；删除会话会连同它的文档一起删除（有确认）。</li>
+    <li>软件关闭、重启后，所有会话和文档都还在，从会话栏直接点开即可。</li>
+  </ul>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s9">
+  <h2><span class="no">9</span>导出成品并发布到公众号</h2>
+  <p>本软件不代发文章（公众号的发布必须由你自己的账号在官方后台操作）。推荐流程如下，全程约 2-3 分钟：</p>
+  <h3>方式一（推荐）：导出图片后上传</h3>
+  <ol class="steps">
+    <li class="step">在预览区点「导出图片」。软件把全文转成图片并自动打开所在文件夹。文件夹里是一张<b>超长图</b>（手机 375 宽、2 倍高清输出，约 750 宽）以及按屏拆好的<b>若干张分页图</b>。</li>
+    <li class="step">浏览器打开 <code>mp.weixin.qq.com</code> 并登录你的公众号。</li>
+    <li class="step">左侧菜单进「草稿箱 → 新建图文」（或「图文消息 → 新建」），填写标题等。</li>
+    <li class="step">在正文编辑区<b>点工具栏的「图片」图标，选择「从图片库」或「从本地上传」</b>，把刚才的图片按顺序全部选中上传（想用超长图就传长图一张；手机端阅读长图体验更好时传长图，追求图文穿插则逐张传分页图，每张之间可点回车补一段说明文字）。</li>
+    <li class="step">检查排版无误后保存为草稿或直接群发。封面可在后台单独设置（建议用 900x383 比例的图片做封面）。</li>
+  </ol>
+  <h3>方式二：导出 HTML（进阶）</h3>
+  <ol class="steps">
+    <li class="step">点「导出 HTML」，得到一个 .html 文件，双击可用浏览器打开查看。</li>
+    <li class="step">把 HTML 内容复制到公众号编辑器，或交给懂技术的同事进一步处理。</li>
+  </ol>
+  <div class="box warn"><b>提醒：</b>微信公众号编辑器会自动过滤大部分自定义样式，直接粘贴 HTML 会丢失排版——这也是推荐用图片方式发布的原因。图片方式所见即所得，任何公众号都能用。</div>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s10">
+  <h2><span class="no">10</span>常见问题（FAQ）</h2>
+  <h3>发消息后一直没反应 / 提示网络错误</h3>
+  <p>创作需要联网访问 DeepSeek。请检查电脑网络是否正常，必要时关闭代理软件再试。公司内网如有防火墙限制也可能导致失败。</p>
+  <h3>提示鉴权失败 / 401 / 403</h3>
+  <p>多半是密钥问题：打开「设置」确认密钥是完整的一整串（以 <code>sk-</code> 开头，无多余空格）；再到 DeepSeek 平台确认账号有余额、密钥未被删除。</p>
+  <h3>AI 先问我一堆问题，能不能直接写？</h3>
+  <p>它是在确认需求，保证不写偏。你可以回答「你看着办，直接写」，它会按合理默认直接成稿。</p>
+  <h3>生成的内容不满意怎么办？</h3>
+  <p>直接提修改意见即可：「太长/太短」「再活泼一点」「换个角度重写」。也可以换一批更具体的素材再生成。AI 写作偶有起伏，多试几次通常就有满意版本。</p>
+  <h3>我想换别的模型或服务商</h3>
+  <p>「设置 → AI 模型设置」可以改接口地址与模型名。默认配置已调好，非进阶用户请勿改动。</p>
+  <h3>改了设置后为什么没生效？</h3>
+  <p>设置对「新开始的对话」生效。当前进行中的对话请新建会话后使用。</p>
+  <h3>软件更新/重装后我的东西还在吗？</h3>
+  <p>作品、素材、密钥都在「文档」文件夹的 <code>wechat-mp-workspace</code> 里，覆盖安装或重装不会动它。若手动删除了该文件夹则无法找回。</p>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<section id="s11">
+  <h2><span class="no">11</span>数据存放在哪里（隐私说明）</h2>
+  <table>
+    <tr><th>数据</th><th>存放位置</th><th>说明</th></tr>
+    <tr><td>对话记录 / 会话</td><td>文档 → <code>wechat-mp-workspace/sessions</code></td><td>本机明文文件</td></tr>
+    <tr><td>推文文档</td><td><code>wechat-mp-workspace/documents</code></td><td>含源码与渲染快照</td></tr>
+    <tr><td>素材库</td><td><code>wechat-mp-workspace/assets</code></td><td>你制作的插画素材</td></tr>
+    <tr><td>导出图片 / HTML</td><td><code>wechat-mp-workspace/exports</code></td><td>导出即自动打开该文件夹</td></tr>
+    <tr><td>API 密钥与模型设置</td><td><code>wechat-mp-workspace/settings.json</code></td><td>明文文件，仅本机</td></tr>
+  </table>
+  <div class="box ok"><b>隐私承诺：</b>以上数据全部保存在你自己的电脑上。软件不联网上传你的作品与素材，不收集使用统计；唯一的外部通信是创作时把「对话内容」发送给 DeepSeek 接口用于生成（以你在 DeepSeek 平台同意的条款为准）。请勿在对话中输入敏感个人信息。密钥只在本机使用，本软件的源码库中不含任何真实密钥。</div>
+  <p style="margin-top:14px">建议：重要作品请定期到 <code>wechat-mp-workspace</code> 文件夹手动备份；该文件夹不随软件卸载而删除。</p>
+  <div class="top"><a href="#">回到顶部</a></div>
+</section>
+
+<footer>智序 · 使用手册 · 2026-09 · 遇到问题可联系软件提供者获取新版手册</footer>
+</div>
+</body>
+</html>

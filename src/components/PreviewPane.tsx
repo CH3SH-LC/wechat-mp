@@ -1,15 +1,13 @@
 import { useRef, useState } from 'react'
 import type { QualityResult } from '../lib/quality'
 import { exportHtml } from '../lib/exportHtml'
-import { inTauri } from '../lib/chat'
+import { exportArticleImages } from '../lib/exportImages'
 
 interface Props {
   html: string | null
   quality: QualityResult | null
   warnings?: string[]
   onClear: () => void
-  // 桌面模式下发「发布到草稿箱」；由 App 提供（浏览器模式按钮不渲染）
-  publishDraft?: (html: string) => Promise<string>
 }
 
 function wrapSrcDoc(html: string): string {
@@ -29,12 +27,11 @@ ${html}
 </html>`
 }
 
-export default function PreviewPane({ html, quality, warnings = [], onClear, publishDraft }: Props) {
+export default function PreviewPane({ html, quality, warnings = [], onClear }: Props) {
   const [copied, setCopied] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [exportMsg, setExportMsg] = useState('')
-  const [publishMsg, setPublishMsg] = useState('')
-  const [publishing, setPublishing] = useState(false)
+  const [exportingImg, setExportingImg] = useState(false)
   const msgTimer = useRef<number | null>(null)
 
   const flashMsg = (setter: (v: string) => void, text: string, ms = 8000) => {
@@ -63,17 +60,18 @@ export default function PreviewPane({ html, quality, warnings = [], onClear, pub
     flashMsg(setExportMsg, r.ok ? `已导出：${r.msg}` : `导出失败：${r.msg}`)
   }
 
-  const doPublish = async () => {
-    if (!html || !publishDraft) return
-    setPublishing(true)
-    setPublishMsg('发布中，正在上传正文图片并写入草稿箱…')
+  // 第 34 轮：HTML → 图片（长图 + 分页），替代微信 API 发草稿箱，由用户手动上传
+  const doExportImg = async () => {
+    if (!html) return
+    setExportingImg(true)
+    flashMsg(setExportMsg, '正在把正文渲染为图片（长图 + 分页）…')
     try {
-      const r = await publishDraft(html)
-      flashMsg(setPublishMsg, r)
+      const r = await exportArticleImages(html)
+      flashMsg(setExportMsg, r.ok ? r.msg : `导出图片失败：${r.msg}`, 20000)
     } catch (e) {
-      flashMsg(setPublishMsg, `发布失败：${String(e)}（本地产物已保留）`, 15000)
+      flashMsg(setExportMsg, `导出图片失败：${String(e)}`, 20000)
     } finally {
-      setPublishing(false)
+      setExportingImg(false)
     }
   }
 
@@ -89,18 +87,11 @@ export default function PreviewPane({ html, quality, warnings = [], onClear, pub
           <button className="mini" onClick={copy} disabled={!html}>
             {copied ? '已复制' : '复制 HTML'}
           </button>
-          {inTauri() && (
-            <button
-              className="mini mini-publish"
-              onClick={() => void doPublish()}
-              disabled={!html || !publishDraft || publishing}
-              title="把当前正文发布到微信公众号草稿箱（需在设置里填写 AppID/AppSecret）"
-            >
-              {publishing ? '发布中…' : '发布到草稿箱'}
-            </button>
-          )}
+          <button className="mini" onClick={() => void doExportImg()} disabled={!html || exportingImg} title="把当前正文渲染成图片（长图+分页 2x 高清），导出后手动上传使用">
+            {exportingImg ? '转图中…' : '导出图片'}
+          </button>
           <button className="mini" onClick={() => void doExport()} disabled={!html}>
-            导出
+            导出 HTML
           </button>
           <button className="mini mini-danger" onClick={onClear} disabled={!html}>
             清空
@@ -109,11 +100,6 @@ export default function PreviewPane({ html, quality, warnings = [], onClear, pub
       </div>
 
       {exportMsg && <div className="export-msg">{exportMsg}</div>}
-      {publishMsg && (
-        <div className={`publish-msg ${publishMsg.includes('发布失败') ? 'pub-fail' : 'pub-ok'}`}>
-          {publishMsg}
-        </div>
-      )}
       {warnings.length > 0 && (
         <div className="compose-warn">
           {warnings.slice(0, 3).map((w, i) => (

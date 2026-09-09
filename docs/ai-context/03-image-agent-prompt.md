@@ -1,3 +1,4 @@
+> V3-R3 更新（2026-09-09）：图像子智能体职责扩展为"素材智能体"——桌面现场补做会经 addAsset 自动存回个人素材库（origin=article-fallback，D7）；gen_svg 的 kind 支持 wide/inline/deco/divider/heading（V3-R2 素材工坊按分类使用）。
 # 图像子智能体提示（gen_svg 专用，独立调用，非主对话模型）
 
 > 来源：`src-tauri/src/chat.rs` 常量 `SVG_SYSTEM_PROMPT` 与 `svg_user_prompt(kind,desc,theme)`。

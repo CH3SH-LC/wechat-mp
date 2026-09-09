@@ -1,3 +1,4 @@
+> V3-R3 更新（2026-09-09）：创作前置工具循环现含两类工具——知识工具 load_knowledge/search_knowledge + 个人素材库 search_assets（检索个人素材库返回条目清单，命中即用 [[asset:…]] 引用复用）；工具声明见 src-tauri/src/chat.rs PREP_TOOLS。
 # 创作前置指令 / 注册表壳措辞
 
 > 这些不是知识正文，是注入到"发给主模型"的固定指令措辞。

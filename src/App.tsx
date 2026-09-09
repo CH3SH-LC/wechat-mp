@@ -5,12 +5,16 @@ import ChatPane, { DisplayMsg } from './components/ChatPane'
 import PreviewPane from './components/PreviewPane'
 import SettingsPanel from './components/SettingsPanel'
 import SessionRail from './components/SessionRail'
+import DocsPane from './components/DocsPane'
+import AssetWorkshop from './components/AssetWorkshop'
 import { PERSONA_RULES, buildRegistrySystem } from './lib/persona'
 import { buildRegistry, ensureKnowledgeLoaded, loadEngineProtocol } from './lib/retrieval'
 import { collapseAssistantDraft, extractHtml, splitAssistant } from './lib/extract'
 import { composeMarkdown } from './lib/compose'
 import { themeDeclaration } from './lib/palettes'
 import { hasPlaceholders, materializePlaceholders } from './lib/image-agent'
+import type { MaterializeInfo } from './lib/image-agent'
+import { getAsset } from './lib/asset-library'
 import { renderArtPlaceholders } from './lib/artRender'
 import { checkHtml, QualityResult } from './lib/quality'
 import { ChatMsg, inTauri, sendChatRust, sendChatMock } from './lib/chat'
@@ -19,6 +23,7 @@ import { WRITE_INSTRUCTION, runPrep } from './lib/prep'
 import type { PrepOutcome } from './lib/prep'
 import { MAX_AUTO_REVISES, buildReviseContent, fixableWarnings } from './lib/revise'
 import { SessionItem, SessionMetaL, createSession, deleteSession, fmtTime, listSessions, openSession, saveSession } from './lib/sessions'
+import { DocMetaL, deleteDocument, listDocuments, openDocument, saveDocument } from './lib/documents'
 import './App.css'
 
 let idSeq = 1
@@ -67,6 +72,10 @@ export default function App() {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [sessionItems, setSessionItems] = useState<SessionMetaL[]>([])
 
+  // V3：顶栏工作区切换（对话 / 文档库 / 素材工坊）；文档库数据（文档默认自动保存、就地刷新）
+  const [view, setView] = useState<'chat' | 'docs' | 'assets'>('chat')
+  const [docItems, setDocItems] = useState<DocMetaL[]>([])
+
   const busyRef = useRef(false)
   const draftRef = useRef('')
   const stopRef = useRef<{ cancel: () => void } | null>(null)
@@ -83,6 +92,42 @@ export default function App() {
     listSessions().then((r) => setSessionItems(r.items))
   }
 
+  const refreshDocs = () => {
+    listDocuments().then(setDocItems)
+  }
+
+  // V3-R1：把一版终稿（v2 真源 + 渲染 html）默认自动保存/就地刷新为当前会话的文档；
+  // V3-R3：snapshots = 本次渲染实际复用的库素材固化快照（{svg, ver}），供改版影响比较
+  const persistDoc = async (
+    id: string,
+    source: string,
+    html: string,
+    warns: string[],
+    snapshots?: Record<string, { svg: string; ver: number }>,
+  ) => {
+    if (!source.trim() || !html.trim()) return
+    // 标题与会话保持一致：优先会话列表已有标题；列表滞后（新建会话首稿）时按首条用户消息派生
+    const meta = sessionItems.find((i) => i.id === id)
+    let title = meta && meta.title && meta.title !== '新对话' ? meta.title : ''
+    if (!title) {
+      const firstUser = msgsRef.current.find((m) => m.role === 'user')
+      const line = firstUser ? firstUser.content.split('\n')[0].trim() : ''
+      title = line ? line.slice(0, 16) + (line.length > 16 ? '…' : '') : ''
+    }
+    const saved = await saveDocument(id, { title, source, html, warnings: warns, snapshots: snapshots || {} })
+    if (saved) refreshDocs()
+  }
+
+  // 把本次素材解析使用到的库素材 id 读成固化快照（当前 SVG + version）
+  const snapshotsOfUsed = async (used: Record<string, { id: string; title: string }>) => {
+    const out: Record<string, { svg: string; ver: number }> = {}
+    for (const key of Object.keys(used || {})) {
+      const rec = await getAsset(key)
+      if (rec) out[key] = { svg: rec.svg, ver: rec.meta.version }
+    }
+    return out
+  }
+
   const applySession = async (item: SessionItem) => {
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
@@ -91,6 +136,16 @@ export default function App() {
     const maxId = mapped.reduce((acc, m) => Math.max(acc, m.id), 0)
     if (maxId >= idSeq) idSeq = maxId + 1
     setMsgs(mapped)
+    // V3-R1：该会话已有自动保存的文档（article.html 快照）→ 直接用快照恢复预览，
+    // 不重跑素材生成/渲染（打开"我保存的 html"即见原样）
+    const doc = await openDocument(item.id)
+    if (doc && doc.html.trim()) {
+      setHtml(doc.html)
+      setQuality(checkHtml(doc.html))
+      setWarnings(doc.warnings || [])
+      setSavedAt(fmtTime(item.updatedAt))
+      return
+    }
     const last = [...mapped].reverse().find((m) => m.role === 'assistant')
     if (last) {
       const seq = ++artSeqRef.current
@@ -156,6 +211,7 @@ export default function App() {
         await applySession(item)
         refreshItems()
       }
+      refreshDocs()
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -356,6 +412,11 @@ export default function App() {
     let draftRaw = collapseAssistantDraft(draftRef.current)
     let done = false
     let aborted = false
+    // V3-R1：记录终稿渲染产物（html 快照 + 质检警告），流结束后默认自动保存为文档
+    let finalHtml: string | null = null
+    let finalWarnings: string[] = []
+    // V3-R3：最后一轮素材解析实际复用的库素材（供文档固化快照）
+    let lastUsed: Record<string, { id: string; title: string }> = {}
     for (let round = 0; round <= MAX_AUTO_REVISES && !done; round++) {
       const { v2 } = splitAssistant(draftRaw)
       if (!v2) {
@@ -369,19 +430,33 @@ export default function App() {
             setQuality(checkHtml(html2))
             setWarnings(final.warnings)
           }
+          finalHtml = html2
+          finalWarnings = final.warnings
         }
         done = true
         break
       }
-      // 素材生成 + 排版质检（含图位占位才先交给图像子智能体）
-      let preview: { html: string; warnings: string[] } | null
+      // 素材解析 + 排版质检（V3-R3：库引用优先解析，缺失计为可修复警告；无占位直接 compose）
+      let preview: { html: string; warnings: string[] } | null = null
+      const matInfo: MaterializeInfo = { used: {}, residual: 0, storedFallback: 0 }
       if (hasPlaceholders(v2)) {
-        const matured = await materializePlaceholders(v2, themeDeclaration(v2))
-        preview = await renderV2(matured)
+        const matured = await materializePlaceholders(v2, themeDeclaration(v2), matInfo)
+        const p = await renderV2(matured)
+        if (p && matInfo.residual > 0) {
+          p.warnings = [
+            ...p.warnings,
+            `库素材引用缺失（${matInfo.residual} 处）：所引用的库素材不存在或未收录，请改用 [[img]]/[[deco]] 占位，或引用个人素材库中实际存在的素材`,
+          ]
+        }
+        preview = p
       } else {
         const c = resolvePreview(draftRaw)
-        preview = c ? { html: c.arts.length ? await renderArtPlaceholders(c.html, c.arts) : c.html, warnings: c.warnings } : null
+        if (c) {
+          const html2 = c.arts.length ? await renderArtPlaceholders(c.html, c.arts) : c.html
+          preview = { html: html2, warnings: c.warnings }
+        }
       }
+      lastUsed = matInfo.used
       const fix = preview ? fixableWarnings(preview.warnings) : []
       const atCap = round === MAX_AUTO_REVISES
       if (!preview || fix.length === 0 || atCap || !busyRef.current) {
@@ -392,6 +467,8 @@ export default function App() {
             setQuality(checkHtml(preview.html))
             setWarnings(preview.warnings)
           }
+          finalHtml = preview.html
+          finalWarnings = preview.warnings
         }
         if (!busyRef.current) aborted = true
         done = true
@@ -441,6 +518,12 @@ export default function App() {
       const finalRaw = collapseAssistantDraft(draftRaw)
       const saveMsgs: DisplayMsg[] = [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: finalRaw }]
       persistNow(currentId, saveMsgs)
+      // V3-R1：终稿默认自动保存为文档（source 真源 + html 快照）；会话内更新就地刷新同一份文档
+      // V3-R3：同时固化本轮实际复用的库素材（{svg, ver}）——改库素材不会静默改变老文档
+      if (splitAssistant(finalRaw).v2 && finalHtml) {
+        const snaps = await snapshotsOfUsed(lastUsed)
+        void persistDoc(currentId, finalRaw, finalHtml, finalWarnings, snaps)
+      }
     }
   }
 
@@ -481,6 +564,9 @@ export default function App() {
   }
 
   const removeSession = async (id: string) => {
+    // V3-R1：删除会话连带删除其默认文档（文档 id == 会话 id，避免残留"幽灵文档"）
+    await deleteDocument(id)
+    refreshDocs()
     const r = await deleteSession(id)
     setSessionItems(r.items)
     if (r.current && r.current !== currentId) {
@@ -496,17 +582,37 @@ export default function App() {
     refreshItems()
   }
 
-  // 清空 = 清空当前会话内容（保留会话，标题回到默认）
+  // 清空 = 清空当前会话内容（保留会话，标题回到默认）；其文档一并移除（无产物不留在文档库）
   const clear = () => {
     if (busyRef.current) return
     clearAllChat()
-    if (currentId) persistNow(currentId, [])
+    if (currentId) {
+      void deleteDocument(currentId)
+      refreshDocs()
+      persistNow(currentId, [])
+    }
   }
 
-  // ---------- 发布到草稿箱（仅桌面；浏览器模式不渲染按钮） ----------
-  const publishDraft = async (h: string): Promise<string> => {
-    if (!inTauri()) return Promise.reject('发布需在桌面模式使用')
-    return await invoke<string>('publish_draft', { html: h, title: null })
+  // ---------- 使用手册（发布轮；桌面版顶栏入口，手册 HTML 随安装包发布） ----------
+  const openManual = async () => {
+    if (!inTauri()) return
+    try {
+      await invoke('open_manual')
+    } catch (e) {
+      window.alert(`打开《使用手册》失败：${e}。可在程序安装目录中找到 使用手册.html 手动打开。`)
+    }
+  }
+
+  // ---------- V3 顶栏工作区 ----------
+  const goView = (v: 'chat' | 'docs' | 'assets') => {
+    if (v === 'docs') refreshDocs()
+    setView(v)
+  }
+
+  const openDocFromLib = async (id: string) => {
+    if (busyRef.current) return
+    if (id !== currentId) await switchSession(id)
+    setView('chat')
   }
 
   const status = inTauri() ? 'DeepSeek 桌面' : '模拟模式（浏览器）'
@@ -516,7 +622,8 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo" />
-          公众号推文助手
+          智序
+          <span className="brand-sub">公众号推文助手</span>
           <button
             className="mini sess-btn"
             data-ready={currentId ? 1 : 0}
@@ -526,35 +633,65 @@ export default function App() {
             {railOpen ? '收起会话栏' : '展开会话栏'}
           </button>
         </div>
+        <nav className="view-tabs">
+          <button className={`view-tab ${view === 'chat' ? 'view-tab-active' : ''}`} data-view="chat" onClick={() => goView('chat')}>
+            对话
+          </button>
+          <button className={`view-tab ${view === 'docs' ? 'view-tab-active' : ''}`} data-view="docs" onClick={() => goView('docs')}>
+            文档库
+          </button>
+          <button className={`view-tab ${view === 'assets' ? 'view-tab-active' : ''}`} data-view="assets" onClick={() => goView('assets')}>
+            素材工坊
+          </button>
+        </nav>
         <div className="topbar-meta">
           <span>{kbCount === null ? '知识库加载中…' : `知识库 ${kbCount} 条目 · 三层结构`}</span>
           {savedAt && <span className="hint">已自动保存 {savedAt}</span>}
+          {inTauri() && (
+            <button className="mini" onClick={() => void openManual()}>
+              使用手册
+            </button>
+          )}
           <button className="mini topbar-settings" onClick={() => setShowSettings(true)}>
             设置
           </button>
         </div>
       </header>
       {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
-      <main className={`workspace ${railOpen ? 'rail-on' : 'rail-off'}`}>
-        {railOpen && (
-          <SessionRail
-            items={sessionItems}
-            currentId={currentId}
-            onNew={() => void newSession()}
-            onOpen={(id) => void switchSession(id)}
+      {view === 'chat' ? (
+        <main className={`workspace ${railOpen ? 'rail-on' : 'rail-off'}`}>
+          {railOpen && (
+            <SessionRail
+              items={sessionItems}
+              currentId={currentId}
+              onNew={() => void newSession()}
+              onOpen={(id) => void switchSession(id)}
+              onDelete={(id) => void removeSession(id)}
+            />
+          )}
+          <ChatPane
+            msgs={msgs}
+            busy={busy}
+            onSend={(t) => void send(t)}
+            onStop={stop}
+            status={status}
+            knowledgeNote={note}
+          />
+          <PreviewPane html={html} quality={quality} warnings={warnings} onClear={clear} />
+        </main>
+      ) : view === 'docs' ? (
+        <main className="workspace docs-workspace">
+          <DocsPane
+            items={docItems}
+            onOpen={(id) => void openDocFromLib(id)}
             onDelete={(id) => void removeSession(id)}
           />
-        )}
-        <ChatPane
-          msgs={msgs}
-          busy={busy}
-          onSend={(t) => void send(t)}
-          onStop={stop}
-          status={status}
-          knowledgeNote={note}
-        />
-        <PreviewPane html={html} quality={quality} warnings={warnings} onClear={clear} publishDraft={publishDraft} />
-      </main>
+        </main>
+      ) : (
+        <main className="workspace docs-workspace">
+          <AssetWorkshop />
+        </main>
+      )}
     </div>
   )
 }

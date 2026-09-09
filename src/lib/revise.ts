@@ -8,7 +8,7 @@ export const MAX_AUTO_REVISES = 2
 
 // 只有这些"改写法即可解决"的结构/素材形状问题会触发自动重写；
 // 风格未收录（可能是用户自定义名）、正文偏短（可能是有意短篇）、本地图/art:///表格等不触发。
-const FIXABLE_KEYS = ['组件化不足', '未包含美术素材', '素材用量偏低', '只有照片位、没有任何装饰插画', '气泡角饰']
+const FIXABLE_KEYS = ['组件化不足', '未包含美术素材', '素材用量偏低', '只有照片位、没有任何装饰插画', '气泡角饰', '库素材引用缺失']
 
 export function fixableWarnings(warnings: string[]): string[] {
   return warnings.filter((w) => FIXABLE_KEYS.some((k) => w.includes(k)))
