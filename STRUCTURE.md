@@ -65,7 +65,7 @@ wechat-mp-desktop/
 
 ## 桌面后端（src-tauri/ 下）
 
-- `src/main.rs` / `src/lib.rs`：启动、命令注册与状态管理。
+- `src/main.rs` / `src/lib.rs`：启动、命令注册与状态管理；**主窗口在这里创建**（`tauri.conf.json` 的 `app.windows` 已置空），以便在环境变量 `WXMP_CDP_PORT` 存在时把 `--remote-debugging-port` 交给 wry——默认不设时行为与配置窗口完全一致（标题/尺寸/label 逐字相同）。原因见 [WebView2 与真机验收](docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md)。
 - `src/chat.rs`：DeepSeek SSE（含消息线上形态 `to_wire`/`build_messages`、回合预算）、prep、图像生成及补充说明、视觉复核；**模型真实上限运行时查询与缓存**（`GET /models`）、网络超时、每个模型调用都写一条请求证据；`tests::fake` 是可控假 HTTP 服务（延迟/超时/错误/取消/上限的离线测试）。
 - `src/documents.rs`：文档存储——**不可变版本目录 + 提交指针**（`documents/<docId>/{manifest.json, revisions/<revisionId>/{source.md,article.html,meta.json}, staging/<transactionId>/}`；写 staging → 校验 → 目录整体改名安装 → 一次 rename 提交指针；旧三文件布局迁移为 `revisions/legacy`）。命令：`list_documents`（`items` + `unreadable`）、`open_document`、`save_document`、`delete_document`、`list_document_revisions`、`open_document_revision`、`commit_document_revision`。
 - `src/assets.rs` / `src/sessions.rs` / `src/settings.rs`：本地数据域；列表读取**如实区分"读不出来"**（`unreadable` / `state_warning` / `scan_warning` / `load_error`），不再把 IO 失败折叠成"不存在"。
@@ -78,7 +78,9 @@ wechat-mp-desktop/
 
 ## scripts/
 
-- 当前检查：`verify-ui.mjs`、`compose-check.mjs`、`asset-resolve-check.mjs`、`svg-quality-check.mjs`、`progress-check.mjs`、`trace-check.mjs`、`raster-check.mjs`、`fixture-repair.mjs`、`delivery-quality-check.mjs`、`photo-swallow-check.mjs`（照片位吞并源码泄漏的回归；`--prove-red` 从 git 取修复前版本证红；用例 ⑥ 打在真实最新稿的整份只读副本上）、`asset-completion-check.mjs`（素材完成状态：排版拒收回写台账、复用路径同过适用门禁、预算不被自动流程重置）、`repair-integrity-check.mjs`（事实规范化与正文投影的纯函数回归：正反对照、口径一致、"比不了必须阻断"）、`repair-flow-check.mjs`（**真实 App** + 受控模型输出：丢事实组不得 accepted、保留组必须 accepted、trace 必须有 `bodyApplicability=applied`）、`prep-contract-check.mjs`（真实 `runPrep` + stub `prep_turn`：reply/compose/candidate 三分支、旧协议兼容、普通答疑不提交、参数非法、预算封顶无第 4 次请求）、`preview-resource-check.mjs`（从发送前记录所有请求：外链尝试必须为 0，且原始违规诊断仍在门禁记录里）、`live-conformance.mjs`、`live-three-samples.mjs`（真机三小样：CDP 驱动真实桌面应用打真实模型，需隔离工作区）。
+- 当前检查：`verify-ui.mjs`、`compose-check.mjs`、`asset-resolve-check.mjs`、`svg-quality-check.mjs`、`progress-check.mjs`、`trace-check.mjs`、`raster-check.mjs`、`fixture-repair.mjs`、`delivery-quality-check.mjs`、`photo-swallow-check.mjs`（照片位吞并源码泄漏的回归；`--prove-red` 从 git 取修复前版本证红；用例 ⑥ 打在真实最新稿的整份只读副本上）、`asset-completion-check.mjs`（素材完成状态：排版拒收回写台账、复用路径同过适用门禁、预算不被自动流程重置）、`repair-integrity-check.mjs`（事实规范化与正文投影的纯函数回归：正反对照、口径一致、"比不了必须阻断"）、`repair-flow-check.mjs`（**真实 App** + 受控模型输出：丢事实组不得 accepted、保留组必须 accepted、trace 必须有 `bodyApplicability=applied`；含第二轮指南 §4.1 的三个**单项**事实反例：仅删地点 / 上午改下午 / 删行内代码电话）、`prep-contract-check.mjs`（真实 `runPrep` + stub `prep_turn`：reply/compose/candidate 三分支、旧协议兼容、普通答疑不提交、参数非法、预算封顶无第 4 次请求）、`preview-resource-check.mjs`（从发送前记录所有请求：八组预览输入都必须零外链尝试，且**特定** `html.external-img` 诊断与原始违规原文仍在门禁记录里）、`runner-negative-check.mjs`（判定器负向回归：错误端口/零检查必须报错而不是全 PASS）、`release-smoke.mjs`（release exe 的隔离启动冒烟：窗口标题用**操作系统**读取、真实工作区逐字节未变；CDP 可用性单独如实记录）、`live-acceptance.mjs`（**真机 + 真实模型**六回合验收 L1–L6，隔离启动器 + 跨回合预算账本；详见 `docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md`）、`live-conformance.mjs`、`live-three-samples.mjs`（**已被 `live-acceptance.mjs` 取代，勿再作为签收依据**）。
+- `lib/run-result.mjs`：runner 统一判定器（`createJudge`/`statusOf`/`finish`/`guardCrashes`/`resolveOutDir`/`tapCheckLines`）——PASS 必须同时满足"计划场景齐全 + 检查数 > 0 + 无错误"，零检查与异常为 ERROR、缺依赖为 BLOCKED；输出一律落 `run-result.json`。
+- `lib/desktop-harness.mjs`：真机验收的**隔离启动器**（专属 `USERPROFILE` + `WEBVIEW2_USER_DATA_FOLDER` + 空闲 CDP 端口 + 隐藏窗口），隔离目录与真实工作区重叠/嵌套时**直接拒绝启动**；另含只关本轮 PID、目录哈希清单与差异比对。
 - `lib/ls-stub.mjs`：内存 localStorage 桩，让素材链路可无头驱动（供 `asset-resolve-check.mjs` 用）。
 - `lib/fixtures.mjs`：读取 `fixtures/` 下的真实失败样例；`fixtures/2026-09-28-basement/` 是 2026-09-28「筑基」失败稿 + 四枚库素材 + 当时告警的**只读**副本（脚本只读不写），`fixtures/deco-calibration/` 是角饰实际尺寸检查的校准样例（含真实库素材副本与两个合成退化样例），`fixtures/2026-09-29-photo-swallow/` 是照片位吞并后续素材块的失败样例（最小片段 + 真实结构裁剪版 + **真实 `source.md` 整份只读副本**，含前后对比证据）。
 - 手动转换：`compose-cli.mjs`。

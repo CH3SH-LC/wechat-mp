@@ -1,10 +1,19 @@
 // progress-check.mjs —— 「AI 工作中」气泡的阶段/计时纯函数断言（2026-09-28）
-// 用法：node scripts/progress-check.mjs
+// 用法：node scripts/progress-check.mjs [--out <目录>]
 // 只测 progress.ts 的纯函数（阶段标签映射、耗时格式化），不碰 DOM、不调模型。
 // 这些值直接决定气泡上展示什么文字，属于用户可见文案，必须有确定性断言兜住。
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult（status/checks/errors）→ run-result.json + 退出码。
+// 零条检查是 ERROR 而不是"通过"；异常由 guardCrashes 落成 ERROR。**不**用 `failed === 0` 推导成功。
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
+
+const judge = createJudge({ script: 'progress-check', outDir: resolveOutDir('progress-check') })
+guardCrashes(judge)
+
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -90,5 +99,4 @@ check(
   Object.keys(progress).join(','),
 )
 
-console.log(failed === 0 ? '\nPROGRESS OK' : `\nPROGRESS FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'PROGRESS' })

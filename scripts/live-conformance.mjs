@@ -1,9 +1,13 @@
 // live-conformance.mjs —— 第 28 轮：真实模型 → 排版引擎 → 产品规范断言（验收闸门，补"只证能力不证合规"盲区）
-// 用法：node scripts/live-conformance.mjs   （需真实 DEEPSEEK_API_KEY / ~/.dsh）
+// 用法：node scripts/live-conformance.mjs [--out <目录>]   （需真实 DEEPSEEK_API_KEY / ~/.dsh）
 // 覆盖：①兜底话术不泄漏进正文 ②风格名归一（带"风"尾缀不落空）③口径 A：给真实照片 → ::: photo 照片位 + 装饰插画（[[img]]/[[deco]]）并存；口径 B：无照片 → [[img]]/[[deco]] 插画占位（零照片位）
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码。
+// 缺凭据 = BLOCKED（退出 2）；零条检查 = ERROR；异常 = ERROR。**不**用 `failed === 0` 推导成功。
 import os from 'os'
 import fs from 'fs'
 import path from 'path'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 import { PERSONA_RULES } from '../src/lib/persona.ts'
 import { composeMarkdown } from '../src/lib/compose.ts'
 
@@ -67,10 +71,25 @@ async function chat(history) {
 const REGISTRY =
   '\n## 知识注册表（节选）\n【视觉/风格】style-campus(校园) / style-japanese(日系) / style-guochao(国潮) / style-tech(科技)\n【文本/内容类型】type-promo(促销/宣传) / type-news(资讯)\n【文本/文案】copy-tpl-promo(促销成稿模板)\n【文本/合规】comp-banned(违禁词)\n'
 
+const judge = createJudge({
+  script: 'live-conformance',
+  outDir: resolveOutDir('live-conformance'),
+  plannedCases: ['A:', 'B:', 'C:'],
+})
+guardCrashes(judge)
+
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
+}
+
+// 缺凭据 = 无法开始 = BLOCKED（退出 2）：绝不能因为"跑不起来"就打印 OK 或空跑出零条检查
+if (!cred()) {
+  judge.block('缺少真实模型凭据：环境变量 DEEPSEEK_API_KEY 与 ~/.dsh/.credentials.yaml 都没取到（本脚本需要真实模型）。')
+  judge.finish({ exitCode: 2, label: 'CONFORM' })
+  process.exit(2)
 }
 
 // 真实产品是多轮对话：模型可能先澄清 1 轮再成稿——累积历史（保留原始需求）模拟到产出 v2 为止（最多 2 轮）
@@ -234,5 +253,4 @@ async function chatUntilArticleCustom(user, chatFn) {
   return { reply: last, body: '' }
 }
 
-console.log(failed === 0 ? 'CONFORM OK' : `CONFORM FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'CONFORM' })

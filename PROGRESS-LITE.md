@@ -3,6 +3,21 @@
 详细原因与验证见 [PROGRESS.md](PROGRESS.md)；当前待办见 [REQUIREMENTS.md](REQUIREMENTS.md)。每条只写一句话，阶段结束后合并里程碑。
 
 ---
+## 2026-10-01
+
+- [Change] 第二轮指南 §4.2 时序与基准语义：正文比较的"不适用"改按**候选轮次**判（原按 `!baseline`，首个候选投影为空会让后续每一轮修复都被报成"不适用"——而它在判定里不阻断），修复轮缺基准/投影为空一律 `failed`。
+- [Change] 无进展判定改用**位置级问题指纹 + 完整候选内容指纹**（原来只比问题 code 与正文投影，投影剔掉 SVG/样式，素材重画与样式改动会被误判成空转）。
+- [Change] 单项素材重试改为"先冻结正文与文档身份 → 处理素材 → 比较/门禁/取消/运行身份复核全过才提升预览与素材上下文"（原来先换预览与素材上下文、后跑门禁，失败的重试会顶掉正式版）；重试的正文比较适用性从 not-applicable 改为 failed。
+- [Change] 「已保存」只来自**回执 + 独立读回**：`accepted` 原来在落库前就置位、文案写"已验收并保存"，保存失败时仍在报保存成功；现拆出 `saved` 标志，落库前说"写入尚未确认"。
+- [Change] 保存时的素材快照改以**文档已有快照为权威**（原来无条件读库当前 svg/ver，库升 v2 会把用户没同意更新的旧文档一起改掉）；素材身份比较加入版本与内容哈希，快照损坏与缺失给不同结论。
+- [Chore] 新增 `scripts/lib/run-result.mjs` 统一判定器，12 个 runner 改为"计划场景齐全 + 检查数>0 + 无错误才 PASS"（零检查与异常 = ERROR、缺依赖 = BLOCKED）；外链证据断言收紧为**特定** `html.external-img` + 原始违规原文（旧的"任意 html.*"实测不可证伪）；修正 `waitForFunction` 超时参数位错位。
+- [New] 新增真机验收驱动器 `scripts/live-acceptance.mjs`（L1–L6、隔离启动、跨回合预算账本、双口径派发计数），离线自检通过，未运行。
+- [Blocked] **包 F 六回合全部未执行**：本机 WebView2（153/154 都试）不提供 TCP 上的 DevTools 端点，脚本在启动阶段即 BLOCKED（0 次派发、0 次绘图、无费用），证据见 [排查记录](docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md)。
+- [Fix] 顺带修掉一个从未生效的做法：wry 0.55.1 无条件覆盖 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`，项目文档里"用该环境变量开 CDP"一直是死的；改由 `lib.rs` 创建主窗口时按 `WXMP_CDP_PORT` 门控传入（默认不开端口，窗口标题/尺寸逐字不变，已实测）。
+- [Verify] `tsc`/`pnpm build` 干净；`cargo test --lib` 133 项；离线 11 个脚本全绿；`verify-ui`、`repair-flow-check`（含三个新事实反例）、`prep-contract-check` 175/175、`preview-resource-check` 26/26 全绿；负向回归 18/18；变异证伪有效。
+- [Fix] runner 参数陷阱：四个用**位置参数**的 runner 会把 `--out` 当成输出目录名（实测在仓库根建出 `--out/`）；`--out` 生效后位置又前移，URL 被当目录、baseURL 悄悄退回 1420 导致假 ERROR。统一改由 `parseRunnerArgs()` 按"像不像 URL"解析，两种约定都实测写对目录。
+- [Build] release 重建（`pnpm tauri build --bundles nsis`）+ **隔离启动冒烟通过**（窗口标题逐字符相等、隔离工作区自动建立、真实工作区逐文件哈希未变）。
+
 ## 2026-09-30
 
 - [Fix] 入库前验证抓出真缺陷：`prep-contract-check.mjs` 的依赖探测早于 `outDir` 初始化，解析不到 playwright 时撞 TDZ 抛错、退出码 1 且不落判定文件（静默失败）——探测后移，`runner-negative-check` 由 FAILED(3) 转 18 条全绿。

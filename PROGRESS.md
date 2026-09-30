@@ -3,6 +3,61 @@
 近期变更保留原因、范围与验证；完成轮次合并为里程碑。当前需求和未解决事项见 [REQUIREMENTS.md](REQUIREMENTS.md)。
 
 ---
+## 2026-10-01
+
+### [Change][Verify][Blocked] 第二轮指南 A–E 收口；F（真实模型验收）被 WebView2 卡住
+
+**背景**：按 [第二轮修改指南](docs/design/ds-repair-guide-2026-09-30.md) 收口复测点名的六个缺口。开工前先做了**基线核对**：A–D 的产品修复（事实三反例抽取、`preview-safe` 的 DOMParser 重写、`finish_preparation` 契约）在此前已被实现且当时就是绿的——审计（01:28–01:34）早于这些改动（01:50–02:15），所以本轮的工作是**补齐 A/E 的判定器与回归、修 §4.2 剩下的时序与基准语义、以及 §5.4 的快照权威性**，不是重做 B/C/D。
+
+**基线（本轮开工前实测，不是转述）**：`preview-resource-check` 八组预览全 PASS；`prep-contract-check` 175/175、24/24 场景 PASS；`repair-flow-check` 三个新事实反例（仅删地点 / 上午改下午 / 删行内代码电话）在真实 App 上全部 `draft-failed`、两个正例 `accepted`。
+
+#### 产品修复
+
+- **§4.2 适用性判据改对了**（`src/App.tsx`）：原来用 `!baseline` 判"不适用"——首个候选的正文投影若为空，`repairBaseline` 恒为 null，**后续每一轮自动修复都被报成 `not-applicable`**，而它在交付判定里 `bodyIntegrityOk` 仍是 true，等于给"该比却比不了"开了一条不阻断的放行通道。改为按 `round` 判：第 0 个候选才是 not-applicable，修复轮缺基准/投影为空一律 `failed`（由门禁补 `body.unverified` 阻断）。
+- **无进展判定改用位置级问题指纹 + 完整候选内容指纹**（`src/App.tsx`）：原来只比问题 `code` 与**正文投影**——投影会剔掉 `<svg>`、样式与坐标，于是"素材重画了、样式改了"这些真实进展在它眼里等于零，会被误判成空转提前结束。新增 `sameIssueFingerprints()`（用 `issueFingerprint` 的 stage/slot/节点/源文行号）与 `candidateFingerprint()`（渲染后 HTML 的 FNV-1a + 源文长度）。
+- **单项重试的顺序回归指南语义**（`src/App.tsx` 的 `retryAsset`）：原来先 `setHtml/setQuality/setWarnings` 并覆盖 `lastMaterializeRef`（**素材上下文**），**之后**才跑正文比较与门禁——一次失败的重试会把正式预览与后续基准一起换掉。现在：进入时先冻结正文与文档身份 → 处理素材 → 比较 + 门禁 + 取消 + 运行身份复核**全部通过**后才提升预览与素材上下文；不通过时预览仍显示（用户刚点的），但由四态标识如实标成未验收。单项重试的适用性也从"任一侧空即 not-applicable"改为 **failed**（重试必须比得起来）。
+- **「已保存」只来自回执 + 读回**（`src/App.tsx` + `src/components/PreviewPane.tsx`，§5.3）：`accepted` 状态原先在**落库之前**就置位，界面文案是"成品已验收并保存"——保存失败时仍在报告已保存。新增 `saved?: boolean`：落库前 `false`（文案改为"成品已验收，写入文档库尚未确认"），拿到回执**且**独立 `openDocumentSafe` 读回版本一致后才置 `true`；不一致/读回失败则给出明确提示且不翻成已保存。
+- **文档快照成为保存时的权威输入**（`src/App.tsx` 的 `snapshotsOfUsed`，§5.4）：原来无条件 `getAsset(key)` 取**库当前** `svg/ver` 写回文档——库升到 v2 时，用户**没同意更新**的旧文档也跟着变，"逐篇选择是否更新"的语义就此失效。现在优先沿用文档已有快照，只有确实没有可用快照才读库。
+- **素材身份：快照校验 + 版本 + 内容哈希**（`src/lib/asset-resolve.ts`、`src/lib/image-agent.ts`，§5.4）：新增 `svgContentHash`（FNV-1a，零依赖、node/浏览器同值）、`usableVersionOf`（正整数才算可用版本）、`snapshotUsable`（ID/版本/svg 非空/含 `<svg`/长度区间；**"缺失"与"损坏"给不同错误**）、`sameAsset`（ID、版本、内容哈希任一不同即不是同一素材）；preserve 路径**不读库内容**、只用库索引版本做比较并在 reason 里写明；`version: 0` 的硬编码改为真实版本；复用门禁缓存键加入内容哈希。
+- **两个口径裁决**（实施中发现指南有歧义，按此执行并记录）：① 指南 §5.4 闭锁限定在 **preserve**，且"都适用"点名的恢复路径是显式 `[[asset]]` 与 `[[img:…|new]]`，**没有**点名 `::: art deco` 遗留块——因此"文档里完全没有记录"的遗留块仍按库唯一名称恢复（既有断言据此保持绿），只有**文档记过但快照缺失/损坏**时才明确失败；② preserve 不读库内容，故"版本号相同而库内容被改"在 preserve 里检不出，内容哈希真正生效的位置是复用门禁与库复用路径的身份比较。两者均写进 [PROGRESS-LITE](PROGRESS-LITE.md) 与本文，供后续裁决。
+
+#### 判定器与回归（包 A / E）
+
+- **新增 `scripts/lib/run-result.mjs`**：把 `preview-resource-check` / `repair-flow-check` 已经用对的唯一判定口径抽成共享模块——PASS 必须**同时**满足"计划场景执行完整 + 检查数 > 0 + 无失败与基础设施错误"；**零检查是 ERROR 不是通过**；异常 ERROR、缺依赖 BLOCKED；一律落 `run-result.json`。`verify-ui`（60 多处内联结论行）用 `tapCheckLines` 按**实际打印出来的结论行**计数，零条结论行必然等价于"没有断言被执行"。另含 `guardCrashes`：崩在半路也**落盘**再退出（实测旧行为是 run-result.json 已写成 ERROR 但进程挂着不退出）。
+- **12 个 runner 统一改造**：`verify-ui`、`repair-integrity-check`、`asset-completion-check`、`live-conformance`、`asset-resolve-check`、`compose-check`、`progress-check`、`raster-check`、`svg-quality-check`、`trace-check`、`photo-swallow-check`（`--prove-red` 方向相反，用显式状态覆盖：≥1 条红才算 PASS，零检查 ERROR）、`runner-negative-check` 自身。只改"判定与退出码"这一层，**不动断言内容**。
+- **外链证据断言收紧**（`preview-resource-check.mjs`，§3.2）：原断言接受**任意** `html.*` 问题当"原始违规诊断保留"的证据。实测该写法**不可证伪**——同一份 trace 里还有 `html.emoji/gradient/shadow`，改坏断言照样绿。现改为断言**特定** `html.external-img` 且其 message 里带着原始违规原文（原文取自生产 mock `src/lib/chat.ts` 的 `MOCK_BAD.html`，不另抄字面量），并在发送前装全过程观察器采集诊断（最后一版是合规稿，读末尾 DOM 看不到）。证伪实测：换成不存在的原文 → `FAIL`、exit 1。
+- **等待条件修正**（§3.1）：`repair-flow-check.mjs` 原先只等 `.work-bubble` 不存在，且 `{ timeout }` 传在 **arg 位**（Playwright 签名是 `(fn, arg, options)`，超时被忽略、实际走默认 30s）。改为"先确认本轮 run 已开始（探针 started>0 或 `__probeCalls>=1`）→ 再等同一 run 终结（finished>0 且 trace 出现本轮 commit/persist 落定记录）"，超时全部放正确的 options 位；`verify-ui` 同型的 6 处参数位一并修正（**只修参数位、保留原来的有效等待值**，避免把"声明 10s 实际 30s"改成 10s 后把时序波动变成假红——实测 S24 就这么红过一次）。
+- `scripts/live-three-samples.mjs` 头部加了醒目废弃说明（mtime 挑 trace、硬编码 9222、清空当前文档、恒 exit 0），注明已被 `scripts/live-acceptance.mjs` 取代。
+
+#### 真机验收驱动器（包 F 的准备）
+
+新增 `scripts/live-acceptance.mjs`（六回合 L1–L6，逐条实现指南 §8）：复用 `lib/desktop-harness.mjs` 的隔离启动；密钥只从 `~/.dsh/.credentials.yaml` 解析、只经 `extraEnv` 传子进程，落盘前过 `assertNoSecret`；**跨 phase 累加**的预算账本（派发 ≤20、`gen_svg` ≤4），**派发前**检查额度、超限即 BLOCKED；派发计数用"应用 trace 双口径 + 页面 invoke 探针"交叉核对，对不上报 ERROR；L5 用新 PID 重开同一 profile 比对"最后成功版本"，L6 导出并校验 PNG 可解码、宽 750px。写完后**离线自检**（`node --check`、页面注入片段单独编译、26 项纯函数自测全过），未运行、未调用任何接口。
+
+#### 包 F：**BLOCKED（基础设施）**
+
+`node scripts/live-acceptance.mjs L1` 在**启动阶段**即 BLOCKED（exit 2，账本 `已派发 0 次、绘图 0 次`——**没有花任何钱**）。根因排查与逐条证据见 [WebView2 与真机验收](docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md)：本机 WebView2 运行时（153 与 154 都试过）**不提供 TCP 上的 DevTools 端点**；`--remote-debugging-port` 确实出现在 WebView2 浏览器进程的命令行上，但无端口监听、也无 `DevToolsActivePort` 文件；同机普通 Edge 用同一开关正常（200），且无组策略拦截。
+
+**顺带修掉一个真实隐患**（已生效，且已验证行为中性）：wry 0.55.1 **无条件**调用 `set_additional_browser_arguments()`，会覆盖 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`——也就是说项目文档里"用该环境变量开 CDP"的做法在当前依赖下**从来没生效过**。现改由 `src-tauri/src/lib.rs` 在创建主窗口时按环境变量 `WXMP_CDP_PORT` 门控地传给 builder（`tauri.conf.json` 的 `app.windows` 随之置空）。**默认不开任何调试端口**；窗口标题/尺寸/最小尺寸/label 与配置逐字一致，且必须原样带上 wry 的 `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` 默认串（Tauri 文档警告过）。实测标题逐字符相等、隔离工作区正常建立、真实工作区逐字节未变。
+
+#### 验证（实际执行结果）
+
+- `npx tsc --noEmit` 干净；`pnpm build` 通过；`cargo test --lib` **133 passed / 0 failed / 4 ignored**。
+- 离线断言全绿：`asset-completion-check` 58/58、`asset-resolve-check` 86/86、`compose-check` 87/87、`delivery-quality-check` 123 条、`repair-integrity-check` 75/75、`svg-quality-check` 20/20、`trace-check` 107/107、`progress-check` 36/36、`runner-negative-check` 18/18、`photo-swallow-check` 33/33、`fixture-repair` OK。
+- 浏览器/App 级（真实 `PreviewPane`、iframe、CDP 驱动 mock 模型）全绿：`verify-ui`、`repair-flow-check`（含三个新事实反例）、`prep-contract-check` 175/175、`preview-resource-check` 26/26。
+- **负向回归**：`runner-negative-check` 把三个受测 runner 指向无人监听的端口，断言"退出码非 0 + 状态 ERROR/BLOCKED + 不产出全通过结论"，18/18 通过；`verify-ui` 连错误端口 → `status ERROR`、`checks 0`，且不再挂住不退出。
+- **变异证伪**：外链新断言换成不存在的原文 → 变红 exit 1；改回即绿。
+- **隔离启动冒烟通过**：进程存活、窗口标题用**操作系统**读取且与 `智序 · 公众号推文助手` 逐字符相等、隔离工作区由应用自动建立且无真实数据、**真实工作区逐文件哈希未变**（新增 0 / 删除 0 / 修改 0）。
+- **release 重建**（`pnpm tauri build --bundles nsis`）：`wechat-mp-desktop.exe` sha256 `1afa8d8a2f0ac5ff4b4e328c7e912ab715c8208cbda342802ca666bfb595457b`、`智序_0.1.0_x64-setup.exe` sha256 `3d84b282274d77ad453559c3b03ac82b726b6c11946b8cf1d243ad2ecc661cde`。构建后已核对**没有任何应用输入文件新于 exe**（`find src src-tauri/src resources public index.html dist Cargo.toml tauri.conf.json capabilities -newer <exe>` 为空），即产物与源码/前端产物同步；对该 exe 重跑隔离冒烟 PASS。
+- **额外修掉的两个 runner 参数陷阱**（都属于"结果看着有、其实放错地方"这一类的可信度问题）：①`prep-contract-check` / `preview-resource-check` / `repair-flow-check` / `runner-negative-check` 用**位置参数**而 `verify-ui` 认 `--out`，用错约定时 `--out` 会被当成**输出目录名**、证据写进仓库根下一个叫 `--out/` 的目录（实测真出现了）；②`--out` 生效后位置参数**整体前移**，URL 会被当成输出目录、baseURL 悄悄退回默认的 1420 端口，于是脚本连到没在跑的服务、报一个像"产品坏了"的 ERROR（实测过）。现统一由 `lib/run-result.mjs` 的 `parseRunnerArgs()` 解析（按"长得像不像 http(s) URL"判，而不是数位置），两种写法都实测可复现地写对目录。
+- **未执行**：包 F 的 L1–L6 六回合（上节已说明）；微信后台观感与上传、断电恢复、多实例并发、图像理解、参考图真实理解仍全部未覆盖。
+- **未跑**：`live-*.mjs` 三个旧专项（需真实模型且与本轮范围无关）。
+
+### [Build] release 重建与隔离冒烟（2026-10-01）
+
+按铁律 7 重建：`pnpm tauri build --bundles nsis`。产物 `src-tauri/target/release/wechat-mp-desktop.exe` 与
+`bundle/nsis/智序_0.1.0_x64-setup.exe` 均与本次源码同步；隔离启动冒烟通过（见上）。冒烟用的临时隔离目录、
+探针脚本与 `%TEMP%` 下的 runner 输出均已清理，真实工作区计数未变。
+
 ## 2026-09-30
 
 ### [Fix][Chore] 运行器判定的静默失败修复 + 六轮改动首次入库

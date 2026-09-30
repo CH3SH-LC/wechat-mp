@@ -12,6 +12,18 @@
 
 ## 当前产品范围
 
+### 2026-10-01｜第二轮指南 A–E 实施，F 被基础设施阻塞
+
+- 入口：[第二轮修改指南](docs/design/ds-repair-guide-2026-09-30.md)；依据：[独立复测报告](docs/artifacts/2026-09-30-ds-audit/README.md)。
+- 需求：关闭复测点名的六个缺口——测试判定器与弱断言（A）、正文事实三反例（B）、准备契约/当前回合基准/素材保持（C）、预览资源与显示（D）、集成与发布证据（E）、已授权的真实模型验收（F）。
+- 已实施并验证（细节见 [PROGRESS](PROGRESS.md) 同日条目）：
+  - **B/C/D 的产品修复**：三个单项事实反例（仅删地点 / 上午改下午 / 删行内代码电话）在**真实 App** 上均不提交且正例仍通过；preserve 在绘图前闭锁、文档快照成为权威输入（库升 v2 仍用文档 v1、库删除仍可恢复、快照损坏明确失败）、比较加入版本与内容哈希；预览按 HTML/CSS 解析语义抑制外链且不破坏合法样式与本地图片。
+  - **A/E 的判定器与回归**：新增共享判定器 `scripts/lib/run-result.mjs`，12 个 runner 统一为"计划场景齐全 + 检查数 > 0 + 无错误 → 才 PASS"，零检查与异常均为 ERROR、缺依赖为 BLOCKED；补齐 runner 负向回归；修正 `waitForFunction` 超时参数位错位；外链证据断言收紧为**特定** `html.external-img` + 原始违规原文。
+  - **E 的构建与冒烟**：`tsc` / `pnpm build` / `cargo test --lib`（133 项）/ 离线断言脚本 / `verify-ui` / App 级 runner 全绿；`pnpm tauri build --bundles nsis` 重建 release；**隔离启动冒烟通过**（窗口标题逐字符相等、隔离工作区自动建立、**真实工作区逐字节未变**）。
+- **未完成（F，BLOCKED）**：L1–L6 六个真实模型回合**全部未执行**。原因是本机 WebView2 运行时不提供 TCP 上的 DevTools 端点，脚本在启动阶段即 BLOCKED（**0 次派发、0 次绘图、无费用**）。排查与证据见 [WebView2 与真机验收](docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md)。**不因此声称任何真实交付能力。**
+- 仍需裁决的既有口径（本轮未改）：删除文档会连带删除来源会话。
+- 状态：**A–E 已完成并验证；F 基础设施阻塞，未验收。**
+
 ### 2026-09-30｜复测缺口与第二轮 DS 修改任务
 
 - 当前执行入口：[第二轮修改指南](docs/design/ds-repair-guide-2026-09-30.md)；依据：[独立复测报告与冻结证据](docs/artifacts/2026-09-30-ds-audit/README.md)。第一轮“F1–F5 已关闭”的状态以本条复测结论为准。

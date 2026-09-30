@@ -1,8 +1,11 @@
 ﻿// compose-check.mjs —— composeMarkdown 转换器校验（第 14/15 轮）
 // 用法：node scripts/compose-check.mjs [outDir]
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
 import { composeMarkdown, svgElementCount } from '../src/lib/compose.ts'
 import { buildReviseContent, fixableWarnings, locateIssues } from '../src/lib/revise.ts'
-import { writeFileSync } from 'fs'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
+import { mkdirSync, writeFileSync } from 'fs'
 
 // P1：组件化/素材配额按成品长度分档（<600 字为短篇档，不再强塞组件）。
 // 需要触发长文档警告的用例必须先把正文撑过 600 字。
@@ -98,12 +101,15 @@ ${FLOWER_SVG}
 [[badge:新生指南]] [[badge:开学典礼]]`
 
 let failed = 0
+const outDir = process.argv[2] || 'docs/artifacts'
+const judge = createJudge({ script: 'compose-check', outDir: resolveOutDir('compose-check', outDir) })
+guardCrashes(judge)
+mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
-
-const outDir = process.argv[2] || 'docs/artifacts'
 
 // 1) 宣传类样例（校园主题）：mode 自动检测 promo；关键模块渲染；主题色落地
 const r = composeMarkdown(SAMPLE, { mode: 'auto' })
@@ -304,5 +310,4 @@ check('拒收素材记入 rejectedArts', rj.rejectedArts.length === 1, `n=${rj.r
 check('拒收记录带别名候选（可回写台账）', rj.rejectedArts[0]?.refs.includes('as-abc123'), JSON.stringify(rj.rejectedArts[0]?.refs))
 check('拒收素材报 blocking asset.rejected', rj.issues.some((i) => i.code === 'asset.rejected' && i.severity === 'blocking'))
 
-console.log(failed === 0 ? 'PHOTO-PARSE OK' : `PHOTO-PARSE FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'PHOTO-PARSE' })

@@ -711,6 +711,17 @@ export interface FactToken {
    * 那既会把 `负责接待的是张老师` 整段当姓名，也会漏掉 `8:30 → 18:30` 这种"新值包含旧值"的改写。
    */
   canon: string
+  /**
+   * 在**被投影的那段文本**里的字符区间 `[start, end)`（DS 指南 §4.2：
+   * "token 保存 kind、原文、规范值和来源范围"）。
+   *
+   * 为什么必须留着：只报"事实丢失（place）：东区操场"时，用户没法知道这句话原本在哪一段、
+   * 该去旧稿的哪个位置核对。区间由 `extractFacts` 定位，随证据一起给出——
+   * 重叠消解也正靠它判断"同一段文字只保留优先级最高的那个事实"。
+   * 可选：调用方手工构造的 FactToken（测试夹具）可以不带。
+   */
+  start?: number
+  end?: number
 }
 
 export interface BodyFragment {
@@ -953,7 +964,7 @@ export function extractFacts(text: string): FactToken[] {
     const key = h.kind + '|' + h.canon
     if (seen.has(key)) continue
     seen.add(key)
-    out.push({ kind: h.kind, text: h.text, canon: h.canon })
+    out.push({ kind: h.kind, text: h.text, canon: h.canon, start: h.start, end: h.end })
     if (out.length >= 300) break
   }
   return out
@@ -1171,7 +1182,8 @@ export function issuesFromBody(b: BodyIntegrityResult | null | undefined): Deliv
         code: ISSUE_CODES.bodyFactLost,
         severity: 'blocking',
         message: `正文事实丢失（${f.kind}）：${f.text}`,
-        evidence: `旧稿中的事实「${f.text}」在新稿里不再出现；模型声称"保留了"不算证据`,
+        // 带上来源区间（§4.2）：只说"少了东区操场"用户无从核对，说清它在被投影文本里的位置才好定位。
+        evidence: `旧稿中的事实「${f.text}」在新稿里不再出现${f.start !== undefined ? `（旧稿第 ${f.start}–${f.end} 字符处）` : ''}；模型声称"保留了"不算证据`,
         repairKind: 'reparse',
       }),
     )

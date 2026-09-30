@@ -34,6 +34,7 @@ import {
   bodyText,
   collectDeliveryIssues,
   deliveryVerdict,
+  issueFingerprint,
   slotIndexFromLedger,
 } from './lib/delivery-quality.ts'
 import type { BodyApplicability, DeliveryIssue, DeliveryVerdict, SlotIndexEntry } from './lib/delivery-quality.ts'
@@ -162,11 +163,47 @@ function wrapAsAssistantReply(source: string): string {
   return '```v2\n' + String(source || '').trim() + '\n```'
 }
 
-/** 两组阻断项的**代码集合**是否完全相同（无进展判定用；不比较条数也不比较文案） */
-function sameCodes(a: { code: string }[], b: { code: string }[]): boolean {
-  const sa = a.map((x) => x.code).sort().join('|')
-  const sb = b.map((x) => x.code).sort().join('|')
-  return sa === sb
+/**
+ * 两组阻断项的**位置级指纹集合**是否完全相同（无进展判定用）。
+ *
+ * 旧实现只比 `code`（同一批问题代码就算"一样"），但那会把"同一类问题在**不同位置**"
+ * 也说成没进展——模型明明在往前推（换了段落、换了素材位），却因为代码大类相同被判定空转。
+ * `issueFingerprint` 带上 stage / slotId / nodeId / 源文行号，正是"问题在哪"的精确表达。
+ */
+function sameIssueFingerprints(a: DeliveryIssue[], b: DeliveryIssue[]): boolean {
+  const sa = new Set(a.map(issueFingerprint))
+  const sb = new Set(b.map(issueFingerprint))
+  if (sa.size !== sb.size) return false
+  for (const k of sa) if (!sb.has(k)) return false
+  return true
+}
+
+/**
+ * FNV-1a 32 位哈希：给"候选内容指纹"用。
+ *
+ * 为什么不用 `crypto.subtle`：它是异步的，而这里要在同步判定里算指纹；
+ * 也不引第三方依赖（本仓库前端依赖只有 react / tauri api）。
+ * 用途只是"两次快照是否逐字节相同"，32 位足够（碰撞概率与收益无关紧要，
+ * 真碰撞的后果也不过是"少做一次提前结束"，不会放过任何阻断项）。
+ */
+function fnv1a(s: string): string {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16)
+}
+
+/**
+ * **完整候选内容指纹**（DS 指南 §4.2 末段）。
+ *
+ * 只比正文投影是不够的：正文投影会剔掉 `<svg>` 整块、样式与坐标——于是"素材重画了、
+ * 样式改了、结构变了"这些**真实进展**在它眼里全等于零，会被误判成"无进展、提前结束"。
+ * 因此指纹取**渲染后的 HTML**（它包含素材 SVG、样式与结构），再并上源文长度。
+ */
+function candidateFingerprint(c: { source: string; html: string }): string {
+  return `${c.source.length}:${c.html.length}:${fnv1a(c.html)}`
 }
 
 /**
@@ -214,7 +251,14 @@ function pendingFixables(v: DeliveryVerdict): DeliveryIssue[] {
  * 最新聊天内容不能被误解成"已经更新了正式成品"——这就是这个状态存在的理由。
  */
 export type DocDisplayState =
-  | { kind: 'accepted'; revisionId?: string } // 成品已验收并保存
+  | {
+      kind: 'accepted'
+      revisionId?: string
+      /** 本轮**成功提交回执 + 读回**是否已拿到（DS 指南 §5.3：应用「已保存」只来自这二者）。
+       *  `accepted` 是**门禁**的结论，不等于磁盘写入成功——落库前先置 false，
+       *  拿到回执与读回后才置 true。见 PreviewPane 同名类型上的说明。 */
+      saved?: boolean
+    } // 成品已验收并保存
   | { kind: 'restored'; revisionId?: string } // 已恢复上一版成品（本次候选被撤销）
   | { kind: 'draft-failed'; blockers: number } // 草稿未通过
   | { kind: 'repairing'; attempt: number } // 修复中
@@ -410,9 +454,29 @@ export default function App() {
   }
 
   // 把本次素材解析使用到的库素材 id 读成固化快照（当前 SVG + version）
-  const snapshotsOfUsed = async (used: Record<string, { id: string; title: string }>) => {
+  /**
+   * 为本轮实际用到的素材生成"固化快照"（写进文档，供以后逐篇选择是否更新）。
+   *
+   * **文档快照是保持素材的权威输入**（DS 指南 §5.4）：同一 ID 在库里升到 v2 时，
+   * 已固化的文档**仍要用它自己那一版 v1 的内容与版本**。所以这里**优先沿用**已有快照
+   * （`prior` 传入的是当前文档的快照表），只在没有可用快照时才读库当前值。
+   *
+   * 旧实现无条件 `getAsset(key)` 取库当前 `svg/ver`：文档每次保存都会被"顺带"升到库的最新版——
+   * 用户在素材库里换了图，他**没同意更新**的那些旧文档也跟着变了，而界面上"逐篇选择是否更新"
+   * 的语义就此失效。这不是显示问题，是文档内容的实际改动。
+   */
+  const snapshotsOfUsed = async (
+    used: Record<string, { id: string; title: string }>,
+    /** 当前文档已有的快照（缺省不沿用；显式传 {} 表示"已知文档没有快照"） */
+    prior?: Record<string, { svg: string; ver: number }> | null,
+  ) => {
     const out: Record<string, { svg: string; ver: number }> = {}
     for (const key of Object.keys(used || {})) {
+      const frozen = prior ? prior[key] : undefined
+      if (frozen && String(frozen.svg || '').trim()) {
+        out[key] = { svg: frozen.svg, ver: frozen.ver }
+        continue
+      }
       const rec = await getAsset(key)
       if (rec) out[key] = { svg: rec.svg, ver: rec.meta.version }
     }
@@ -1095,18 +1159,28 @@ export default function App() {
       const slots: SlotIndexEntry[] = slotIndexFromLedger(ledger)
       const requiredSlots = pending.map((e) => ({ slotId: e.slotId, slot: e.slot, done: false, reason: e.reason }))
       // 正文完整性（计划 §5.6 / DS 指南 §4.2）：
-      // - **首轮（修复基线尚未建立）**：不适用——没有修复前版本，本来就没有可比对象。
+      // - **本回合第一个候选（round 0）**：不适用——没有修复前版本，本来就没有可比对象。
       //   这是明确结论，不是"没检查"，更不是"通过"（不适用时 UI/日志如实写"不适用"）。
-      // - **修复轮**：必须对照**本回合首个候选冻结的事实基准**。不跟上一次成品比——用户完全可以
-      //   要求整篇重写，拿历史成品当退化信号会把正常需求误判成回退。
+      //   **判据是 round，不是"基准是不是空"**——用后者会把"第几个候选"与"基准建没建起来"
+      //   混成同一件事，于是基准建不起来的那些回合会被永久说成"不适用"（见下方分支的说明）。
+      // - **修复轮（round ≥ 1）**：必须对照**本回合首个候选冻结的事实基准**。不跟上一次成品比——
+      //   用户完全可以要求整篇重写，拿历史成品当退化信号会把正常需求误判成回退。
       // - **缺基准 / 投影为空**：按"该比却比不了"处理（`failed`），由门禁补一条阻断。
       //   绝不能再用 null 同时表示"不适用""没检查""检查失败"。
       const projection = bodyText(html)
       let body: ReturnType<typeof bodyIntegrity> | null = null
       let bodyApplicability: BodyApplicability
-      if (!baseline) {
+      if (round === 0) {
+        // 本回合首个候选：还没有"修复前版本"可比。这是**明确结论**（不适用），不是"没检查"，
+        // 更不是"通过"。注意判据是 `round`（本回合第几个候选），**不再**是 `!baseline`——
+        // 后者把"第几个候选"与"基准建没建起来"混成同一件事，实测漏洞见下一个分支。
         bodyApplicability = 'not-applicable'
-      } else if (!projection) {
+      } else if (!baseline || !projection) {
+        // 自动修复轮**必须**比得起来（DS 指南 §4.2）。旧写法是 `if (!baseline) not-applicable`：
+        // 首候选的正文投影若为空（解析失败 / 有效空正文），`repairBaseline` 就恒为 null，
+        // 于是**后续每一轮自动修复都报"不适用"**；而 `not-applicable` 在 delivery-quality 里
+        // `bodyIntegrityOk` 仍是 true——等于给"该比却比不了"开了一条不阻断的放行通道
+        // （独立审计 2026-09-30 记为"缺基准不闭锁"）。现在如实记 failed，由门禁补一条阻断。
         bodyApplicability = 'failed'
       } else {
         body = bodyIntegrity(baseline, projection)
@@ -1285,16 +1359,19 @@ export default function App() {
         break
       }
 
-      // 无进展（§5.6 末句）：同一批问题代码反复出现**且产物也未变** → 提前结束，避免空转。
-      // 只比代码列表是不够的（旧实现仅比代码却在日志里写"产物未变"，DS 指南 §4.4 末段）：
-      // 同类问题仍在、但正文投影确实变了，说明模型在推进，不能当成空转。
+      // 无进展（§5.6 末句）：同一批问题**在同一位置**反复出现**且整个候选也没变** → 提前结束，避免空转。
+      // 两项判据都必须到位（DS 指南 §4.2 末段）：
+      //   · 问题用**位置级指纹**（stage/slot/节点/源文行号），只比 code 会把"同类问题换了位置"
+      //     误判成没进展；
+      //   · 内容用**完整候选指纹**（渲染后 HTML，含素材 SVG 与样式 + 源文长度），只比正文投影
+      //     会把"素材重画了 / 样式改了"的真实进展当成零（正文投影本来就会剔掉 SVG 与样式）。
       if (
         prev &&
-        sameCodes(prev.verdict.blockers, cand.verdict.blockers) &&
-        prev.projection === cand.projection
+        sameIssueFingerprints(prev.verdict.blockers, cand.verdict.blockers) &&
+        candidateFingerprint(prev) === candidateFingerprint(cand)
       ) {
         stopReason = 'no-progress'
-        trace({ kind: 'note', runId: ledger.runId, stage: 'repair', attempt: round + 1, ok: false, stopReason: 'no-progress', issueCodes: cand.verdict.blockers.map((b) => b.code), before: `第 ${prev.round + 1} 轮`, after: `第 ${round + 1} 轮（正文投影一致）`, note: '同一批问题反复出现且产物未变，提前结束' })
+        trace({ kind: 'note', runId: ledger.runId, stage: 'repair', attempt: round + 1, ok: false, stopReason: 'no-progress', issueCodes: cand.verdict.blockers.map((b) => b.code), before: `第 ${prev.round + 1} 轮`, after: `第 ${round + 1} 轮（问题指纹与候选内容指纹都一致）`, note: '同一批问题反复出现且整个候选未变，提前结束' })
         break
       }
 
@@ -1383,7 +1460,9 @@ export default function App() {
     // 否则显示本次草稿并标明"未通过"——**不制造"已回滚"的结论**（§5.7 末句）。
     const shown = accepted ? accepted : priorIsAccepted && priorAccepted?.html ? null : draft
     const docState: DocDisplayState = accepted
-      ? { kind: 'accepted' }
+      ? // `saved: false` 是刻意的（DS 指南 §5.3）：此刻只完成了**门禁验收**，落库还没开始。
+        // 界面据它在落库前说"已验收、写入尚未确认"，而不是抢先说"已保存"。
+        { kind: 'accepted', saved: false }
       : priorIsAccepted
         ? { kind: 'restored' }
         : { kind: 'draft-failed', blockers: draft ? draft.verdict.blockers.length : 0 }
@@ -1449,7 +1528,7 @@ export default function App() {
         if (acceptedSrc) {
           // 最新候选 != 成品 → 它的文字（用户/模型的最新产出）单独留一版草稿
           if (latest && latest !== acceptedSrc) {
-            const latestSnaps = await snapshotsOfUsed(latest.used)
+            const latestSnaps = await snapshotsOfUsed(latest.used, priorAccepted?.snapshots)
             const draftSaved = await persistDoc(currentId, latest.source, latest.html, latest.warnings, latestSnaps, latest.bindings, {
               accepted: false,
               baseRevisionId: priorAccepted?.revisionId ?? undefined,
@@ -1471,7 +1550,7 @@ export default function App() {
                 : '最新候选未通过门禁，且草稿版未能写入（磁盘不可写或权限不足）',
             })
           }
-          const snaps = await snapshotsOfUsed(acceptedSrc.used)
+          const snaps = await snapshotsOfUsed(acceptedSrc.used, priorAccepted?.snapshots)
           const saved = await persistDoc(currentId, acceptedSrc.source, acceptedSrc.html, acceptedSrc.warnings, snaps, acceptedSrc.bindings, {
             accepted: true,
             // 基准版本 = 打开文档时读到的成品版本：提交前 Rust 会拿它做 CAS，
@@ -1485,20 +1564,36 @@ export default function App() {
           if (!saved) throw new Error('文档库没有确认写入（磁盘不可写或权限不足）')
           // 落库确认成功：清掉上一次的失败提示，避免它一直挂着
           setSaveError(null)
+          // **读回确认**（DS 指南 §5.3 末段）："应用「已保存」只来自本轮成功提交回执与读回"。
+          // 回执说明 Rust 接受了这次提交；读回说明它确实能被读出来、且就是本轮那一版。
+          // 读回失败/版本对不上时**不翻成"已保存"**——宁可让提示条说"写入未被确认"，
+          // 也不能凭一个返回值让用户以为成品已经落盘（保存失败却显示成功是最坏的误导）。
+          const readBack = await openDocumentSafe(currentId)
+          const confirmRev = saved.revisionId ?? ''
+          const readBackOk = readBack.ok && (!confirmRev || readBack.doc.revisionId === confirmRev)
+          if (!readBackOk) {
+            setSaveError(
+              readBack.ok
+                ? `写入回执与读回不一致（回执 ${confirmRev || '未返回版本号'}，读回 ${readBack.doc.revisionId || '未知'}）：本轮已通过门禁，但落盘结果未被确认。`
+                : `写入后读回失败：${errSummary(readBack.error)}。本轮已通过门禁，但落盘结果未被确认。`,
+            )
+          }
+          // 只有拿到回执**且**读回一致，才把「已保存」这一句放出去
+          setDeliveryState({ kind: 'accepted', revisionId: confirmRev || undefined, saved: readBackOk })
           trace({
             kind: 'run',
             runId: ledger.runId,
             stage: 'commit',
-            ok: true,
+            ok: readBackOk,
             revisionId: saved.revisionId ?? undefined,
             baseRevisionId: priorAccepted?.revisionId ?? undefined,
             stopReason,
-            note: '成品已验收并保存',
+            note: readBackOk ? '成品已验收并保存（含读回确认）' : '成品已验收，但落盘结果未被读回确认',
           })
         } else if (latest) {
           // 没有任何候选通过门禁：**存为草稿**（asDraft，不动已验收成品指针）。
           // 磁盘保存成功只说明"草稿存下来了"，交付仍然没成——两件事在这里分开记（计划 §8）。
-          const snaps = await snapshotsOfUsed(latest.used)
+          const snaps = await snapshotsOfUsed(latest.used, priorAccepted?.snapshots)
           const saved = await persistDoc(currentId, latest.source, latest.html, latest.warnings, snaps, latest.bindings, {
             accepted: false,
             baseRevisionId: priorAccepted?.revisionId ?? undefined,
@@ -1577,6 +1672,12 @@ export default function App() {
   const retryAsset = async (slotId: string) => {
     const ctx = lastMaterializeRef.current
     if (!ctx || busyRef.current || !currentId) return
+    // **先冻结正文与文档身份**（DS 指南 §4.2），再去碰素材。
+    // 冻结的是"用户点重试那一刻预览里那一版"——它就是本次的正文保留基准；
+    // 处理素材期间 preview 可能被更新，读 state 会拿到已经被换过的那一版，基准就不再是"重试前"。
+    const frozenHtml = html
+    const frozenDocId = currentId
+    const frozenRunId = ctx.ledger.runId
     busyRef.current = true
     setBusy(true)
     setRetrying(true)
@@ -1612,23 +1713,28 @@ export default function App() {
       )
       const warns = [...r.warnings, ...materializeWarnings(inf)]
       if (pending.length) warns.push(unfinishedWarning(pending.length))
-      setHtml(html2)
-      setQuality(checkHtml(html2))
-      setWarnings(warns)
-      setAssetIssues(
-        pending.map((e) => ({ slotId: e.slotId, label: clip(e.desc || e.slot, 40), reason: e.reason || '素材未完成' })),
-      )
-      lastMaterializeRef.current = { ...ctx, bindings: inf.bindings }
 
-      // 与 turn() 同一套门禁：重试成功也不代表可以提交，必须整稿通过
+      // 与 turn() 同一套门禁：重试成功也不代表可以提交，必须整稿通过。
+      //
+      // **顺序**（DS 指南 §4.2）：「先冻结正文与文档身份，再处理素材；通过事实比较、门禁、取消及
+      // 版本校验后才能提升正式预览 / 素材上下文 / 提交指针」。
+      // 旧实现把 `setHtml/setQuality/setWarnings` 与 `lastMaterializeRef.current` 放在门禁**之前**，
+      // 于是"重试失败"也会把正式预览与素材上下文换掉——用户会以为这一版已经生效了。
+      // 现在：**先算门禁 → 再决定提升什么**。这一版仍作为**临时预览**显示（用户刚点的，得看得见），
+      // 但它的"未验收"身份由 `setDeliveryVerdictState` 如实标出，且**不**冒充正式版：
+      // 素材上下文只在真的通过门禁后才更新。
       const requiredSlots = pending.map((e) => ({ slotId: e.slotId, slot: e.slot, done: false, reason: e.reason }))
       // 单项重试**没有新的正文修改授权**（DS 指南 §4.2 情境表末行）：必须保留现有正文事实。
       // 做法是拿"重试前预览里的正文投影"当基准比一次——素材重渲染只该换素材，不该动一个字。
-      // 没有可比对象时（预览为空）如实记 not-applicable，不用 null 冒充"检查过了"。
-      const beforeText = html ? bodyText(html) : ''
+      // 这里刻意用**调用前就冻结好的** `frozenHtml`，而不是 `html`：重试中途可能已经发生过
+      // `setHtml`，读 state 会拿到"本轮已经换过的那一版"，基准就跟着变了。
+      const beforeText = frozenHtml ? bodyText(frozenHtml) : ''
       const afterText = bodyText(html2)
+      // 单项重试**必须**比得起来：拿不到任一侧投影就是"该比却比不了"，如实记 failed
+      // （门禁会补一条 `body.unverified` 阻断）。旧写法退回 `not-applicable`，
+      // 而 not-applicable 在 delivery-quality 里 `bodyIntegrityOk` 仍为 true——那是条不阻断的放行通道。
       const body = beforeText && afterText ? bodyIntegrity(beforeText, afterText) : null
-      const bodyApplicability: BodyApplicability = beforeText && afterText ? 'applied' : 'not-applicable'
+      const bodyApplicability: BodyApplicability = beforeText && afterText ? 'applied' : 'failed'
       const issues = collectDeliveryIssues({
         source: matured,
         html: html2,
@@ -1671,18 +1777,49 @@ export default function App() {
         ok: verdict.ok,
         issueCodes: verdict.blockers.map((b) => b.code),
         blockingCount: verdict.blockers.length,
-        note: `单项重试后门禁：阻断 ${verdict.blockers.length}`,
+        bodyApplicability,
+        note: `单项重试后门禁：阻断 ${verdict.blockers.length}；正文保留比较=${bodyApplicability}`,
       })
-      // 用户在重试过程中按了停止：**不再落库**。
+      // 用户在重试过程中按了停止：**不再落库**，预览也不提升。
       // 素材位被取消时走的是 `drop`（该行从 matured 里消失），照常 persist 会留下一份
       // "比正文少一行素材引用"的草稿——那不是用户要的结果，也不该被当成一次重试的产物。
       if (!busyRef.current) {
         trace({ kind: 'run', runId: ctx.ledger.runId, stage: 'rollback', slotId, ok: false, stopReason: 'cancelled', note: '单项重试被停止，未写入文档库' })
         return
       }
-      const snaps = await snapshotsOfUsed(inf.used)
+      // 到这里才算"比较 + 门禁 + 取消"都过了，可以提升预览。
+      // 这一版无论通过与否都要让用户看见（是他刚点的重试），但**只有通过门禁才算正式版**：
+      //   · 不通过时仍显示它，同时 `setDeliveryVerdictState(verdict)` 已把它标成未验收（四态标识）；
+      //   · `lastMaterializeRef.current`（**素材上下文**）只在通过时才更新——否则一次失败的重试
+      //     会悄悄把后续重试的基准换成失败那一版的素材绑定（DS 指南 §4.2："不能冒充正式版"）。
+      const seq = ++artSeqRef.current
+      if (artSeqRef.current === seq) {
+        setHtml(html2)
+        setQuality(checkHtml(html2))
+        setWarnings(warns)
+      }
+      setAssetIssues(
+        pending.map((e) => ({ slotId: e.slotId, label: clip(e.desc || e.slot, 40), reason: e.reason || '素材未完成' })),
+      )
+      if (verdict.ok) lastMaterializeRef.current = { ...ctx, bindings: inf.bindings }
+      const snaps = await snapshotsOfUsed(inf.used, ctx.snapshots)
       const src = splitAssistant(ctx.v2)
       const draftText = src.v2 || ctx.v2
+      // 运行身份复核（DS 指南 §5.1）：素材处理期间用户可能已经切了文档或开了新回合。
+      // 迟到结果**只能**落回它出发时那个文档，不能悄悄提交到用户后来打开的那一版上。
+      const identityOk = currentId === frozenDocId && busyRef.current
+      if (!identityOk) {
+        trace({
+          kind: 'run',
+          runId: frozenRunId,
+          stage: 'rollback',
+          slotId,
+          ok: false,
+          stopReason: 'cancelled',
+          note: '单项重试期间运行身份已变化（切换文档 / 已开始新回合），本轮结果不提交',
+        })
+        return
+      }
       const saved = await persistDoc(currentId, draftText, html2, warns, snaps, inf.bindings, {
         accepted: verdict.ok,
         baseRevisionId: prior2?.revisionId ?? undefined,
@@ -1694,7 +1831,11 @@ export default function App() {
         setSaveError('重试结果未能写入文档库（磁盘不可写或权限不足）；预览已更新，可稍后重试。')
       } else {
         setSaveError(null)
-        setDeliveryState(verdict.ok ? { kind: 'accepted', revisionId: saved.revisionId ?? undefined } : { kind: 'draft-failed', blockers: verdict.blockers.length })
+        setDeliveryState(
+          verdict.ok
+            ? { kind: 'accepted', revisionId: saved.revisionId ?? undefined, saved: true }
+            : { kind: 'draft-failed', blockers: verdict.blockers.length },
+        )
         setDraftHtml(verdict.ok ? null : html2)
       }
       trace({

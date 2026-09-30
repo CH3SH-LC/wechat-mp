@@ -20,6 +20,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
@@ -40,10 +41,19 @@ const outDir = resolve(
 
 let failed = 0
 const LOG = []
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码。
+// plannedCases 按检查 id 的 ①…⑥ 前缀匹配：某组一条检查都没出现 = 执行不完整 = ERROR（不是跳过、不是通过）。
+const resultJudge = createJudge({
+  script: 'repair-integrity-check',
+  outDir: resolveOutDir('repair-integrity-check', outDir),
+  plannedCases: ['①', '②', '③', '④', '⑤', '⑥'],
+})
+guardCrashes(resultJudge)
 const check = (name, ok, extra = '') => {
   const line = `  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`
   console.log(line)
   LOG.push(line)
+  resultJudge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -421,14 +431,11 @@ const report = `# 自动修复事实保护 —— 离线回归（${stamp.toISOSt
 脚本：\`node scripts/repair-integrity-check.mjs --out ${outDir}\`
 被测：\`src/lib/delivery-quality.ts\`（生产函数，纯离线；不联网、不调模型、不写真实工作区）
 
-**结果：${failed === 0 ? '全部 PASS' : `FAIL ${failed} 条`}**
+**结果：${resultJudge.statusOf()}**（检查 ${resultJudge.run.checks.filter((c) => c.pass).length}/${resultJudge.run.checks.length} 通过，${failed} 条红）
 
 \`\`\`
 ${LOG.join('\n')}
 \`\`\`
 `
 writeFileSync(join(outDir, 'result.md'), report, 'utf8')
-console.log('')
-console.log(`  产出留档：${outDir}`)
-console.log(failed === 0 ? 'REPAIR-INTEGRITY OK' : `REPAIR-INTEGRITY FAILED (${failed})`)
-process.exitCode = failed === 0 ? 0 : 1
+resultJudge.finish({ label: 'REPAIR-INTEGRITY', extraFiles: { 'result.md': report } })

@@ -27,7 +27,11 @@ import {
   planDecoAliases,
   resolveAssetRef,
   resolveLegacyDeco,
+  sameAsset,
+  snapshotUsable,
   splitPolicy,
+  svgContentHash,
+  usableVersionOf,
 } from './asset-resolve.ts'
 import type { LegacyDecoBlock, LibItem } from './asset-resolve.ts'
 import type { ProgressFn } from './progress.ts'
@@ -345,7 +349,7 @@ function categoryFor(kind: 'wide' | 'inline' | 'deco'): string {
 // usage=wide/inline → `::: art wide/inline <说明>`（整行图）。
 // P0：角饰输出多别名（本文占位别名 / 气泡引用词 / 库名称 / 库 ID），历史引用风格都能解析。
 type SvgBlockResult =
-  | { ok: true; block: string }
+  | { ok: true; block: string; note?: string }
   | { ok: false; kind: 'not-found' | 'empty' | 'read-error' | 'quality'; error: string }
 
 /**
@@ -382,8 +386,8 @@ const reuseGateCache = new Map<string, string[]>()
 
 /**
  * 复用素材的适用门禁：结构（Tier 1）+ 按**真实显示尺寸**的栅格（阶段 5），与新绘素材同一套
- * `acceptSvg`。按「资产版本 + 用途角色 + 检查版本」缓存，避免每轮重复做昂贵的栅格化
- * （§6 第二条）；素材被改版时 version+1，键自然失效。
+ * `acceptSvg`。按「资产版本 + 内容哈希 + 用途角色 + 检查版本」缓存，避免每轮重复做昂贵的栅格化
+ * （§6 第二条）；素材被改版时 version+1，键自然失效，内容被改而版本没变时哈希也会让键失效。
  *
  * 为什么复用路径原来必须补这一层："库里读到了"曾经直接等于"素材位完成"。可库里存着的可能是
  * 一张结构不合规（例如含 `<text>`）或 60px 下几乎看不见的角饰——它照样进正文、台账照样记 ok，
@@ -393,13 +397,35 @@ const reuseGateCache = new Map<string, string[]>()
  */
 async function reuseGate(item: AssetMetaL, version: number, svg: string): Promise<string[]> {
   const kind = gateKindFor(item.category, item.usage)
-  const key = `${item.id}|${version}|${kind}|${REUSE_GATE_VERSION}`
+  // 键里带**内容哈希**（指南 §5.4："`gen_svg=0` 或 ID 相同不足以证明素材不变"）：
+  // 旧键只有 `id|版本`，于是"版本号没变、内容被改"（迁移、外部改写、恢复旧库）会命中旧结论，
+  // 拿一段从没检查过的内容当"已通过质检"。哈希一变键就变，结论必然重算。
+  const key = `${item.id}|${version}|${svgContentHash(svg)}|${kind}|${REUSE_GATE_VERSION}`
   const cached = reuseGateCache.get(key)
   if (cached) return cached
   const verdict = await acceptSvg(svg, kind)
   const reasons = verdict.ok ? [] : verdict.reasons.slice(0, 2)
   reuseGateCache.set(key, reasons)
   return reasons
+}
+
+/**
+ * 库复用路径上与**文档固化快照**的身份比较（指南 §5.4 末段："除 ID 外比较版本和内容哈希"）。
+ *
+ * 这条路径上两侧内容都真的在手（文档快照 vs 刚读出来的库记录），所以能做完整的
+ * ID + 版本 + 内容哈希比较：三者全同才算"同一素材"。不同就如实写明"库里这一份不是文档固化的
+ * 那一版"——本回合**未声明 preserve** 时仍按库当前版本复用（用户允许改版），但不能再声称
+ * 素材没变；文档里没有这件素材的快照 → 返回空串（无从比较，不编造结论）。
+ */
+function libIdentityNote(id: string, libVer: number, libSvg: string, docSnap?: { svg: string; ver: number }): string {
+  if (!docSnap) return ''
+  const doc = snapshotUsable(id, docSnap)
+  if (!doc.ok) return `；文档里这件素材的固化快照不可用（${doc.error}）`
+  const lib = { id, ver: libVer, hash: svgContentHash(libSvg) }
+  if (sameAsset({ id, ver: doc.ver, hash: doc.hash }, lib)) {
+    return `；与文档固化快照完全一致（v${doc.ver}，内容哈希 ${doc.hash}）`
+  }
+  return `；与文档固化快照不同（文档 v${doc.ver}/${doc.hash}，库当前 v${libVer || '未知'}/${lib.hash}）——本回合未声明素材保持不动，按库当前版本复用`
 }
 
 /**
@@ -414,7 +440,12 @@ async function reuseGate(item: AssetMetaL, version: number, svg: string): Promis
  * 正文写法问题——重写正文无用，处置是让用户换一张或重画（清单上单项重试），
  * **也不**在检索命中路径上顺势重画（那会把"库里有、只是不能用"悄悄换成一次模型调用）。
  */
-async function svgBlock(item: AssetMetaL, desc: string, aliases?: (string | undefined)[]): Promise<SvgBlockResult> {
+async function svgBlock(
+  item: AssetMetaL,
+  desc: string,
+  aliases?: (string | undefined)[],
+  docSnap?: { svg: string; ver: number },
+): Promise<SvgBlockResult> {
   const r = await getAssetSafe(item.id)
   if (!r.ok) {
     return r.notFound
@@ -425,10 +456,11 @@ async function svgBlock(item: AssetMetaL, desc: string, aliases?: (string | unde
     return { ok: false, kind: 'empty', error: `素材 ${item.id} 的 SVG 内容为空` }
   }
   const svg = r.record.svg
+  const ver = usableVersionOf(r.record.meta?.version ?? item.version)
   // 计划 §6 第一/二条：库读取成功只代表"可读"，**结构 + 实际尺寸栅格**通过才算可用。
   // 新绘路径在 genOnce 里已经跑了 acceptSvg，复用路径过去没跑——这是"库里读到就直接当完成"
   // 的那条缝。这里补上同一套门禁（按资产版本缓存，不每轮重复栅格化）。
-  const reasons = await reuseGate(item, r.record.meta?.version ?? item.version ?? 0, svg)
+  const reasons = await reuseGate(item, ver, svg)
   if (reasons.length) {
     return {
       ok: false,
@@ -436,9 +468,12 @@ async function svgBlock(item: AssetMetaL, desc: string, aliases?: (string | unde
       error: `库素材「${item.title || item.name}」未通过质检：${reasons.join('；')}`,
     }
   }
-  if (item.usage === 'deco') return { ok: true, block: decoBlock(svg, item.name, item.id, aliases) }
+  // 与文档固化快照做 ID + 版本 + 内容哈希比较（指南 §5.4）：库这份是不是文档里那一版，
+  // 结论写进 reason，别让"ID 一样"冒充"素材没变"。
+  const note = libIdentityNote(item.id, ver, svg, docSnap)
+  if (item.usage === 'deco') return { ok: true, block: decoBlock(svg, item.name, item.id, aliases), note }
   const d = desc.trim() || item.title || item.name
-  return { ok: true, block: `::: art ${item.usage === 'wide' ? 'wide' : 'inline'} ${d}\n${svg}\n:::` }
+  return { ok: true, block: `::: art ${item.usage === 'wide' ? 'wide' : 'inline'} ${d}\n${svg}\n:::`, note }
 }
 
 /**
@@ -500,20 +535,42 @@ function priorBindingFor(
  * 同 ID 素材在库里被升级到 v2 时，仍必须用文档里的 v1；库条目被删、快照还在时仍能恢复。
  * 快照缺失或损坏 → **明确失败**：不拿库最新版悄悄补齐（那等于让"只改文字"这一回合
  * 顺手把用户的配图换成另一个版本，而使用者以为素材没动）。
+ *
+ * 判定本身（结构校验：ID 非空 / 版本是可用的数值 / SVG 非空且含 `<svg` / 长度在合理区间）在
+ * `asset-resolve.snapshotUsable`——**损坏**与**没有**是两回事，必须分得开：前者是"文档里本来
+ * 有这份记录、内容坏了"（绝不能拿库里的顶替），后者是"从未固化过"。版本与内容哈希一并返回，
+ * 供上层做身份比较（**不能只比 ID**）。
  */
 function snapshotOf(
   opts: MaterializeOptions | undefined,
   id: string,
-): { ok: true; svg: string; ver: number } | { ok: false; error: string } {
+): { ok: true; svg: string; ver: number; hash: string } | { ok: false; error: string } {
   const snap = opts?.snapshots ? opts.snapshots[id] : undefined
-  const svg = String(snap?.svg || '')
-  if (!svg.trim()) {
-    return {
-      ok: false,
-      error: `文档里没有素材 ${id} 的固化快照，本回合声明素材保持不动时不能用素材库当前版本顶替（会悄悄换掉作品里的图）`,
-    }
+  const v = snapshotUsable(id, snap)
+  if (v.ok) return v
+  return {
+    ok: false,
+    error:
+      snap === undefined
+        ? `${v.error}，本回合声明素材保持不动时不能用素材库当前版本顶替（会悄悄换掉作品里的图）`
+        : `${v.error}；不能改用素材库当前版本顶替（会悄悄换掉作品里的图）`,
   }
-  return { ok: true, svg, ver: Number(snap?.ver ?? 0) }
+}
+
+/**
+ * 快照之外再比一次**库侧版本**（指南 §5.4 末段："除 ID 外比较版本和内容哈希；`gen_svg=0`
+ * 或 ID 相同不足以证明素材不变"）。
+ *
+ * preserve 路径**不读库内容**（不拿库当前值当内容），所以这里只用库索引里已有的版本号比较：
+ * 版本不同 → 如实写明"库里已是 vN，本回合仍用文档那一版"；版本相同但库侧内容哈希没有核对过 →
+ * **不写"与库一致"**（证明不了就不写）；库里没有这件素材 → 写明快照仍然有效。返回空串 = 一切一致。
+ */
+function libVersionNote(id: string, snapVer: number, libMeta: AssetMetaL | undefined): string {
+  if (!libMeta) return `；素材库里已没有这件素材（${id}），文档快照仍然有效`
+  const libVer = usableVersionOf(libMeta.version)
+  if (!libVer) return `；素材库里这件素材没有可用版本号，无法证明与文档是同一版，本回合按文档快照恢复`
+  if (libVer !== snapVer) return `；素材库里同 ID 素材已是 v${libVer}（文档 v${snapVer}），本回合仍用文档那一版`
+  return ''
 }
 
 /**
@@ -562,7 +619,16 @@ function decoBlock(
 
 /** 库条目 → 解析层需要的纯结构（解析层零依赖，不认 AssetMetaL） */
 function toLibItem(m: AssetMetaL): LibItem {
-  return { id: m.id, name: m.name, category: m.category, usage: m.usage, title: m.title, desc: m.desc }
+  return {
+    id: m.id,
+    name: m.name,
+    category: m.category,
+    usage: m.usage,
+    title: m.title,
+    desc: m.desc,
+    // 版本必须带上（指南 §5.4："除 ID 外比较版本"）：没有版本，"库里还是那个 ID"就没法证明
+    version: m.version,
+  }
 }
 
 /**
@@ -817,6 +883,9 @@ export async function materializePlaceholders(
         lib: libItems,
         bindings: opts?.priorBindings,
         snapshots: opts?.snapshots,
+        // 指南 §5.4：preserve 下文档里没有记录的素材位一律阻断，不许按库里的同 ID/同名顶替
+        // （快照/绑定的权威性由 resolveLegacyDeco 内部按"文档记录优先"处理）。
+        assetPolicy: opts?.assetPolicy,
         // F4（2026-09-28 只读审计）：冲突检测必须拿 **deco 的名字**（`[[deco:<名称>|…]]` 的第一段）
         // 去比 `resolveLegacyDeco` 里的 `block.names`（形如 bud/star）。旧写法
         // `/^\[\[(?:deco|img):[A-Za-z0-9_-]*\|([^\]]+)\]\]$/` 捕获的是**第一个 `|` 之后的全部**，
@@ -847,7 +916,12 @@ export async function materializePlaceholders(
       // 真正需要门禁的是"库里有这件素材 → 我决定用它"的路径（svgBlock 的两个复用分支）：
       // 那里的判断还在"本轮"，不合格可以如实记为未完成并让用户换一张。被恢复的块若真不合格，
       // 排版层仍会在最终排版时再查一遍并把结果回写到台账（compose.rejectedArts → applyRejectedArts）。
-      const svg = decided.svg ?? (meta ? (await getAsset(meta.id))?.svg ?? null : null)
+      //
+      // 快照路径（decided.source='snapshot'）内容与版本都来自**文档**；库路径才去读库，
+      // 读到的这一份按库当前版本如实记账（版本 + 内容哈希），**不**声称它就是文档固化过的那一版
+      // （指南 §5.4："不能因为库里还有这个 ID 就当成同一版本"）。
+      const libRec = decided.svg === null && meta ? await getAsset(meta.id) : null
+      const svg = decided.svg ?? libRec?.svg ?? null
       if (!svg || !svg.trim()) {
         inf.residue++
         const why = `素材 ${decided.id} 的 SVG 读不出来（可能已被删除）`
@@ -858,14 +932,21 @@ export async function materializePlaceholders(
         idx = legacySkippedTo.get(idx) ?? idx
         continue
       }
+      const hash = decided.hash || svgContentHash(svg)
+      // 真实版本：快照路径 = 文档里的版本；库路径 = 库记录的版本（未知记 0，并写明"版本未知"）
+      const ver = decided.source === 'snapshot' ? decided.ver : usableVersionOf(libRec?.meta?.version ?? decided.ver)
+      // 注：库路径在这里**不会**再回落到文档快照——`resolveLegacyDeco` 内部已经按"文档记录优先"
+      // 处理过（快照在就绝不用库），因此能走到这里的库恢复，文档里本来就没有这件素材的快照记录。
       const blk = decoBlock(svg, meta?.name || decided.id, decided.id, [aliasAt.get(idx), legacy.names[0], meta?.name, decided.id])
       entry.ref = `[[asset:${meta?.category || 'deco'}|${decided.id}|${entry.desc || legacy.names[0]}]]`
-      const reason = `旧角饰块按${decided.source === 'snapshot' ? '文档固化快照' : '素材库'}恢复：${decided.reason}`
-      finishOk(entry, { assetId: decided.id, version: 0, source: 'recover', reason, block: blk, ref: entry.ref })
+      const reason =
+        `旧角饰块按${decided.source === 'snapshot' ? '文档固化快照' : '素材库当前版本'}恢复：${decided.reason}` +
+        `｜素材身份 ${decided.id} v${ver || '未知'} 内容哈希 ${hash}`
+      finishOk(entry, { assetId: decided.id, version: ver, source: 'recover', reason, block: blk, ref: entry.ref })
       bindOk(entry, decided.id, 'recover', reason)
       if (meta) inf.used[meta.id] = { id: meta.id, title: meta.title || meta.name }
       say({ phase: 'asset', text: `恢复旧角饰块：${clip(entry.desc, 14) || legacy.names[0]}` })
-      trace({ kind: 'slot', runId: ledger.runId, slotId: entry.slotId, phase: 'asset', decision: 'recover', assetId: decided.id, desc: clip(entry.desc, 60), note: decided.reason })
+      trace({ kind: 'slot', runId: ledger.runId, slotId: entry.slotId, phase: 'asset', decision: 'recover', assetId: decided.id, desc: clip(entry.desc, 60), note: reason })
       plans.push({ t: 'emit', block: blk, ref: entry.ref })
       idx = legacySkippedTo.get(idx) ?? idx
       continue
@@ -925,7 +1006,7 @@ export async function materializePlaceholders(
         const metaP = byId.get(id)
         const snap = snapshotOf(opts, id)
         if (!snap.ok) {
-          const why = `本回合声明素材保持不动，但引用 ${id} ${snap.error}`
+          const why = `本回合声明素材保持不动，但引用 ${id} 不可用：${snap.error}`
           inf.residue++
           finishFail(entry, why)
           bind({ slot: slotKey, slotId: entry.slotId, id: '', source: 'failed', reason: why })
@@ -938,7 +1019,10 @@ export async function materializePlaceholders(
         }
         const kindOfSlot: 'wide' | 'inline' | 'deco' = metaP?.usage === 'deco' ? 'deco' : metaP?.usage === 'wide' ? 'wide' : 'inline'
         const built = snapshotBlock(snap.svg, metaP, id, kindOfSlot, assetRef.desc, [aliasAt.get(idx), assetRef.idOrName])
-        const reason = `本回合声明素材不动，按文档固化快照恢复同一素材（${id} v${snap.ver}），没有重新绘制`
+        // 身份写全：文档固化的版本 + 内容哈希 + 与库侧版本的比较结论（指南 §5.4 末段）
+        const reason =
+          `本回合声明素材不动，按文档固化快照恢复同一素材（${id} v${snap.ver}，内容哈希 ${snap.hash}），没有重新绘制` +
+          libVersionNote(id, snap.ver, metaP)
         entry.ref = `[[asset:${built.category}|${id}|${assetRef.desc}]]`
         finishOk(entry, { assetId: id, version: snap.ver, source: 'recover', reason, block: built.block, ref: entry.ref })
         bind({ slot: slotKey, slotId: entry.slotId, id, source: 'recover', reason })
@@ -962,7 +1046,10 @@ export async function materializePlaceholders(
       }
       const item = resolved.item
       const meta = byId.get(item.id)
-      const blkR = meta ? await svgBlock(meta, assetRef.desc, [aliasAt.get(idx), assetRef.idOrName]) : null
+      // 文档里存着这件素材的固化快照时，本次库复用要**比较 ID + 版本 + 内容哈希**（指南 §5.4 末段），
+      // 结论写进 reason：库这一份到底是不是文档里那一版，不能靠"ID 一样"断定。
+      const docSnapForReuse = opts?.snapshots?.[item.id]
+      const blkR = meta ? await svgBlock(meta, assetRef.desc, [aliasAt.get(idx), assetRef.idOrName], docSnapForReuse) : null
       if (!blkR || !blkR.ok) {
         const kind = blkR ? blkR.kind : 'not-found'
         const why = blkR ? blkR.error : `素材 ${item.id} 不在本次索引里`
@@ -988,8 +1075,16 @@ export async function materializePlaceholders(
       const blk = blkR.block
       const okCategory = meta?.category || assetRef.category
       const reason =
-        (matchedReason(resolved.matchedBy, item) + (resolved.mismatch ? `；${resolved.mismatch}` : '')).trim()
-      finishOk(entry, { assetId: item.id, version: meta?.version ?? 0, source: 'asset', reason, block: blk, ref: `[[asset:${okCategory}|${item.id}|${assetRef.desc}]]` })
+        (matchedReason(resolved.matchedBy, item) + (resolved.mismatch ? `；${resolved.mismatch}` : '') + (blkR.note || '')).trim()
+      finishOk(entry, {
+        // 版本记真实值（未知记 0），"按 ID 相同就当同一版"在这里不成立
+        assetId: item.id,
+        version: usableVersionOf(meta?.version ?? item.version),
+        source: 'asset',
+        reason,
+        block: blk,
+        ref: `[[asset:${okCategory}|${item.id}|${assetRef.desc}]]`,
+      })
       bind({ slot: slotKey, slotId: entry.slotId, id: item.id, source: 'asset', reason })
       // P0：声明分类与实际分类不符（但用途兼容）→ 单独计数，给可解释警告，不进可修复清单
       if (resolved.mismatch) inf.mismatched++
@@ -1051,14 +1146,16 @@ export async function materializePlaceholders(
         const meta = byId.get(lookup.id)
         const snap = snapshotOf(opts, lookup.id)
         if (!snap.ok) {
-          blockPreserve(`本回合声明素材保持不动，但该素材位绑定的素材 ${lookup.id} ${snap.error}`, lookup.id)
+          blockPreserve(`本回合声明素材保持不动，但该素材位绑定的素材不可用：${snap.error}`, lookup.id)
           continue
         }
         const built = snapshotBlock(snap.svg, meta, lookup.id, kind, desc, [
           aliasAt.get(idx),
           placeholderAlias,
         ])
-        const reason = `本回合声明素材不动，按文档固化快照恢复同一素材（${lookup.id} v${snap.ver}），没有重新绘制`
+        const reason =
+          `本回合声明素材不动，按文档固化快照恢复同一素材（${lookup.id} v${snap.ver}，内容哈希 ${snap.hash}），没有重新绘制` +
+          libVersionNote(lookup.id, snap.ver, meta)
         entry.ref = `[[asset:${built.category}|${lookup.id}|${desc}]]`
         finishOk(entry, { assetId: lookup.id, version: snap.ver, source: 'recover', reason, block: built.block, ref: entry.ref })
         bind({ slot: slotKey, slotId: entry.slotId, id: lookup.id, source: 'recover', reason })
@@ -1098,15 +1195,17 @@ export async function materializePlaceholders(
       }
       const libHit = cached.hit
       if (libHit) {
-        const blkR = await svgBlock(libHit, desc, [aliasAt.get(idx), placeholderAlias])
+        // 文档里存着这件素材的固化快照时，复用前比较 ID + 版本 + 内容哈希（指南 §5.4 末段）
+        const blkR = await svgBlock(libHit, desc, [aliasAt.get(idx), placeholderAlias], opts?.snapshots?.[libHit.id])
         if (blkR.ok) {
           const blk = blkR.block
+          const reason = (cached.reason + (blkR.note || '')).trim()
           entry.ref = `[[asset:${libHit.category}|${libHit.id}|${desc}]]`
-          finishOk(entry, { assetId: libHit.id, version: libHit.version, source: 'reuse', reason: cached.reason, block: blk, ref: entry.ref })
-          bind({ slot: slotKey, slotId: entry.slotId, id: libHit.id, source: 'reuse', reason: cached.reason })
+          finishOk(entry, { assetId: libHit.id, version: usableVersionOf(libHit.version), source: 'reuse', reason, block: blk, ref: entry.ref })
+          bind({ slot: slotKey, slotId: entry.slotId, id: libHit.id, source: 'reuse', reason })
           inf.used[libHit.id] = { id: libHit.id, title: libHit.title || libHit.name }
           say({ phase: 'asset', text: `复用库素材「${libHit.title || libHit.name}」` })
-          trace({ kind: 'slot', runId: ledger.runId, slotId: entry.slotId, phase: 'asset', decision: 'reuse', assetId: libHit.id, category: libHit.category, desc: clip(desc, 60), note: cached.reason })
+          trace({ kind: 'slot', runId: ledger.runId, slotId: entry.slotId, phase: 'asset', decision: 'reuse', assetId: libHit.id, category: libHit.category, desc: clip(desc, 60), note: reason })
           plans.push({ t: 'emit', block: blk, ref: entry.ref })
           continue
         }

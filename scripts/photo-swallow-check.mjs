@@ -21,11 +21,17 @@
 // 默认跑法用于**防止回退**；`--prove-red` 用于证明这套断言的**确能抓到那条故障**——
 // 如果更换解析器后它仍然全绿，说明样例根本没复现故障，脚本会以非 0 退出。
 // 任何为了让脚本变绿而放宽断言的改动，都是在删证据。
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码。
+// 本脚本的"通过"方向有两种，**显式分开**，不再靠一个 `failed === 0` 同时表达：
+//   默认模式：PASS 要求 ①…⑥ 都在 + 零条红；零条检查是 ERROR。
+//   --prove-red：PASS 要求至少一条红（否则样例没复现故障，判定为 FAIL）。
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { dirname, join } from 'node:path'
+import { createJudge, guardCrashes } from './lib/run-result.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = join(here, '..')
@@ -38,6 +44,7 @@ const check = (name, ok, extra = '') => {
   const line = `  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`
   console.log(line)
   LOG.push(line)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -336,6 +343,16 @@ const label = (() => {
   const p = (n) => String(n).padStart(2, '0')
   return `run-${t.getFullYear()}${p(t.getMonth() + 1)}${p(t.getDate())}-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}`
 })()
+// 证据目录：默认仍写历史位置（docs 里引用了它）；需要换目录（例如本轮验证要写全新临时目录）用 --out 覆盖。
+const outRoot = argOf('--out', join(repoRoot, 'docs', 'artifacts', '2026-09-29-photo-swallow'))
+const outDirFor = (name) => join(outRoot, name)
+
+const judge = createJudge({
+  script: 'photo-swallow-check',
+  outDir: outDirFor(label),
+  plannedCases: proveRed ? [] : ['①', '②', '③', '④', '⑤', '⑥'],
+})
+guardCrashes(judge)
 
 let tempDir = null
 let composeFn = null
@@ -356,10 +373,9 @@ try {
   if (proveRed) {
     console.log('  模式：--prove-red —— **要求至少红一条**（证明这些断言确实能抓到这条故障；全绿 = 样例没复现故障）')
     runAllCases(composeFn)
-    const dir = join(repoRoot, 'docs', 'artifacts', '2026-09-29-photo-swallow', label)
+    const dir = outDirFor(label)
     mkdirSync(dir, { recursive: true })
-    writeFileSync(
-      join(dir, 'red-proof.md'),
+    const redReport =
       `# 先证红：同一套断言打在修复前的解析器上
 
 命令：\`node scripts/photo-swallow-check.mjs --prove-red --at ${ref} --label ${label}\`
@@ -371,18 +387,21 @@ try {
 \`\`\`
 ${LOG.join('\n')}
 \`\`\`
-`,
-      'utf8',
-    )
+`
+    writeFileSync(join(dir, 'red-proof.md'), redReport, 'utf8')
+    // --prove-red 的"通过"方向与默认模式**相反**：要求至少一条红（且必须真的跑过检查）。
+    // 这里显式给状态，不靠 `failed === 0` 推导（零条检查 = ERROR，不是"通过"）。
+    const redStatus = judge.run.checks.length === 0 ? 'ERROR' : failed > 0 ? 'PASS' : 'FAIL'
     console.log('')
-    if (failed === 0) {
-      console.log('PHOTO-SWALLOW RED-PROOF FAILED —— 修复前的实现竟然全绿：样例没有复现故障，先修样例')
-      process.exitCode = 1
-    } else {
+    if (redStatus === 'PASS') {
       console.log(`PHOTO-SWALLOW RED-PROOF OK —— 修复前实测有 ${failed} 条红，样例确实复现了故障`)
-      console.log(`  取证留档：docs/artifacts/2026-09-29-photo-swallow/${label}/red-proof.md`)
-      process.exitCode = 0
+      console.log(`  取证留档：${dir}/red-proof.md`)
+    } else if (redStatus === 'ERROR') {
+      console.log('PHOTO-SWALLOW RED-PROOF ERROR —— 一条断言都没跑到，无法证明样例复现了故障')
+    } else {
+      console.log('PHOTO-SWALLOW RED-PROOF FAILED —— 修复前的实现竟然全绿：样例没有复现故障，先修样例')
     }
+    judge.finish({ label: 'PHOTO-SWALLOW RED-PROOF', statusOverride: redStatus, extraFiles: { 'red-proof.md': redReport } })
   } else {
     console.log('  模式：默认 —— **要求全绿**（防止修复回退）')
     const res = runAllCases(composeFn)
@@ -390,7 +409,7 @@ ${LOG.join('\n')}
     const realFull = runRealFullCase(composeFn)
 
     // 产出：把本次真实输入与产出留档（一个 label 一个子目录，不覆盖历史证据）
-    const outDir = join(repoRoot, 'docs', 'artifacts', '2026-09-29-photo-swallow', label)
+    const outDir = outDirFor(label)
     mkdirSync(outDir, { recursive: true })
     const minimalRun = res.minimal
     const realRun = res.real
@@ -408,7 +427,7 @@ ${LOG.join('\n')}
 脚本：\`node scripts/photo-swallow-check.mjs --label ${label}\`
 样例：\`scripts/fixtures/2026-09-29-photo-swallow/\`（只读，未写真实工作区、未联网）
 
-**结果：${failed === 0 ? '全部 PASS' : `FAIL ${failed} 条`}**（被测实现：当前工作区 \`src/lib/compose.ts\`，指纹 \`${implFingerprint()}\`）
+**结果：${judge.statusOf()}**（检查 ${judge.run.checks.filter((c) => c.pass).length}/${judge.run.checks.length} 通过，${failed} 条红）（被测实现：当前工作区 \`src/lib/compose.ts\`，指纹 \`${implFingerprint()}\`）
 
 ## 真实裁剪版的实测计数
 
@@ -434,9 +453,7 @@ ${LOG.join('\n')}
       'utf8',
     )
     console.log('')
-    console.log(`  产出留档：docs/artifacts/2026-09-29-photo-swallow/${label}/`)
-    console.log(failed === 0 ? 'PHOTO-SWALLOW OK' : `PHOTO-SWALLOW FAILED (${failed})`)
-    process.exitCode = failed === 0 ? 0 : 1
+    judge.finish({ label: 'PHOTO-SWALLOW' })
   }
 } finally {
   if (tempDir) rmSync(tempDir, { recursive: true, force: true })

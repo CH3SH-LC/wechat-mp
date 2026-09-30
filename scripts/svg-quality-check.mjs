@@ -1,12 +1,19 @@
 // svg-quality-check.mjs —— 素材 SVG 确定性质检 Tier 1 断言（2026-09-24 调查 §3）
-// 用法：node scripts/svg-quality-check.mjs
+// 用法：node scripts/svg-quality-check.mjs [--out <目录>]
 // 核心回归：旧口径「viewBox + 元素数 ≥6」会把画布外、fill=none 的圆判为合格；现在必须拦下。
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 import { analyzeSvg, checkSvgQuality, SLOT_PX } from '../src/lib/svg-quality.ts'
 const { mockArtSvg } = await import('../src/lib/image-agent.ts')
+
+const judge = createJudge({ script: 'svg-quality-check', outDir: resolveOutDir('svg-quality-check') })
+guardCrashes(judge)
 
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -121,5 +128,4 @@ check('给出墨迹占比', m.inkXRatio > 0 && m.inkYRatio > 0, JSON.stringify({
 check('给出重心位置', !!m.centroid && m.centroid.x > 0.5 && m.centroid.y > 0.4, JSON.stringify(m.centroid))
 check('给出 60px 下的主体尺度（供视觉复核参考）', m.motifPx > 0, `${Math.round(m.motifPx)}px`)
 
-console.log(failed === 0 ? '\nSVG-QUALITY OK' : `\nSVG-QUALITY FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'SVG-QUALITY' })

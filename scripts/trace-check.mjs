@@ -1,11 +1,12 @@
 // trace-check.mjs —— 请求追踪与素材预算断言（修复计划阶段 1 + 阶段 3 的确定性部分）
-// 用法：node scripts/trace-check.mjs
+// 用法：node scripts/trace-check.mjs [--out <目录>]
 //
 // 做法：把 Tauri 通道桩进 window（让真实的 image-agent 走"桌面分支"），逐个注入故障，
 // 检查"网络错误 / 空内容 / 无 SVG / 质检拒绝 / 取消"五类结果**能被明确区分**，
 // 并检查台账（阶段 3）确实让"同一素材位一轮只做一次决定、失败不重获预算"。
 // 全部离线：没有任何真实模型调用。
 import { resetStub } from './lib/ls-stub.mjs'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -69,9 +70,13 @@ const { createLedger, unfinished } = await import('../src/lib/asset-ledger.ts')
 
 const { clearTraceBuffer, traceBuffer, setTraceSink, summarize, isTraceRecord, classifyError, classifyGenError, retryable, retryHintMs, newRunId, newSlotId, FAILURE_CLASSES, trace, clip } = traceMod
 
+const judge = createJudge({ script: 'trace-check', outDir: resolveOutDir('trace-check') })
+guardCrashes(judge)
+
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -462,5 +467,4 @@ console.log('\n[/models 上限缓存：结构断言（真行为断言在 cargo t
   )
 }
 
-console.log(failed === 0 ? '\nTRACE OK' : `\nTRACE FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'TRACE' })

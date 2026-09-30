@@ -29,6 +29,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
+import { parseRunnerArgs } from './lib/run-result.mjs'
+
 const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
@@ -76,13 +78,12 @@ const localDate = (d = new Date()) =>
 function uniqueDir(prefix) {
   return join('docs', 'artifacts', `${localDate()}-${prefix}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
 }
-const outDirArg = process.argv[2]
+const { outDir: outDirArg, base } = parseRunnerArgs()
 const outDir = outDirArg || uniqueDir('repair-flow')
 // 显式指定目录时：里面已经有本轮结果就拒绝覆盖（不把上一轮证据当本次通过）
 if (outDirArg && existsSync(join(outDir, 'result.md'))) {
   die(`输出目录已存在同名结果，拒绝覆盖：${outDir}（每次跑必须一个新目录）`)
 }
-const base = process.argv[3] || 'http://127.0.0.1:1420'
 mkdirSync(outDir, { recursive: true })
 
 
@@ -285,15 +286,45 @@ try {
     })
     await page.goto(base, { waitUntil: 'networkidle' })
     await page.waitForSelector('textarea')
+    // 先装观察器：气泡可能在几十毫秒内出现又消失（注入的 mock 只延迟 30ms），
+    // 结束时再回头看 DOM 会看不到它——"从没出现过"与"已经结束"必须可区分（指南 §3.1）。
+    await page.evaluate(() => {
+      window.__paneProbe = { started: 0, finished: 0, sawBubble: false }
+      const tick = () => {
+        const has = !!document.querySelector('.work-bubble')
+        if (has && !window.__paneProbe.sawBubble) {
+          window.__paneProbe.sawBubble = true
+          window.__paneProbe.started++
+        } else if (!has && window.__paneProbe.sawBubble) {
+          window.__paneProbe.sawBubble = false
+          window.__paneProbe.finished++
+        }
+      }
+      new MutationObserver(tick).observe(document.body, { childList: true, subtree: true, attributes: true })
+      window.__paneProbe.timer = window.setInterval(tick, 50)
+    })
     await page.locator('textarea').fill(c.prompt)
     await page.locator('textarea').press('Enter')
+    // ① 本轮 run 真的**开始**了：模型被调用过（注入的 mock 记了 __probeCalls）、工作气泡出现过。
+    //    超时必须是 `waitForFunction(fn, arg, options)` 的第三个参数——写在第二位会被当成 arg 忽略掉，
+    //    实际走 Playwright 默认超时（旧实现踩的就是这个）。
+    await page.waitForFunction(() => (window.__probeCalls || []).length >= 1, null, { timeout: 30000 })
+    await page.waitForFunction(() => window.__paneProbe.started > 0, null, { timeout: 30000 })
+    // ② 同一 run **终结**：气泡结束 + trace 里出现本轮的落定记录（提交 / 存草稿 / 保存失败）。
+    //    只等"气泡不存在"是不够的——它会把"还没开始"和"已经结束"当成同一件事，也会在落库完成前
+    //    就去读文档状态（指南 §3.1）。
+    await page.waitForFunction(() => window.__paneProbe.finished > 0, null, { timeout: 120000 })
     await page.waitForFunction(
-      () => (window.__probeCalls || []).length >= 1 && document.querySelector('[data-doc-state]'),
-      { timeout: 30000 },
+      async () => {
+        const { traceBuffer } = await import('/src/lib/trace.ts')
+        return traceBuffer().some(
+          (t) => (t.kind === 'run' && (t.stage === 'commit' || t.stage === 'persist')) || (t.stage === 'persist' && t.ok === false),
+        )
+      },
+      null,
+      { timeout: 60000 },
     )
-    // 等自动修订（如果有）跑完：气泡消失且再等一小段确认没有新的模型调用
-    await page.waitForFunction(() => !document.querySelector('.work-bubble'), { timeout: 60000 })
-    await page.waitForTimeout(1500)
+    await page.waitForTimeout(800)
 
     const state = await page.evaluate(async () => {
       const { traceBuffer } = await import('/src/lib/trace.ts')

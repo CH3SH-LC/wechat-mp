@@ -1,5 +1,5 @@
 // raster-check.mjs —— 素材"真实显示尺寸"栅格检查的**校准与断言**（修复计划阶段 5，2026-09-28）
-// 用法：node scripts/raster-check.mjs [URL]   （需先启动 dev server，默认 http://127.0.0.1:1420）
+// 用法：node scripts/raster-check.mjs [URL] [--out <目录>]   （需先启动 dev server，默认 http://127.0.0.1:1420）
 //
 // 为什么用浏览器：栅格检查要真的把 SVG 画到 canvas 上数像素，node 里没有 canvas。
 // 做法是从**已经跑起来的 Vite dev server** 里动态 import 真实模块（`/src/lib/svg-raster.ts`），
@@ -10,13 +10,65 @@
 //   · "浅色消失"与"缩成一个小点"两类退化必须被拦下；
 //   · 真实库素材（bud / star / 四叶草）的数值要记录在案——它们**不会被批量重画**（库素材不经过
 //     本层复检），记录它们是为了说明阈值落在哪里、以及哪些素材属于"薄弱但可用"。
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码。
+// 缺浏览器/解析不到 playwright = BLOCKED（退出 2）；导航失败或脚本抛异常 = ERROR；零条检查 = ERROR。
 import { createRequire } from 'module'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 
 const require = createRequire(import.meta.url)
-const { chromium } = require('D:/deepseek-harness/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright')
+const judge = createJudge({ script: 'raster-check', outDir: resolveOutDir('raster-check') })
+guardCrashes(judge)
+
+/** playwright 模块：require('playwright') → VERIFY_PLAYWRIGHT → 作者机器上的历史绝对路径；都不行 → BLOCKED */
+function resolvePlaywright() {
+  const tried = []
+  try {
+    return require('playwright')
+  } catch (e) {
+    tried.push(`require('playwright') → ${String(e.message || e).split('\n')[0]}`)
+  }
+  const p = process.env.VERIFY_PLAYWRIGHT
+  if (p) {
+    const target = isAbsolute(p) ? p : resolve(process.cwd(), p)
+    try {
+      return require(target)
+    } catch (e) {
+      tried.push(`VERIFY_PLAYWRIGHT=${target} → ${String(e.message || e).split('\n')[0]}`)
+    }
+  } else {
+    tried.push('VERIFY_PLAYWRIGHT → 未设置')
+  }
+  const hard = 'D:/deepseek-harness/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright'
+  try {
+    return require(hard)
+  } catch (e) {
+    tried.push(`${hard} → ${String(e.message || e).split('\n')[0]}`)
+  }
+  judge.block(`解析不到 playwright 模块。已尝试：\n  - ${tried.join('\n  - ')}`)
+  judge.finish({ exitCode: 2 })
+  process.exit(2)
+}
+/** chromium 可执行文件：VERIFY_CHROMIUM 优先；没设就用历史上能跑的那一份；都不存在则交给 playwright 自解析 */
+function resolveChromiumExe() {
+  const env = process.env.VERIFY_CHROMIUM
+  if (env) {
+    const target = isAbsolute(env) ? env : resolve(process.cwd(), env)
+    if (!existsSync(target)) {
+      judge.block(`VERIFY_CHROMIUM 指向的文件不存在：${target}`)
+      judge.finish({ exitCode: 2 })
+      process.exit(2)
+    }
+    return target
+  }
+  const hard = 'C:/Users/Lenovo/AppData/Local/ms-playwright/chromium-1234/chrome-win64/chrome.exe'
+  return existsSync(hard) ? hard : null
+}
+const { chromium } = resolvePlaywright()
+const chromiumExe = resolveChromiumExe()
 
 const url = process.argv[2] || 'http://127.0.0.1:1420'
 const here = dirname(fileURLToPath(import.meta.url))
@@ -25,12 +77,18 @@ const fixtureDir = join(here, 'fixtures', 'deco-calibration')
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
-const browser = await chromium.launch({
-  executablePath: 'C:/Users/Lenovo/AppData/Local/ms-playwright/chromium-1234/chrome-win64/chrome.exe',
-})
+let browser = null
+try {
+  browser = await chromium.launch({ ...(chromiumExe ? { executablePath: chromiumExe } : {}) })
+} catch (e) {
+  judge.block(`浏览器启动失败：${String(e.message || e).split('\n')[0]}`)
+  judge.finish({ exitCode: 2 })
+  process.exit(2)
+}
 const page = await browser.newPage()
 
 try {
@@ -120,8 +178,8 @@ try {
 } catch (e) {
   console.log('  FAIL - raster-check error:', String(e).slice(0, 300))
   failed++
+  judge.error('runner', String(e).slice(0, 300))
 }
 
 await browser.close()
-console.log(failed === 0 ? '\nRASTER OK' : `\nRASTER FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'RASTER' })

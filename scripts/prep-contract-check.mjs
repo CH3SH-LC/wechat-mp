@@ -28,6 +28,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
+import { parseRunnerArgs } from './lib/run-result.mjs'
+
 const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
@@ -88,9 +90,8 @@ function resolveChromium() {
 }
 const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const outDirArg = process.argv[2]
+const { outDir: outDirArg, base } = parseRunnerArgs()
 const outDir = outDirArg || join('docs', 'artifacts', `${localDate()}-prep-contract-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
-const base = process.argv[3] || 'http://127.0.0.1:1420'
 if (outDirArg && existsSync(join(outDir, 'result.md'))) {
   fail('outDir', `输出目录已存在同名结果，拒绝覆盖：${outDir}`)
   finalize()

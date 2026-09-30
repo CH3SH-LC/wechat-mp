@@ -8,7 +8,8 @@
 // 与 verify-ui 的 S2 **分开**（指南要求拆成两项）：
 //   · S2 交付检查：最终成品 source/HTML/文档是否一致、违规特征是否被清掉；
 //   · 本脚本 全过程资源检查：从**发送前**开始记录所有请求（含重试、redirect、srcset、CSS url），
-//     断言"未经许可的外链尝试 = 0"，同时断言**原始违规证据仍进了门禁**（不是靠把外链洗掉来变绿）。
+//     断言"未经许可的外链尝试 = 0"，同时断言**特定的** `html.external-img` 诊断及其**原始违规原文**
+//     仍在（不是靠把外链洗掉来变绿，也不是"任意 html.* 问题码"就算证据——指南 §3.2）。
 //
 // 判定器（指南 §3.1）：**唯一 RunResult**，所有输出（stdout / JSON / Markdown / 退出码）都从它派生。
 //   status ∈ PASS | FAIL | ERROR | BLOCKED；`executionComplete` 必须为真、必需检查必须存在、
@@ -25,6 +26,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+
+import { parseRunnerArgs } from './lib/run-result.mjs'
 
 const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -92,10 +95,9 @@ function resolveChromium() {
 // ---------- 输出目录：每次必须是新目录，不覆盖历史证据 ----------
 const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const outDirArg = process.argv[2]
+const { outDir: outDirArg, base } = parseRunnerArgs()
 const outDir =
   outDirArg || join('docs', 'artifacts', `${localDate()}-preview-resource-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
-const base = process.argv[3] || 'http://127.0.0.1:1420'
 if (outDirArg && existsSync(join(outDir, 'result.md'))) {
   fail('outDir', `输出目录已存在同名结果，拒绝覆盖：${outDir}（每次跑必须一个新目录）`)
   finalize()
@@ -180,8 +182,12 @@ try {
       await page.waitForSelector('textarea', { timeout: 10000 })
       // 先装观察器：确认"本轮 run 真的开始了"，再等它终结——只等"气泡不存在"会把
       // "还没开始" 误判成 "已经结束"（指南 §3.1）。
+      // 同时**全过程**采集质量条上的逐条阻断诊断（问题码 + 原文消息）：违规稿只在修复前的
+      // 那几轮里是"当前稿"，跑完最后一版就被合规稿替换掉了——只在末尾读 DOM 会看不到它，
+      // 于是"原始违规证据进没进门禁"就成了没法证伪的问题。观察器把每一帧都记下来。
       await page.evaluate(() => {
         window.__paneProbe = { started: 0, finished: 0, sawBubble: false }
+        window.__diagnoses = [] // [{ code, message }]，按出现顺序去重
         const tick = () => {
           const has = !!document.querySelector('.work-bubble')
           if (has && !window.__paneProbe.sawBubble) {
@@ -191,8 +197,13 @@ try {
             window.__paneProbe.sawBubble = false
             window.__paneProbe.finished++
           }
+          for (const li of document.querySelectorAll('.quality-strip [data-blocker-code]')) {
+            const code = li.getAttribute('data-blocker-code') || ''
+            const message = li.querySelector('.qb-msg')?.textContent || ''
+            if (!window.__diagnoses.some((d) => d.code === code && d.message === message)) window.__diagnoses.push({ code, message })
+          }
         }
-        new MutationObserver(tick).observe(document.body, { childList: true, subtree: true, attributes: true })
+        new MutationObserver(tick).observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true })
         window.__paneProbe.timer = window.setInterval(tick, 50)
       })
       await page.locator('textarea').fill('演示质量检查：请故意输出包含 emoji、渐变与外链图的推文')
@@ -209,24 +220,87 @@ try {
     const appState = await page.evaluate(async () => {
       const { traceBuffer } = await import('/src/lib/trace.ts')
       const frame = document.querySelector('iframe')
+      // 违规演示稿的**原始外链**取自产生它的生产 mock（`src/lib/chat.ts` 的 MOCK_BAD），
+      // 不在这里另抄一份字面量：期望值变化时断言跟着变，但"原文必须在"这条不许变。
+      let expectedExternal = []
+      try {
+        const chat = await import('/src/lib/chat.ts')
+        expectedExternal = [...String(chat.MOCK_BAD?.html || '').matchAll(/https?:\/\/[^"'\s)>]+/g)].map((m) => m[0])
+      } catch {
+        // 取不到期望原文 → 下面的断言会因此变红（而不是静默当成"通过"）
+      }
+      // 门禁给出的**逐条诊断**（问题码 + 原文消息）：UI 上每一条阻断项都带 data-blocker-code。
+      const strip = document.querySelector('.quality-strip')
+      const blockers = [...(strip ? strip.querySelectorAll('[data-blocker-code]') : [])].map((li) => ({
+        code: li.getAttribute('data-blocker-code') || '',
+        message: li.querySelector('.qb-msg')?.textContent || '',
+      }))
+      // 留存稿：原始 source / 显示 HTML 与失败草稿都"继续保留"（指南 §6），没有被洗成合规稿。
+      const docs = JSON.parse(localStorage.getItem('wxmp-docs-v1') || '{}')
+      const session = JSON.parse(localStorage.getItem('wxmp-sessions-v1') || '{}')
+      const doc = (docs.docs || {})[session.current] || null
+      // 会话里的**模型原文**（§8.5 要求保留的"模型完整原文"）：违规稿的原文就留在这里
+      const sess = (session.items || {})[session.current] || null
+      const sessionText = (sess?.messages || []).map((m) => String(m.content || '')).join('\n')
       return {
         frameBody: frame && frame.contentDocument ? frame.contentDocument.body.innerHTML : '',
-        stripCls: document.querySelector('.quality-strip')?.className || '',
+        stripCls: strip?.className || '',
+        stripText: strip?.textContent || '',
         docState: document.querySelector('[data-doc-state]')?.getAttribute('data-doc-state') ?? null,
         trace: traceBuffer(),
+        blockers,
+        diagnoses: window.__diagnoses || [],
+        expectedExternal,
+        retained: {
+          hasDoc: Boolean(doc),
+          accepted: doc ? doc.accepted ?? null : null,
+          source: String(doc?.source || ''),
+          html: String(doc?.html || ''),
+          sessionText,
+        },
+        retainedInfo: {
+          docSource: String(doc?.source || '').length,
+          docHtml: String(doc?.html || '').length,
+          sessionText: sessionText.length,
+          sessionMessages: (sess?.messages || []).length,
+        },
       }
     })
     const qualityRecords = appState.trace.filter((t) => t.kind === 'quality' && Array.isArray(t.issueCodes))
-    const htmlProblemSeen = qualityRecords.some((t) => t.issueCodes.some((c) => String(c).startsWith('html.')))
+    const EXTERNAL_IMG_CODE = 'html.external-img' // 定义在 src/lib/quality.ts:61，由 delivery-quality 前缀化为 html.<kind>
+    // ① 门禁记下的必须是**这一条**特定问题，不是"随便某个 html.* 就算外链诊断保住了"
+    const externalCodeSeen =
+      appState.diagnoses.some((d) => d.code === EXTERNAL_IMG_CODE) ||
+      qualityRecords.some((t) => t.issueCodes.map(String).includes(EXTERNAL_IMG_CODE))
+    // ② 原始违规**原文**跟着问题一起进了门禁：该诊断的 message 里带着 mock 那份违规稿的原始外链
+    //    （不是"把外链洗掉之后才过检"，也不是"诊断只剩一个代码、原文全丢了"）。
+    const diagnosisWithOriginal = appState.diagnoses.some(
+      (d) => d.code === EXTERNAL_IMG_CODE && appState.expectedExternal.some((u) => d.message.includes(u)),
+    )
+    // ③ 附带的留存证据：原始违规原文在留存材料里是否还查得到（会话模型原文 / 文档留存稿）。
+    //    **不作为硬性通过条件**——实测该流程最后一版是合规稿，违规原文只在前几轮的当前稿里出现，
+    //    因此它只记录在证据里，供事后核对"原文有没有被静默改写"。
+    const held = {
+      session: appState.expectedExternal.some((u) => appState.retained.sessionText.includes(u)),
+      docSource: appState.expectedExternal.some((u) => appState.retained.source.includes(u)),
+      docHtml: appState.expectedExternal.some((u) => appState.retained.html.includes(u)),
+    }
     const frameExternal = [...String(appState.frameBody).matchAll(/https?:\/\/[^"'\s)]+/g)]
       .map((m) => m[0])
       .filter((u) => !u.startsWith(base))
     const appAttempts = attempts.slice(attemptsBefore)
     check('app-run：预览 iframe 里没有任何外链引用残留', frameExternal.length === 0, frameExternal.join(' / '))
     check(
-      'app-run：原始违规证据仍进了门禁（不是靠把外链洗掉变绿）',
-      htmlProblemSeen,
-      `质量记录=${JSON.stringify(qualityRecords.map((t) => t.issueCodes))}`,
+      'app-run：门禁记录了特定的 html.external-img 问题（不是任意 html.* 就算）',
+      externalCodeSeen,
+      `UI 阻断项=${JSON.stringify(appState.blockers.map((b) => b.code))}｜全过程诊断=${JSON.stringify(appState.diagnoses.map((d) => d.code))}` +
+        `｜trace 质量记录=${JSON.stringify(qualityRecords.map((t) => t.issueCodes))}`,
+    )
+    check(
+      'app-run：原始违规原文跟着问题一起进了门禁（诊断带原始外链，不是洗掉之后才过检）',
+      diagnosisWithOriginal,
+      `期望原文=${JSON.stringify(appState.expectedExternal)}｜诊断=${JSON.stringify(appState.diagnoses.filter((d) => d.code === EXTERNAL_IMG_CODE).map((d) => d.message.slice(0, 120)))}` +
+        `｜留存核对（仅记录）会话=${held.session} 留存稿 source=${held.docSource} html=${held.docHtml}`,
     )
     check('app-run：本轮 App 运行期间外链请求 = 0', appAttempts.length === 0, appAttempts.map((a) => a.type + ':' + a.url).join(' / '))
     run.executedCases.push('app-run:违规演示稿进入门禁且预览无外链')

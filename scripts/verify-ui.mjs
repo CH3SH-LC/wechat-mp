@@ -8,13 +8,44 @@
 //   playwright 模块：先按常规 require('playwright')，再退到环境变量 VERIFY_PLAYWRIGHT（模块路径/入口）；
 //   chromium 可执行文件：环境变量 VERIFY_CHROMIUM（不设则由 playwright 自己找已安装的浏览器）。
 //   两者都拿不到时**明确报错退出（非 0）**——"因为找不到浏览器所以跳过"是最危险的假绿，绝不能做。
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult（status/checks/errors）→ run-result.json + 退出码。
+//   本脚本有 60 多处内联的 `console.log(\`  PASS/FAIL - …\`)`，逐条改调用点风险更大，
+//   所以总数按**实际打印出来的结论行**统计（tapCheckLines）：零条结论行 = 没有断言被执行 = ERROR，
+//   而不是"failed===0 所以 OK"。缺依赖（playwright/chromium）= BLOCKED，异常 = ERROR，都退出非 0。
 import { createRequire } from 'module'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { createJudge, guardCrashes, resolveOutDir, tapCheckLines } from './lib/run-result.mjs'
 const require = createRequire(import.meta.url)
 // 本脚本所在目录（scripts/）：S19 的结构断言要读 src/ 下的源码文本
 const here = dirname(fileURLToPath(import.meta.url))
+
+// T10：默认输出目录原来是 `docs/artifacts`——脚本按**固定文件名**写盘（wxmp-desktop-ok.png 等），
+// 于是每跑一次 E2E 就覆盖 README 里声明为"2026-09 发布阶段、非本轮运行截图"的那几张配图，
+// 证据边界声明不断被破坏（docs/artifacts/README.md 已写明"新验证使用独立日期输出目录"）。
+// 现在默认写到按当天日期生成的独立目录；要写别处仍可用第一个参数显式指定。
+//
+// 注意：**必须在解析 playwright 之前**建好判定器与输出目录——缺依赖那条早退路径（die）也要落盘 ERROR/BLOCKED。
+const localDate = (d = new Date()) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const outDir = process.argv[2] || `docs/artifacts/${localDate()}-e2e`
+const url = process.argv[3] || 'http://127.0.0.1:1420'
+const errors = []
+const judge = createJudge({ script: 'verify-ui', outDir: resolveOutDir('verify-ui', outDir) })
+guardCrashes(judge)
+tapCheckLines(judge)
+// 计划场景（指南 §3.1「计划场景执行完整」）：每个场景都必须在 stdout 里留下至少一条结论行。
+// 某个场景被条件静默跳过（既不 PASS 也不 FAIL）→ 执行不完整 → ERROR，而不是"没报错就是通过"。
+// 这串标记就是各场景检出行 id 的前缀（`  PASS - S25 …`），在 2026-09-30 的完整跑里逐条核过。
+const PLANNED_SCENARIOS = [
+  'S1 ', 'S1.5 ', 'S1.6 ', 'S1.7 ', 'S1.8 ', 'S1.9 ', 'S2 ', 'S7 ', 'S8 ', 'S9', 'S10 ', 'S11 ', 'S12 ', 'S13 ',
+  'S14 ', 'S15 ', 'S16 ', 'S17 ', 'S18 ', 'S19 ', 'S20 ', 'S21 ', 'S22 ', 'S23 ', 'S24 ', 'S25 ',
+]
+judge.setPlanned(PLANNED_SCENARIOS)
+// 目录可能不存在（日期目录每天都是新的）：显式创建，避免截图静默失败
+mkdirSync(outDir, { recursive: true })
 
 const CONFIG_HINT = `配置方法（任选其一）：
   1) 常规安装：在能解析到 playwright 的目录下运行（本仓库 devDependencies 未声明 playwright，也可 npm i -D playwright 后需 npx playwright install chromium）；
@@ -25,6 +56,9 @@ const CONFIG_HINT = `配置方法（任选其一）：
 
 function die(msg) {
   console.error(`\n[verify-ui] 无法开始验证：${msg}\n\n${CONFIG_HINT}\n`)
+  // 缺依赖/无法开始 = BLOCKED（不是"没跑过所以算通过"），退出码 2
+  judge.block(msg)
+  judge.finish({ exitCode: 2 })
   process.exit(2)
 }
 
@@ -64,19 +98,6 @@ function resolveChromium() {
 const { mod: playwright, how: pwHow } = resolvePlaywright()
 const chromiumExe = resolveChromium()
 
-
-// T10：默认输出目录原来是 `docs/artifacts`——脚本按**固定文件名**写盘（wxmp-desktop-ok.png 等），
-// 于是每跑一次 E2E 就覆盖 README 里声明为"2026-09 发布阶段、非本轮运行截图"的那几张配图，
-// 证据边界声明不断被破坏（docs/artifacts/README.md 已写明"新验证使用独立日期输出目录"）。
-// 现在默认写到按当天日期生成的独立目录；要写别处仍可用第一个参数显式指定。
-const localDate = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const outDir = process.argv[2] || `docs/artifacts/${localDate()}-e2e`
-const url = process.argv[3] || 'http://127.0.0.1:1420'
-const errors = []
-// 目录可能不存在（日期目录每天都是新的）：显式创建，避免截图静默失败
-mkdirSync(outDir, { recursive: true })
-
 // 样例稿的素材位数量：5 个（2 个 [[img:wide]] + 1 个 [[img:inline]] + 2 个角饰位，
 // 同一份样例在 compose-check.mjs 里断言 `r.arts.length === 5`）。
 // T8：这里原来是 `artImgs >= 4`，文案却写死 "five art assets"——阈值比宣称值低一档，
@@ -111,6 +132,9 @@ async function waitStreamDone(timeout = 30000) {
       const t = all[all.length - 1]
       return !!t && t.textContent.trim().length > 3 && !document.querySelector('.work-bubble')
     },
+    // 超时必须放 `waitForFunction(fn, arg, options)` 的**第三**位：写在第二位会被当成 arg 忽略，
+    // 实际走 Playwright 默认超时（指南 §3.1）。
+    null,
     { timeout },
   )
   await page.waitForTimeout(300)
@@ -255,7 +279,11 @@ try {
       const t = all[all.length - 1]
       return !!t && t.textContent.trim().length > 3 && !document.querySelector('.work-bubble')
     },
-    { timeout: 20000 },
+    null,
+    // 超时值保持**原来的有效值 30s**：本次只修参数位（写在第二位会被当成 arg 忽略，
+    // 实际走 Playwright 默认 30s）。实测把这里的 10s 当真执行后，S24 会因 prep 阶段的
+    // 耗时波动偶发假红（停止时助手文字还是 0 字）——收紧等待不是本次改动的目的。
+    { timeout: 30000 },
   )
   const userCount = await page.locator('.msg-user').count()
   const frame = page.frames().find((f) => f !== page.mainFrame())
@@ -672,6 +700,7 @@ try {
       const t = document.querySelector('.export-msg')
       return !!t && /已下载|转图失败/.test(t.textContent || '')
     },
+    null,
     { timeout: 30000 },
   )
   await page.waitForTimeout(1500) // 等全部下载触发
@@ -812,7 +841,11 @@ try {
   await page.locator('.ws-replace').click()
   await page.waitForFunction(
     () => /v2/.test(document.querySelector('.ws-ver')?.textContent || ''),
-    { timeout: 10000 },
+    null,
+    // 超时值保持**原来的有效值 30s**：本次只修参数位（写在第二位会被当成 arg 忽略，
+    // 实际走 Playwright 默认 30s）。实测把这里的 10s 当真执行后，S24 会因 prep 阶段的
+    // 耗时波动偶发假红（停止时助手文字还是 0 字）——收紧等待不是本次改动的目的。
+    { timeout: 30000 },
   )
   const verOk = (await page.locator('.ws-ver').innerText()).includes('v2')
   console.log(`  ${verOk ? 'PASS' : 'FAIL'} - S13 replace source bumps version (v2)`)
@@ -948,7 +981,11 @@ try {
   await page.locator('.ws-ref-update').first().click()
   await page.waitForFunction(
     () => /重渲染/.test(document.querySelector('.ws-msg')?.textContent || ''),
-    { timeout: 20000 },
+    null,
+    // 超时值保持**原来的有效值 30s**：本次只修参数位（写在第二位会被当成 arg 忽略，
+    // 实际走 Playwright 默认 30s）。实测把这里的 10s 当真执行后，S24 会因 prep 阶段的
+    // 耗时波动偶发假红（停止时助手文字还是 0 字）——收紧等待不是本次改动的目的。
+    { timeout: 30000 },
   )
   // 等它真的回到空闲（而不是只在消息文案上看到"重渲染"三个字）
   await page
@@ -1668,7 +1705,11 @@ try {
         const t = a[a.length - 1]
         return !!t && t.textContent.trim().length > 5 && !!document.querySelector('.work-bubble')
       },
-      { timeout: 10000 },
+      null,
+    // 超时值保持**原来的有效值 30s**：本次只修参数位（写在第二位会被当成 arg 忽略，
+    // 实际走 Playwright 默认 30s）。实测把这里的 10s 当真执行后，S24 会因 prep 阶段的
+    // 耗时波动偶发假红（停止时助手文字还是 0 字）——收紧等待不是本次改动的目的。
+      { timeout: 30000 },
     )
     .catch(() => {})
   const stopBtnAtClick = await page.locator('.btn-stop').count()
@@ -1822,12 +1863,20 @@ try {
 } catch (e) {
   console.log('  FAIL - S25 375px 预览 error:', String(e).slice(0, 200))
   failed++
+  judge.error('S25', String(e).slice(0, 200))
 }
 
 if (errors.length) {
+  // 逐条打印成标准结论行：这样它同样被计入检查数与判定（不是"打印一行 + failed++"的另一套统计）
   console.log('browser errors:', errors.slice(0, 5))
+  console.log(`  FAIL - 全程无浏览器错误 (${errors.length} 条：${errors.slice(0, 3).join(' / ')})`)
   failed++
+  for (const e of errors.slice(0, 5)) judge.error('browser', e)
+} else {
+  console.log('  PASS - 全程无浏览器错误')
 }
 await browser.close()
-console.log(failed === 0 ? 'VERIFY OK' : `VERIFY FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+// 判定与退出码一律由唯一 RunResult 派生（PASS=0 / FAIL=1 / ERROR=1 / BLOCKED=2）：
+// `failed===0` 不再能单独推导出"通过"——零条结论行会被判成 ERROR（指南 §3.1）。
+judge.run.__failedLines = failed
+judge.finish({ label: 'VERIFY', extraFiles: { 'stdout-summary.json': JSON.stringify({ failed, checks: judge.run.checks.length }, null, 2) + '\n' } })

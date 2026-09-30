@@ -14,16 +14,24 @@
 //      `executionComplete` 不是 true。
 //
 // 用独立子进程跑，互不干扰；不联网（端口是本机空号）、不调模型、不写真实工作区。
+//
+// 判定（DS 修复指南 §3.1）：本脚本自己也走唯一 RunResult 口径——零条检查是 ERROR（例如
+// RUNNERS 列表被清空时，`failed===0` 曾经会打印 OK），异常是 ERROR，都退出非 0。
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createJudge, guardCrashes, positionalArgs } from './lib/run-result.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
 
-const outDir = resolve(process.argv[2] || join(repoRoot, 'docs', 'artifacts', 'runner-negative'))
-const deadPort = String(process.argv[3] || '59999')
+// 参数：`[outDir] [deadPort]`，也接受 `--out <dir>`。
+// 不能只按位置取：用了 `--out` 之后位置参数整体前移，`--out` 自己会被当成输出目录
+// （实测在仓库根下真建了一个 `--out/`，里面还躺着子 runner 的证据——"结果看着有、其实放错地方"）。
+const { argv: rest, outDir: forcedOut } = positionalArgs()
+const deadPort = String(rest.find((a) => /^\d+$/.test(a)) || '59999')
+const outDir = resolve(forcedOut || rest.find((a) => !/^\d+$/.test(a)) || join(repoRoot, 'docs', 'artifacts', 'runner-negative'))
 const deadUrl = `http://127.0.0.1:${deadPort}`
 
 const RUNNERS = [
@@ -34,10 +42,18 @@ const RUNNERS = [
 
 let failed = 0
 const lines = []
+// plannedCases：每个受测运行器都必须至少产出一条结论（它的 6 条断言是成组出现的）
+const judge = createJudge({
+  script: 'runner-negative-check',
+  outDir,
+  plannedCases: RUNNERS.map((r) => `${r.name}：`),
+})
+guardCrashes(judge)
 const check = (name, ok, extra = '') => {
   const line = `${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`
   console.log('  ' + line)
   lines.push(line)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -101,13 +117,10 @@ for (const r of RUNNERS) {
 
 mkdirSync(outDir, { recursive: true })
 writeFileSync(join(outDir, 'result.json'), JSON.stringify({ deadUrl, results }, null, 2) + '\n')
-writeFileSync(
-  join(outDir, 'result.md'),
+const report =
   `# 运行器判定器负向回归\n\n时间：${new Date().toISOString()}\n入口：\`node scripts/runner-negative-check.mjs ${outDir} ${deadPort}\`\n` +
-    `场景：让每个运行器连一个**没有服务在听**的本机端口，断言它"退出非 0 + 状态 ERROR/BLOCKED + 不产出全通过结论"。\n\n` +
-    `**结果：${failed === 0 ? '全部 PASS' : `FAIL ${failed} 条`}**\n\n${lines.map((l) => '- ' + l).join('\n')}\n`,
-  'utf8',
-)
-console.log('')
-console.log(failed === 0 ? `RUNNER-NEGATIVE OK（${outDir}）` : `RUNNER-NEGATIVE FAILED (${failed})`)
-process.exitCode = failed === 0 ? 0 : 1
+  `场景：让每个运行器连一个**没有服务在听**的本机端口，断言它"退出非 0 + 状态 ERROR/BLOCKED + 不产出全通过结论"。\n\n` +
+  `**结果：${judge.statusOf()}**（检查 ${judge.run.checks.filter((c) => c.pass).length}/${judge.run.checks.length} 通过，${failed} 条红）\n\n` +
+  `${lines.map((l) => '- ' + l).join('\n')}\n`
+writeFileSync(join(outDir, 'result.md'), report, 'utf8')
+judge.finish({ label: 'RUNNER-NEGATIVE', extraFiles: { 'result.md': report } })

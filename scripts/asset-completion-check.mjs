@@ -16,6 +16,16 @@
 // `rasterStats` 返回 null、自动跳过；本脚本因此只能覆盖门禁的**结构**半边，
 // 栅格阈值本身的校准与断言在 scripts/raster-check.mjs（浏览器）里，走的是同一个 acceptSvg。
 import { resetStub } from './lib/ls-stub.mjs'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
+
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码。
+// plannedCases 按检查 id 的 ①…⑤ 前缀匹配：某组一条检查都没出现 = 执行不完整 = ERROR（不是跳过、不是通过）。
+const judge = createJudge({
+  script: 'asset-completion-check',
+  outDir: resolveOutDir('asset-completion-check'),
+  plannedCases: ['①', '②', '③', '④', '⑤'],
+})
+guardCrashes(judge)
 
 const { addAsset, updateAsset, getAsset, deleteAsset } = await import('../src/lib/asset-library.ts')
 const { emptyMaterializeInfo, materializePlaceholders, applyRejectedArts } = await import('../src/lib/image-agent.ts')
@@ -30,6 +40,7 @@ const { dirname, join } = await import('node:path')
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -429,5 +440,4 @@ console.log('\n[§5.4 assetPolicy=preserve：身份退化拦截（DS 修复指�
   )
 }
 
-console.log(failed === 0 ? '\nASSET-COMPLETION OK' : `\nASSET-COMPLETION FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'ASSET-COMPLETION' })

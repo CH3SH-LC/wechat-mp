@@ -1,8 +1,11 @@
 // asset-resolve-check.mjs —— 素材解析器 P0 断言（2026-09-24 调查 §1/§2/§7）
-// 用法：node scripts/asset-resolve-check.mjs
+// 用法：node scripts/asset-resolve-check.mjs [--out <目录>]
 // 用内存 localStorage 桩驱动真实的 asset-library / image-agent / compose 代码，
 // 重放调查文档里的隔离案例，并按"整篇不触发自动重写"这一验收口径做端到端断言。
+//
+// 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
 import { resetStub } from './lib/ls-stub.mjs'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 import { failingDoc, failingSource, fixtureAssets, seedFixtureAssets } from './lib/fixtures.mjs'
 const { addAsset, listAssets } = await import('../src/lib/asset-library.ts')
 const { emptyMaterializeInfo, materializePlaceholders } = await import('../src/lib/image-agent.ts')
@@ -13,9 +16,13 @@ const { createLedger, unfinished } = await import('../src/lib/asset-ledger.ts')
 const { newRunId } = await import('../src/lib/trace.ts')
 const { judgeReuse, hasColorConflict, pairBubbleRefs, planDecoAliases, splitPolicy } = await import('../src/lib/asset-resolve.ts')
 
+const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check') })
+guardCrashes(judge)
+
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 
@@ -409,5 +416,4 @@ console.log('\n[阶段 3：跨自动修订复用 + 失败预算不清零 + 取�
   void reuseEvents
 }
 
-console.log(failed === 0 ? '\nASSET-RESOLVE OK' : `\nASSET-RESOLVE FAILED (${failed})`)
-process.exit(failed === 0 ? 0 : 1)
+judge.finish({ label: 'ASSET-RESOLVE' })

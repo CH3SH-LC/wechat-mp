@@ -80,6 +80,13 @@ export function launchDesktop(exe, opts) {
     ...(opts.extraEnv || {}),
   }
   if (opts.cdpPort) {
+    // WXMP_CDP_PORT 是**真正生效**的那个（应用侧在 `src-tauri/src/lib.rs` 里读它，再用 Tauri 的
+    // builder 把 `--remote-debugging-port` 传给 wry）。
+    //
+    // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 保留只是**无害的兼容**：当前依赖（wry 0.55.1）会无条件
+    // 调用 `set_additional_browser_arguments()`，把 WebView2 读到的同名环境变量覆盖掉，所以它其实
+    // 已经不生效了。留着它不会有害（覆盖后等于没设），但**不要**再把"CDP 起不来"归因到它身上。
+    env.WXMP_CDP_PORT = String(opts.cdpPort)
     env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = `--remote-debugging-port=${opts.cdpPort}`
   }
   const child = spawn(exe, [], { env, detached: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })

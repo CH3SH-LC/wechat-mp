@@ -19,7 +19,21 @@ export interface AssetIssue {
  * 不得因 `kind === 'draft-failed'` 之类的取值去触发导出、澄清、路由或任何别的行为。
  */
 export type DocDisplayState =
-  | { kind: 'accepted'; revisionId?: string } // 成品已验收并保存
+  | {
+      kind: 'accepted'
+      revisionId?: string
+      /**
+       * 本轮**成功提交回执 + 读回**是否已经拿到（DS 指南 §5.3 末段：
+       * 「应用「已保存」只来自本轮成功提交回执与读回」）。
+       *
+       * 为什么要有它：`accepted` 是**交付门禁**的结论（稿子合格），**不是**磁盘写入的结论。
+       * 上层在走落库之前就要把状态置成 accepted 好让用户看见"验收通过"，但那时"已保存"还没发生——
+       * 旧文案把两件事说成一句「成品已验收并保存」，于是保存失败时界面仍在报告"已保存"。
+       * `false` = 已验收、写入结果尚未确认（或已失败，失败原因另由保存提示条给出）；
+       * `true` / 缺省 = 已拿到回执（缺省是为兼容既有调用方与既有断言）。
+       */
+      saved?: boolean
+    }
   | { kind: 'restored'; revisionId?: string } // 已恢复上一版成品（本候选被撤销）
   | { kind: 'draft-failed'; blockers: number } // 草稿未通过
   | { kind: 'repairing'; attempt: number } // 修复中
@@ -55,6 +69,9 @@ const DOC_STATE_TEXT: Record<DocDisplayState['kind'], { label: string; detail: s
 
 /** 状态详情：只有在草稿取回入口真的渲染出来时，才提示"请走草稿入口"——不指一个不存在的按钮 */
 function docStateDetail(s: DocDisplayState, hasDraftExport: boolean): string {
+  if (s.kind === 'accepted' && s.saved === false) {
+    return '已通过交付门禁；文档库写入结果尚未确认，因此这里不显示「已保存」。若写入失败，预览区上方会给出原因。'
+  }
   const t = DOC_STATE_TEXT[s.kind]
   return s.kind === 'draft-failed' && hasDraftExport ? t.detail + '取回请走下方标注的草稿入口。' : t.detail
 }
@@ -273,6 +290,12 @@ export default function PreviewPane({
 
   // ---------- 文档状态与质量条（全部是纯展示计算，不参与任何流程判断：铁律 6） ----------
   const stateText = docState ? DOC_STATE_TEXT[docState.kind] : null
+  // 「已保存」这几个字只能来自**本轮成功提交回执**（DS 指南 §5.3 末段）。上层在落库之前就会把
+  // 状态置成 accepted（好让用户先看见"验收通过"），此时 saved===false —— 那时还不能说"已保存"。
+  const stateLabel =
+    docState?.kind === 'accepted' && docState.saved === false
+      ? '成品已验收，写入文档库尚未确认'
+      : stateText?.label || ''
   const stateMeta = docState ? docStateMeta(docState) : ''
   // 是否"预览里这份不是已验收成品"——这个布尔只用来选文案与 data 标记，不驱动任何行为
   const showingDraft = !!stateText?.draft
@@ -369,7 +392,7 @@ export default function PreviewPane({
           data-doc-is-draft={showingDraft ? '1' : '0'}
         >
           <div className="ds-line">
-            <span className="ds-title">{stateText.label}</span>
+            <span className="ds-title">{stateLabel}</span>
             {stateMeta && <span className="ds-meta">{stateMeta}</span>}
           </div>
           <div className="ds-detail">{docStateDetail(docState, hasDraftExport)}</div>

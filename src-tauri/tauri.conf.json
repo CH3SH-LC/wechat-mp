@@ -10,15 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "智序 · 公众号推文助手",
-        "width": 1380,
-        "height": 880,
-        "minWidth": 1000,
-        "minHeight": 640
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
