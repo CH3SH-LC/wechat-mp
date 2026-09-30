@@ -5,6 +5,24 @@
 ---
 ## 2026-10-01
 
+### [Verify] 指南 §4.3「有效无事实正文」App 层回归 + §7 发布输入清单绑定本次 release
+
+**§4.3 表第 7 行（有效无事实正文与投影失败必须分开）**：`repair-flow-check` 新增用例
+`no-protected-facts-accepted`——首稿带 emoji 触发一轮自动修订，修订稿**没有任何受保护事实**
+（无日期/地点/电话/人数），必须 accepted 而不是被阻断。两条新断言都做了可证伪处理：
+- `wantNoFacts` 断言 `baseFacts.length === 0`：把抽取器改成凭空产出事实（模拟历史上真出现过的
+  `感谢老师` → `name:感谢老师` 假事实），该用例**立刻变红**（实测 REPAIR-FLOW FAIL）；
+- 断言 trace 里是 `投影=ok` 而**不是** `failed/empty`——"没有事实"不等于"投影失败"。
+- 顺带修掉一条**恒真断言**：`mustExtract: []` 时 `every()` 自动为真，那条"首稿真的抽出了要保护
+  的事实"在这种用例上是永远绿的；现在只在声明了要抽的事实时才断言，"没有事实"由 `wantNoFacts` 负责。
+
+**§7 发布输入清单**：`node scripts/input-manifest.mjs` 对**本次 release** 生成清单——
+`gitHead = 4ad6900`（与构建时的树一致）、645 个输入文件 / 46,971,339 字节、
+工具版本 `node v24.13.0 / pnpm 10.33.2 / cargo 1.95.0 / rustc 1.95.0`、
+排除 `node_modules dist .git target .vite .pnpm-store coverage`、**敏感文件跳过 0**（确认没有把凭据当输入收进去）、
+清单自身 sha256 `356859900057010a76f63bfe33fc7cb83326f6d8208e1f6ae6cd53d52f85aa47`。
+清单内容含未跟踪输入（runner/fixture 也算输入）；按用户口径 JSON 不入库，只在本条记录哈希与摘要。
+
 ### [Change][Verify] §4.2 正文投影改由 compose 的作者节点产出（关闭上一节留下的那条未完成项）
 
 **问题**：上一节交付时如实标了"§4.2 要求的'利用 compose 的作者节点与 emit 元信息形成带来源范围的正文单元'只做了一半"——`FactToken` 有了来源区间，但**投影本身**仍是 `bodyText(html)`：拿渲染后的 HTML 做正则去标签。它猜不出节点边界，另外缺三样东西：**来源范围**（出问题只知道"某段文字少了"，不知道在源文第几行）、**三态**（分不开"解析成功但正文确实为空"与"根本建不出投影"）、**精确分类**（系统占位/报错句只能靠匹配文案形状排除）。
@@ -25,7 +43,7 @@
   - App 层断言最初查 note 里有没有 `投影=ok`——而 reason 当时没进 note，"作者节点"和"legacy 回退"两种通道长得一模一样；把 reason 写进 note 后，强制走 legacy 的变异让 7 条断言全部变红（并打印出 `legacy-html：无作者节点，退回 HTML 文本投影（弱化）`）。
   - 另一条"投影不含实现细节"的正则自己写错了：`[[\w]+:` 在字符类里等价于"词字符+冒号"，把正文里的 `8:00` 也匹配上——是**断言写错**而不是实现泄漏，已改正则并注明原因。
 - 回归：`delivery-quality-check` / `repair-integrity-check` / `photo-swallow-check` / `asset-*` / `svg-quality-check` / `trace-check` / `progress-check` / `runner-negative-check` 全绿；`verify-ui` 134/134；`prep-contract-check` / `preview-resource-check` PASS；`cargo test --lib` 133 项；`tsc` 与 `pnpm build` 干净。
-- **release 重建**（`pnpm tauri build --bundles nsis` 后）：`wechat-mp-desktop.exe` sha256 `e32e6f5658813d9036d1c5af5848ccc77612282c1e1b15d4c02a3d84273db556`、`智序_0.1.0_x64-setup.exe` sha256 `f5d5e1a5cbcf57814623abcea8c07a7c4b6b46441a432174e1f991a550d16c52`；核对无应用输入文件新于 exe；对该 exe 重跑**隔离启动冒烟 PASS**（窗口标题逐字符相等、隔离工作区自动建立、真实工作区逐文件哈希未变）。
+- **release 重建**（`pnpm tauri build --bundles nsis` 后）：`wechat-mp-desktop.exe` sha256 `bdbf102ae5a0aced6d3bf6d283f1f93c8e118484edb0356e2e4cedf8bb9edd29`、`智序_0.1.0_x64-setup.exe` sha256 `7c610fc0380c15f10bb1a7008b8218df792bb09d6a1461057433f7fec156f25d`（本节收口后重建，为该轮最终产物）；核对无应用输入文件新于 exe；对该 exe 重跑**隔离启动冒烟 PASS**（窗口标题逐字符相等、隔离工作区自动建立、真实工作区逐文件哈希未变）。
 
 ### [Change][Verify][Blocked] 第二轮指南 A–E 收口；F（真实模型验收）被 WebView2 卡住
 

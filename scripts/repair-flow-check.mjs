@@ -236,6 +236,21 @@ const CASES = [
     mustExtract: [{ kind: 'place', text: '东区操场' }],
     mustKeep: ['东区操场', '张老师', '100名'],
   },
+  {
+    // §4.3 第 7 行：**有效无事实正文**必须能正常验收。
+    // "正文里没有数字/地点/电话" ≠ "投影失败"——它只是没有需要保护的事实。
+    // 首稿带 emoji 触发一轮自动修订，修订稿仍然没有受保护事实，必须 accepted 而不是被阻断。
+    // `wantNoFacts` 是这条用例的**可证伪点**：如果抽取器开始把普通词产成事实（历史真出现过
+    // `感谢老师` → name:感谢老师 这类假事实），这里会立刻变红。
+    name: 'no-protected-facts-accepted',
+    want: 'accepted',
+    wantNoFacts: true,
+    prompt: '直接写一篇校园风短通知，标题保持「新生见面会」，说明本期栏目主题是春游随笔，不涉及日期、地点、电话或人数，不需要配图。',
+    initial: `${HEAD}本期栏目主题是春游随笔，欢迎投稿。${TAME_EMOJI}`,
+    revision: `${HEAD}本期栏目主题是春游随笔，欢迎投稿。${TAME}`,
+    mustExtract: [],
+    mustKeep: ['春游随笔'],
+  },
 ]
 
 const evidence = {
@@ -407,13 +422,31 @@ try {
       authorProjectionUsed,
       qualityNotes.join(' | ').slice(0, 220),
     )
+    if (c.wantNoFacts) {
+      // 这条是把"有效无事实正文"与"投影失败"分开的落点：没有受保护事实仍然要 accepted。
+      check(
+        `${c.name}：确认正文里**确实没有**受保护事实（否则这条用例测的不是它）`,
+        state.control.baseFacts.length === 0,
+        `实抽=${state.control.baseFacts.join(' / ') || '（无）'}`,
+      )
+      check(
+        `${c.name}：投影仍是 ok（不是 failed/empty），无事实不等于投影失败`,
+        qualityNotes.some((n) => n.includes('投影=ok')) && !qualityNotes.some((n) => n.includes('投影=failed')),
+        qualityNotes.join(' | ').slice(0, 220),
+      )
+    }
     check(`${c.name}：全程无外链请求`, offsiteRequests.length === 0, offsiteRequests.join(' / '))
     check(`${c.name}：全程无页面异常`, pageErrors.length === 0, pageErrors.join(' / '))
-    check(
-      `${c.name}：首稿真的抽出了要保护的事实（先证"抽得出来"，再谈"漏没漏"）`,
-      extractedOk,
-      `期望=${c.mustExtract.map((f) => f.kind + ':' + f.text).join(' / ') || '（无）'}；实抽=${state.control.baseFacts.join(' / ')}`,
-    )
+    // 只在**声明了要抽的事实**时才断言这一条：`mustExtract` 为空时 `every()` 恒真，
+    // 留着它就是一条永远绿的断言（这个仓库反复踩过的坑）。"没有事实"那一类用例由
+    // 下面的 `wantNoFacts` 单独断言，语义更准确。
+    if (c.mustExtract.length > 0) {
+      check(
+        `${c.name}：首稿真的抽出了要保护的事实（先证"抽得出来"，再谈"漏没漏"）`,
+        extractedOk,
+        `期望=${c.mustExtract.map((f) => f.kind + ':' + f.text).join(' / ')}；实抽=${state.control.baseFacts.join(' / ')}`,
+      )
+    }
     if (c.want === 'blocked') {
       check(
         `${c.name}：丢事实的修订稿**没有**被标成成品`,

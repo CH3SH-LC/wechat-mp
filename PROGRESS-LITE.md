@@ -5,6 +5,9 @@
 ---
 ## 2026-10-01
 
+- [Verify] §4.3「有效无事实正文」App 层回归：新增 `no-protected-facts-accepted` 用例（无日期/地点/电话/人数仍须 accepted），并断言 `baseFacts` 为空、投影为 `ok` 而非 `failed`——把抽取器改成凭空产事实即变红；顺带删掉一条 `mustExtract: []` 时的**恒真断言**。
+- [Verify] §7 发布输入清单绑定本次 release：`gitHead 4ad6900`、645 个输入文件 / 46,971,339 字节、工具版本 node v24.13.0 / pnpm 10.33.2 / cargo 1.95.0、敏感文件跳过 0、清单自身 sha256 `35685990…`（JSON 按用户口径不入库，只记哈希）。
+
 - [Change] §4.2 正文投影改由 **compose 的作者节点**产出（`ComposeResult.authorUnits` + `projectionOf` 三态 ok/empty/failed）：带源文行号、`<svg>` 整块（含内部 `<text>`）剔除而**作者写的代码文本保留**、系统占位与容器报错句按 `emit` 标记排除；只有旧 ```html 直通通道才退回正则投影，并在 trace 里标 `legacy-html`。有效空内容不再被当成失败。
 - [Verify] `compose-check` 新增 ⑦ 节 11 条（98/98）；`repair-flow-check` 新增 7 条 App 层断言（trace 必须 `投影=ok` 且不含 `legacy-html`）。**两条断言第一版都是恒真的，靠变异才改对**：纯几何 SVG 换成含 `<text>` 的 SVG、把投影原因写进 trace note 之后才可证伪；另修掉一条自己写错的正则（`[[\w]+:` 误匹配正文里的 `8:00`）。
 
