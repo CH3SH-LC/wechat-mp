@@ -11,7 +11,8 @@
 | 开发环境、验证与打包 | [开发指南](DEVELOPMENT.md) |
 | 文件在哪、模块做什么 | [项目结构](../STRUCTURE.md) |
 | 最近状态 / 变更原因与验证 | [精简进度](../PROGRESS-LITE.md) / [详细进度](../PROGRESS.md) |
-| 当前交给 DS 的修改任务：复测缺口、回归、发布与已授权的真实模型测试（待实施） | [第二轮修改指南](design/ds-repair-guide-2026-09-30.md)、[最新审计与回归输入](artifacts/2026-09-30-ds-audit/README.md) |
+| 第二轮修改任务：复测缺口、回归、发布与真实模型验收（**A–E 已实施并验证；F 因本机 WebView2 不开放 CDP 而 BLOCKED，未验收**） | [第二轮修改指南](design/ds-repair-guide-2026-09-30.md)、[最新审计与回归输入](artifacts/2026-09-30-ds-audit/README.md) |
+| 真机验收为何跑不了：WebView2 无 CDP 端点的排查结论与已排除项（换环境前先看这条） | [WebView2 与真机验收](design/webview2-cdp-and-live-acceptance-2026-10-01.md) |
 | 第一轮任务及原始失败输入（历史关闭状态已被复测更新） | [第一轮指南](design/ds-repair-guide-2026-09-29.md)、[原始失败夹具](artifacts/2026-09-29-capability-review/README.md) |
 | AI 提示词与知识注入入口 | [上下文索引](ai-context/README.md) |
 | 体验与素材问题调查与修改方案（P0/P1/P2 已实施；残留项见需求基线） | [代码调查建议](design/improvement-review-2026-09-24.md) |
