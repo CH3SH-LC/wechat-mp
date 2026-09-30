@@ -27,6 +27,19 @@ export interface SplitResult {
   code: string | null // 首个 ```html 围栏内容（直通通道）
   v2: string | null // 末个 ```v2 围栏内容（v2 语法正文，需 compose）
   v2Count: number // v2 围栏个数（>1 = 模型叠稿，需 collapseAssistantDraft 归一）
+  /**
+   * **正文边界无法确定**：v2 围栏闭合之后，消息里还有别的裸围栏。
+   *
+   * 成因：本函数按行 toggle 围栏，而 v2 正文里**合法**可以出现 ``` 代码块（compose 支持，
+   * 引擎协议把它列为文字类组件）。于是一个内层代码块的开围栏会被当成 v2 的结束符——
+   * 实测：正文里带一段代码示例时，v2 从该处被**静默截断**，后半篇连同收尾段落一起消失，
+   * 而聊天里的助手原文是完整的。若上层照常提交，就会出现"成品已验收并保存"、
+   * 但成品/预览/导出少了半篇的情形（提交了但内容不对）。
+   *
+   * 这里**不做猜测性修复**（同一份字节序列既可解释为"内层代码块"也可解释为"v2 结束"，
+   * 无额外信息无法判定），只把"边界不确定"如实报出来，让上层**不得静默提交**。
+   */
+  v2Ambiguous: boolean
 }
 
 // 把助手回复拆成"说明文字 + 源码"：围栏从 prose 剥离；code 取首个 html 围栏，v2 取末个。
@@ -42,6 +55,8 @@ export function splitAssistant(raw: string): SplitResult {
   let cur: string[] = []
   let lang = ''
   let inFence = false
+  let fenceSeen = 0
+  let v2CloseAt = -1
   const close = (target: 'code' | 'v2') => {
     const c = cur.join('\n').trim()
     if (!c) return
@@ -49,11 +64,13 @@ export function splitAssistant(raw: string): SplitResult {
     if (target === 'v2') {
       v2 = c
       v2Count++
+      v2CloseAt = fenceSeen
     }
   }
   for (const ln of lines) {
     const t = ln.trim()
     if (t.startsWith('```')) {
+      fenceSeen++
       if (!inFence) {
         inFence = true
         lang = t.slice(3).trim().toLowerCase()
@@ -69,7 +86,9 @@ export function splitAssistant(raw: string): SplitResult {
     if (inFence) cur.push(ln)
     else prose.push(ln)
   }
-  return { prose: prose.join('\n').trim(), code, v2, v2Count }
+  // v2 闭合后还有围栏 → 那次"闭合"很可能只是内层代码块的开围栏（见 v2Ambiguous 的说明）
+  const v2Ambiguous = v2 !== null && v2CloseAt > 0 && v2CloseAt < fenceSeen
+  return { prose: prose.join('\n').trim(), code, v2, v2Count, v2Ambiguous }
 }
 
 // 第 31 轮 B：一个回合叠了多篇 ```v2 正文时归一为"全部说明文字 + 末篇围栏"，

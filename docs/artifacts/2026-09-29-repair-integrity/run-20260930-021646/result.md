@@ -1,0 +1,92 @@
+# 自动修复事实保护 —— 离线回归（2026-09-29T18:16:46.563Z）
+
+脚本：`node scripts/repair-integrity-check.mjs --out D:\deepseek-harness\wechat-mp-desktop\docs\artifacts\2026-09-29-repair-integrity\run-20260930-021646`
+被测：`src/lib/delivery-quality.ts`（生产函数，纯离线；不联网、不调模型、不写真实工作区）
+
+**结果：全部 PASS**
+
+```
+  PASS - ① 规范化等价：8 点 30 分 = 8:30 (
+      集合时间为8 点 30 分。 → time|any|08:30
+      集合时间为8:30。 → time|any|08:30)
+  PASS - ① 规范化等价：08：30 = 8:30 (
+      集合时间为 08：30。 → time|any|08:30
+      集合时间为8:30。 → time|any|08:30)
+  PASS - ① 规范化不等价：8:30 ≠ 18:30 (旧 time|any|08:30 / 新 time|pm|18:30)
+  PASS - ① 规范化等价：2025年9月1日 = 2025-09-01 (
+      活动日期2025年9月1日。 → date|2025-09-01
+      活动日期2025-09-01。 → date|2025-09-01)
+  PASS - ① 规范化不等价：带年份 ≠ 丢年份 (旧 date|2025-09-01 / 新 date|09-01)
+  PASS - ① 规范化不等价：日期"新值包含旧值"（10月1日 是 10月10日 的前缀）不得并同 (旧 date|10-01 / 新 date|10-10)
+  PASS - ① 规范化等价：电话分隔符差异 (
+      联系电话：010-55556666。 → phone|01055556666
+      联系电话：010 5555 6666。 → phone|01055556666)
+  PASS - ① 规范化不等价：电话尾号追加一位 (旧 phone|01055556666 / 新 phone|010555566660)
+  PASS - ① 姓名不把虚词当名字 ([{"kind":"name","text":"张老师","canon":"张老师"}])
+  PASS - ② 删掉句外 emoji、事实全留 → 可通过 (ok=true 阻断=无 缺失=0)
+  PASS - ② 片段丢失（emoji）只作 warning，不是阻断项 (blockers=0)
+  PASS - ② 句中 emoji 被删、事实全留 → 可通过 (ok=true 阻断=无)
+  PASS - ② 逐一删除日期 → 阻断并指到具体 kind (缺失 date:9月1日；阻断 body.fact-lost)
+  PASS - ② 逐一删除时间 → 阻断并指到具体 kind (缺失 time:上午8点30分；阻断 body.fact-lost)
+  PASS - ② 逐一删除地点 → 阻断并指到具体 kind (缺失 place:东区操场；阻断 body.fact-lost)
+  PASS - ② 逐一删除姓名 → 阻断并指到具体 kind (缺失 name:张老师；阻断 body.fact-lost)
+  PASS - ② 逐一删除人数 → 阻断并指到具体 kind (缺失 number:100名；阻断 body.fact-lost)
+  PASS - ② 8:30→18:30 → 阻断（不能被"新值包含旧值"骗过） (阻断 body.fact-lost)
+  PASS - ② 电话尾号追加一位 → 阻断 (阻断 body.fact-lost)
+  PASS - ② 电话只是分隔符不同 → 可通过 (阻断 无)
+  PASS - ② 姓名句式调整 → 可通过（不把虚词当保护事实） (阻断 无)
+  PASS - ② 人数变化 → 阻断 (阻断 body.fact-lost)
+  PASS - ② 同行删 emoji 不能豁免同行日期 (阻断 body.fact-lost)
+  PASS - ③ 正文投影剔除 SVG（坐标/属性不当事实） (正文：9月1日在东区操场集合。)
+  PASS - ③ 正文投影剔除 SVG 内的**可见文字**（不是靠去标签碰巧通过） (正文：9月1日在东区操场集合。)
+  PASS - ③ 只改素材实现 → 不产生任何正文阻断 (阻断 无)
+  PASS - ③ 系统生成的拒收占位不进正文投影 (前文。)
+  PASS - ③ 行内代码的文字进正文投影（作者可见内容，指南 §4.1） (示例： 010-55556666 结束)
+  PASS - ③ 行内代码的样式属性不进正文投影（background-color / 字体名不是文章事实） (示例： 010-55556666 结束)
+  PASS - ③ 行内代码里的电话被删 → 阻断并指到 phone (缺失 phone:010-55556666)
+  PASS - ③ 转义后的泄漏 SVG **仍**留在正文投影里（交给 leakIssues 阻断，不在这里洗掉） (泄漏：<svg viewBox="0 0 750 220">)
+  PASS - ③b 正常改写不误报丢事实：地点状语换位 (误报 [])
+  PASS - ③b 正常改写不误报丢事实：引语只差标点 (误报 [])
+  PASS - ③b 正常改写不误报丢事实：称谓前加了限定词 (误报 [])
+  PASS - ③b 正常改写不误报丢事实：姓名句式调整 (误报 [])
+  PASS - ③b 正常改写不误报丢事实：时间格式等价改写 (误报 [])
+  PASS - ③b 真删掉date仍然报出（反向对照） (缺失 ["date:9月1日"])
+  PASS - ③b 真删掉time仍然报出（反向对照） (缺失 ["time:上午8点30分"])
+  PASS - ③b 真删掉place仍然报出（反向对照） (缺失 ["place:东区操场"])
+  PASS - ③b 真删掉name仍然报出（反向对照） (缺失 ["name:张老师"])
+  PASS - ③b 不产出假事实（地点在…） (抽到 ["place:图书馆"])
+  PASS - ③b 不产出假事实（感谢…） (抽到 [])
+  PASS - ③b 不产出假事实（周末到馆…） (抽到 ["date:10月10日","time:17:00","time:9:00"])
+  PASS - ④ body.ok=true（通过）与 verdict.ok / gate.bodyIntegrityOk 同源 (verdict.ok=true gate=true)
+  PASS - ④ body.ok=false（未通过）与 verdict.ok / gate.bodyIntegrityOk 同源 (verdict.ok=false gate=false)
+  PASS - ④ 该比却比不了 → 阻断（body.unverified），不当通过 (ok=false 阻断=body.unverified)
+  PASS - ④ 不适用（首稿）→ 不做保留比较，但也不谎称通过 (ok=true checks.body=unknown)
+  PASS - ④ 声称已比却没给结果 → 按"比不了"阻断 (ok=false)
+  PASS - ④ 事实缺失仍是最强阻断（不是靠条数多少） (阻断 body.fact-lost)
+  PASS - ⑤ 必须不通过：日期取值变化 10月10日 → 10月11日 (ok=false 缺失=date|10-10，阻断 body.fact-lost)
+  PASS - ⑤ 必须不通过：日期"新值包含旧值" 10月1日 → 10月10日 (ok=false 缺失=date|10-01，阻断 body.fact-lost)
+  PASS - ⑤ 必须不通过：时间被整段删掉（9:00-17:00） (ok=false 缺失=time|pm|17:00,time|any|09:00，阻断 body.fact-lost)
+  PASS - ⑤ 必须不通过：时间"新值包含旧值" 9:00 → 19:00 (ok=false 缺失=time|any|09:00，阻断 body.fact-lost)
+  PASS - ⑤ 必须不通过：时段变化 上午8 点 30 分 → 下午8 点 30 分 (ok=false 缺失=time|am|08:30，阻断 body.fact-lost)
+  PASS - ⑤ 必须不通过：电话尾号变化 010-55556666 → 010-55556667 (ok=false 缺失=phone|01055556666，阻断 body.fact-lost)
+  PASS - ⑤ 时间被整段删掉时起止两项都报出（不能只报一个） (time|pm|17:00,time|any|09:00)
+  PASS - ⑤ 必须通过：同义时间格式 8 点 30 分 → 8:30 (ok=true 缺失=0；前 time|any|08:30；后 time|any|08:30)
+  PASS - ⑤ 必须通过：同义时间格式 08：30 → 8:30 (ok=true 缺失=0；前 time|any|08:30；后 time|any|08:30)
+  PASS - ⑤ 必须通过：时段+12 小时制 = 24 小时制 下午8:30 → 20:30 (ok=true 缺失=0；前 time|pm|20:30；后 time|pm|20:30)
+  PASS - ⑤ 必须通过：日期书写格式 2025年9月1日 → 2025-09-01 (ok=true 缺失=0；前 date|2025-09-01；后 date|2025-09-01)
+  PASS - ⑤ 必须通过：电话分隔符差异 010-55556666 → 010 5555 6666 (ok=true 缺失=0；前 phone|01055556666；后 phone|01055556666)
+  PASS - ⑤ 必须通过：姓名句式调整 负责接待的是张老师 → 张老师负责接待 (ok=true 缺失=0；前 name|张老师；后 name|张老师)
+  PASS - ⑥ place-only-loss　仅删「在东区操场」：首稿真的抽到了要保护的事实（先证抽得出来） (期望=place:东区操场；实抽=date:9 月 1 日 / time:上午8 点 30 分 / name:张老师 / place:东区操场 / number:100名)
+  PASS - ⑥ place-only-loss　仅删「在东区操场」：必须阻断 (ok=false（期望 false）阻断=body.fact-lost 缺失=place:东区操场)
+  PASS - ⑥ place-only-loss　仅删「在东区操场」：阻断原因确实是"正文事实丢失"（不是被别的规则顺带拦住） (body.fact-lost:blocking,body.text-changed:warning,body.text-changed:warning)
+  PASS - ⑥ ampm-changed　上午8 点 30 分 → 下午8 点 30 分：首稿真的抽到了要保护的事实（先证抽得出来） (期望=time:上午8 点 30 分；实抽=date:9 月 1 日 / time:上午8 点 30 分 / name:张老师 / place:东区操场 / number:100名)
+  PASS - ⑥ ampm-changed　上午8 点 30 分 → 下午8 点 30 分：必须阻断 (ok=false（期望 false）阻断=body.fact-lost 缺失=time:上午8 点 30 分)
+  PASS - ⑥ ampm-changed　上午8 点 30 分 → 下午8 点 30 分：阻断原因确实是"正文事实丢失"（不是被别的规则顺带拦住） (body.fact-lost:blocking,body.text-changed:warning,body.text-changed:warning)
+  PASS - ⑥ inline-phone-loss　删除行内代码里的电话：首稿真的抽到了要保护的事实（先证抽得出来） (期望=phone:010-55556666；实抽=phone:010-55556666)
+  PASS - ⑥ inline-phone-loss　删除行内代码里的电话：必须阻断 (ok=false（期望 false）阻断=body.fact-lost 缺失=phone:010-55556666)
+  PASS - ⑥ inline-phone-loss　删除行内代码里的电话：阻断原因确实是"正文事实丢失"（不是被别的规则顺带拦住） (body.text-lost:warning,body.fact-lost:blocking,body.text-changed:warning,body.text-added:info)
+  PASS - ⑥ inline-phone-preserved　行内代码电话原样保留（正例）：首稿真的抽到了要保护的事实（先证抽得出来） (期望=phone:010-55556666；实抽=phone:010-55556666)
+  PASS - ⑥ inline-phone-preserved　行内代码电话原样保留（正例）：必须通过 (ok=true（期望 true）阻断=无 缺失=无)
+  PASS - ⑥ standalone-emoji-preserved　删掉独立成段的 emoji（正例）：首稿真的抽到了要保护的事实（先证抽得出来） (期望=place:东区操场；实抽=date:9 月 1 日 / time:上午8 点 30 分 / name:张老师 / place:东区操场 / number:100名)
+  PASS - ⑥ standalone-emoji-preserved　删掉独立成段的 emoji（正例）：必须通过 (ok=true（期望 true）阻断=无 缺失=无)
+```

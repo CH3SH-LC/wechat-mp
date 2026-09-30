@@ -1,7 +1,7 @@
 // exportHtml.ts —— 导出推文 HTML：Tauri 走 Rust 命令（文档/wechat-mp-exports），浏览器走 <a download>
 
 import { invoke } from '@tauri-apps/api/core'
-import { inTauri } from './chat'
+import { inTauri } from './chat.ts'
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n)

@@ -1,10 +1,17 @@
-import { useState } from 'react'
-import { splitAssistant } from '../lib/extract'
+import { useImperativeHandle, useRef, useState } from 'react'
+import { splitAssistant } from '../lib/extract.ts'
+import type { TaskEvent } from '../lib/progress.ts'
+import WorkingBubble from './WorkingBubble.tsx'
 
 export interface DisplayMsg {
   id: number
   role: 'user' | 'assistant' | 'error'
   content: string
+}
+
+/** P2：预览里点选组件后，把一段文本锚点插进输入框草稿（用户自己补指令再发送） */
+export interface ChatPaneApi {
+  insertRef: (text: string) => void
 }
 
 interface Props {
@@ -13,7 +20,24 @@ interface Props {
   onSend: (text: string) => void
   onStop: () => void
   status: string
-  knowledgeNote: string
+  /** 当前工作阶段与细节（读资料 / 思考 / 撰写 / 素材 / 质检 / 保存），仅展示 */
+  task?: TaskEvent | null
+  /** 本轮开始时间戳，供工作气泡显示已耗时 */
+  turnStartedAt?: number | null
+  /** P2：参考图（data URL），随下一条消息发给模型；消费后由上层清空 */
+  images?: string[]
+  onAttachImages?: (urls: string[]) => void
+  onRemoveImage?: (idx: number) => void
+  apiRef?: React.Ref<ChatPaneApi>
+}
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result || ''))
+    r.onerror = () => reject(new Error('读取图片失败'))
+    r.readAsDataURL(file)
+  })
 }
 
 const QUICK_PROMPTS = [
@@ -24,9 +48,69 @@ const QUICK_PROMPTS = [
   '公众号推文怎么起标题？',
 ]
 
-export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledgeNote }: Props) {
+export default function ChatPane({
+  msgs,
+  busy,
+  onSend,
+  onStop,
+  status,
+  task = null,
+  turnStartedAt = null,
+  images = [],
+  onAttachImages,
+  onRemoveImage,
+  apiRef,
+}: Props) {
   const [input, setInput] = useState('')
   const [openSrc, setOpenSrc] = useState<ReadonlySet<number>>(new Set())
+  const [imgErr, setImgErr] = useState('')
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const fileRef = useRef<HTMLInputElement | null>(null)
+
+  // 参考图仅作"本轮附带的图像"，读成 data URL 后交给上层，不落库、不写进会话
+  const pickFiles = async (files: FileList | null) => {
+    if (!files || !files.length || !onAttachImages) return
+    setImgErr('')
+    const urls: string[] = []
+    for (const f of Array.from(files).slice(0, 4)) {
+      if (!/^image\//.test(f.type)) {
+        setImgErr('只支持图片文件')
+        continue
+      }
+      if (f.size > 8 * 1024 * 1024) {
+        setImgErr('单张图片需小于 8MB')
+        continue
+      }
+      try {
+        urls.push(await readAsDataUrl(f))
+      } catch {
+        setImgErr('读取图片失败')
+      }
+    }
+    if (urls.length) onAttachImages(urls)
+    if (fileRef.current) fileRef.current.value = ''
+  }
+
+  // 只做"把文本追加进草稿并聚焦"，不触发发送、不参与任何流程判断（项目铁律 6）。
+  useImperativeHandle(
+    apiRef,
+    () => ({
+      insertRef: (text: string) => {
+        setInput((prev) => {
+          const sep = !prev || /\s$/.test(prev) ? '' : ' '
+          return prev + sep + text
+        })
+        window.setTimeout(() => {
+          const el = inputRef.current
+          if (el) {
+            el.focus()
+            el.setSelectionRange(el.value.length, el.value.length)
+          }
+        }, 0)
+      },
+    }),
+    [],
+  )
 
   const toggleSrc = (id: number) => {
     setOpenSrc((prev) => {
@@ -44,15 +128,6 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
     onSend(t)
   }
 
-  // busy 两档（第 23 轮，仅展示态非对话状态机）：正在思考/澄清中 vs 正在生成 HTML。
-  // 以"当前在途助手消息是否已打开 ``` 围栏"为界——澄清/思考只有文字无围栏 → think；进入正文产出（围栏出现）→ gen。
-  const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant')
-  const busyPhase: 'think' | 'gen' | null = busy
-    ? lastAssistant && lastAssistant.content.includes('```')
-      ? 'gen'
-      : 'think'
-    : null
-
   return (
     <div className="chat-pane">
       <div className="chat-head">
@@ -64,7 +139,6 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
       <div className="chat-body">
         {msgs.length === 0 && (
           <div className="chat-empty">
-            <p>像用通用助手一样正常对话：闲聊、写作答疑都行；说「写一篇…推文」就为你创作。创作前 AI 会先和你把需求聊清楚，理解到位才动笔。</p>
             <div className="chips">
               {QUICK_PROMPTS.map((p) => (
                 <button key={p} className="chip" disabled={busy} onClick={() => onSend(p)}>
@@ -93,13 +167,15 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
           // assistant：只展示围栏外说明文字；正文（v2）或直通 HTML 收进可展开查看器
           const { prose, code, v2 } = splitAssistant(m.content)
           const src = code !== null ? code : v2
+          // 本轮首个 token 还没到：不渲染空的助手气泡，状态交给下方工作气泡承担
+          // （回合结束后这条消息必有内容，DOM 与改造前一致）
+          if (busy && !m.content) return null
           const showPlaceholder = !prose && !busy && src !== null
-          const streamingEmpty = busy && !prose && !m.content
           return (
             <div key={m.id} className="msg msg-assistant">
               <div className="assistant-box">
                 <pre className="msg-assistant-text">
-                  {prose || (showPlaceholder ? '已生成推文，见右侧预览。' : streamingEmpty ? '…' : '')}
+                  {prose || (showPlaceholder ? '已生成推文，见右侧预览。' : '')}
                 </pre>
                 {src !== null && (
                   <div className="src-area">
@@ -113,12 +189,37 @@ export default function ChatPane({ msgs, busy, onSend, onStop, status, knowledge
             </div>
           )
         })}
-        {busyPhase && <div className={`typing ${busyPhase}`}>{busyPhase === 'gen' ? '正在生成…' : '正在思考…'}</div>}
-        {knowledgeNote && <div className="knowledge-note">知识命中: {knowledgeNote}</div>}
+        {/* 「AI 工作中」气泡：阶段标签 + 真实细节 + 本轮已耗时（纯展示，非对话状态机） */}
+        {busy && <WorkingBubble phase={task?.phase ?? 'think'} detail={task?.text ?? ''} startedAt={turnStartedAt} />}
       </div>
 
+      {images.length > 0 && (
+        <div className="attach-strip">
+          {images.map((u, i) => (
+            <span key={i} className="attach-chip" data-idx={i}>
+              <img src={u} alt={`参考图 ${i + 1}`} />
+              <button className="attach-del" title="移除这张参考图" onClick={() => onRemoveImage?.(i)}>
+                移除
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {imgErr && <div className="attach-err">{imgErr}</div>}
       <div className="chat-input-row">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="attach-input"
+          onChange={(e) => void pickFiles(e.target.files)}
+        />
+        <button className="mini attach-btn" disabled={busy} title="附加参考图（随下一条消息发给模型）" onClick={() => fileRef.current?.click()}>
+          图片
+        </button>
         <textarea
+          ref={inputRef}
           value={input}
           rows={2}
           placeholder="和 AI 正常对话，或说「写一篇 XX 推文」直接生成…（Enter 发送，Shift+Enter 换行）"

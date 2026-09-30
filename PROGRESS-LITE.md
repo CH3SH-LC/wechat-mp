@@ -1,63 +1,82 @@
-# 公众号推文助手桌面版 开发进度（精简版）
+# 最近进度
 
-> 标签：[New Feature] 新功能 / [Debug] 修复 / [Change] 变更 / [Build] 构建
-> 详细记录见 PROGRESS.md
+详细原因与验证见 [PROGRESS.md](PROGRESS.md)；当前待办见 [REQUIREMENTS.md](REQUIREMENTS.md)。每条只写一句话，阶段结束后合并里程碑。
 
 ---
-## 2026-09-09
-- [Build] GitHub Release v0.1.0 发布（main，标题「智序 0.1.0」）——资产 zhixu-0.1.0-x64-setup.exe 4.2MB；踩坑：GitHub 资产名不支持中文（服务端剥除 CJK），README/RELEASE-NOTES 注明本地中文产物名与 ASCII 资产名关系
-- [Build] 发布推送完成：CH3SH-LC/wechat-mp 默认分支切 main（桌面版 21f6c47，含 0.1.0 发布说明），旧 DSH 预设原样存 dsh 分支（c4d9694）后删 master；RELEASE-NOTES.md 更新 0.1.0
-- [New Feature] 发布轮（29-34 轮 + V3-R1~R3 累积变更统一提交 + 发布物料）：「智序」品牌化（productName 智序/窗口与顶栏/persona 自述/mock 问候/README/手册）+ 使用手册入安装包（manual.rs open_manual + tauri bundle.resources + 顶栏按钮，CDP 实机点击→默认浏览器打开「智序 · 使用手册」验证通过）+ key 泄露全量扫描零命中 + NSIS 智序_0.1.0_x64-setup.exe 4.2MB（使用手册.html 随包确认，安装闭环+启动冒烟）+ E2E S1-S14 全绿×2 + cargo 57+4 零警告
-- [Change] GitHub 远端结构决策（用户拍板）：CH3SH-LC/wechat-mp 被旧 DSH 预设占用 → 预设内容迁远端 dsh 分支保留、桌面版推 main 并切换默认分支；README 关联项目段同步改写
-- [New Feature] V3-R3 推文素材复用改造——素材库直通创作：引擎协议§三改"素材智能体制作入库、你检索复用"(新增 [[asset:分类|名称|用途]] 库引用语法、风格仅软参考、绝不手写 SVG)、persona 配图条款、image-agent 升级素材解析器([[asset]] 按 id/名查库内联计 used+residual、传统占位先语义检索库强命中才转引用、未命中才委托 gen_svg、桌面现场补做自动入库 origin=article-fallback)、App 终稿固化快照(assetSnapshots {svg,ver} 随文档保存)+"库素材引用缺失"可修复警告、revise 增 key、chat.rs PREP_TOOLS 增 search_assets + gen_svg 增 divider/heading kind、prep 本地执行 search_assets 进 digest、mock 增素材库复用样本、工坊替换源影响扫描+逐篇"用新版更新"重渲染文档(快照 ver 跟进)、E2E S14、live-conformance 场景 C(真实模型引用 [[asset:bubble|…]] 复用不手写 SVG)；验证 E2E S1-S14 VERIFY OK、live A/B/C CONFORM OK、cargo 54、compose OK、release exe15.3+setup4.4 冒烟 OK
-- [New Feature] V3-R2 个人素材库+素材工坊——assets.rs(workspace/assets/items/<id>/ meta+svg，CRUD+替换源 version+1+影响扫描 5 单测；不建 index.json 单目录扫描即索引)、asset-library.ts 双通道(浏览器 wxmp-assets-v1；八类 bubble/divider/deco/banner/heading/art-inline/art-wide/photo-frame；bigram 语义检索风格软参考)、asset-agent.ts(分类→gen_svg kind 增 divider/heading；校验入库存 origin=workshop)、AssetWorkshop 顶栏工坊(选分类→描述→制作入库→元数据编辑→检索→替换源→删除)、App 顶栏素材工坊页签；E2E S13 全绿；cargo 54
-- [New Feature] V3-R1 文档化地基——终稿默认自动保存为文档(真源 source.md+article.html 快照、就地刷新不留两版、id=会话 id)+顶栏「文档库」工作区(列表/打开回源会话/删除连带会话防幽灵文档)+applySession 打开优先读文档快照不重跑素材生成；documents.rs(+6 单测)/documents.ts(浏览器 wxmp-docs-v1)/DocsPane.tsx/App 页签与 turn 尾段 persistDoc/清空与删除会话联动删文档；E2E S12 全绿（首跑标题断言失败→persistDoc 改按首条用户消息派生标题修复）；cargo 49/compose/E2E S1-S12 VERIFY OK；release exe15.1+setup4.4 冒烟 OK
-- [New Feature] 第 34 轮：发布改"HTML→图片导出用户手动上传"、停用微信草稿箱 API（用户指令驱动）——先确诊草稿发布失败=40164 本机公网 IP 202.120.8.43 不在公众号 IP 白名单（账号侧，代码无法自愈），用户拍板换离线方案；口径=长图+分页都给(375 版式/2x 750)。新增 htmlToImage.ts(foreignObject 2x 光栅化长图+按屏分页 PNG)、exportImages.ts、Rust export_images 命令(写 exports/img-*/并开目录)；PreviewPane「导出图片」替换发布按钮(HTML 导出改名)、App 删 publishDraft、SettingsPanel 删公众号配置；E2E 增 S11；验证：原型像素采样确认真实渲染、cargo 43、compose-check、E2E S1-S11 全绿(S11 长图1+分页3 PNG>20KB)、release 重建 exe15.0+setup4.3(00:20)冒烟 OK
-- [Change] V3 设计稿按用户答复定稿（无代码）——用户直接改文档第十三节拍板 D1-D7：顶栏切换工作区/各工作区激活主文档智能体或对应分类素材智能体(D1)；文稿对话分离+文档默认自动保存除非主动删除(D2)；素材库单机单用户(D3)；首版 8 类 bg/icon 后置(D4)；素材引用固化副本(meta.assetSnapshots)+改素材时扫描引用它的老文档由用户逐篇选是否更新(D5)；默认保存+会话内更新就地刷新不保留两版(D6)；缺料委托自动+提示且严格由主智能体调用素材智能体 request_asset 绝不自己画(D7)；设计文档第五/六/七/八/九节落地+第十三节改"已确认决策记录"，REQUIREMENTS 同步
-- [Change] V3 大版本登记 + 设计文档（仅文档无代码）——用户发起大版本：HTML 关闭即失要可保存重开且智能体可改本地文件；素材单次现场生成无法复用要把素材生成与推文生成分开、独立素材智能体入口+可检索个人素材库。四项口径拍板：源即正文(html 是产物)/先搜库缺了委托素材智能体现场做并入库/一个素材工坊+库内分类/素材条目语义化标注+风格仅软参考。产出 docs/information/2026-09-09-v3-docs-assets-design.md + REQUIREMENTS 登记（V3-R1 文档化地基/R2 素材库+工坊/R3 推文复用改造分期建议）
-## 2026-09-08
-- [Change] 第 33 轮：小组件按知识库来——注入"小标题/气泡优秀写法要点"（用户口径=注入写法先做）：真实会话 msg46 对照 KB module-heading/copy-subheading/module-bubble 定位"小标题全是普通 ##、气泡仅 1 处"；engine-write-protocol §四 新增 5.小标题(每300-500字一个/路标式起法/禁手写序号因宣传类引擎自动编号徽章/同篇≤2气质) + 6.重点气泡(全文3-5个/一泡一意/首行标题句/语义全篇一致/角饰先[[deco]]再>[!语义|名]/禁引用冒充)；live-conformance A/B 增气泡带标题句断言；验证：真实模型抹茶场景 3 路标式小标题+3 带标题句气泡(0 手工编号)；live CONFORM OK(A bubble=3 / B bubble=1)；release 重建(23:51)+冒烟 OK
-- [New Feature] 第 32 轮：自动质检自检（"能检测到组件不足就是不做"，口径确认=检出即自动重写到合格）+ 修叠稿——真实会话 21:20 定位：修订回合助手同一消息叠两篇 v2、预览只取首篇→差稿(组件化不足)进预览好稿被吞、warning 从不驱动修正。改 extract v2=末围栏 + collapseAssistantDraft 归一叠稿、新增 revise.ts(fixableWarnings 五类可修项/buildReviseContent/REVISE_MARKER/上限2)、App turn 尾段改有界自检回路(检出可修项→喂回模型重写同一气泡,纯产物门禁无对话状态机)、chat mock 自检触发/修订返回、verify-ui 新增 S10；验证:tsc/build/cargo 42/compose-check/E2E S1-S10 全绿(修复 note 闭包旧值回归)、extract/revise 单测过、真实模型 LIVE-REVISE OK(单围栏+组件化不足消除容器3)、release 重建(exe14.9+setup4.3)冒烟 OK
-- [Debug] 第 31 轮：修复"依旧无法生成美术资产"（真实会话审计 + 口径确认驱动）——根因：28 轮口径 A 一刀切"给真实照片→只留 ::: photo 不写 [[img]]"，凡要照片的推文只剩空照片框零装饰插画；且 live-conformance 场景 A / compose photoUsed 只查"占位合规"从不查"有没有插画"，3 次复发未被拦。用户口径确认"照片位+装饰插画都要"。改 engine-write-protocol §二/§三.3 为并存口径（照片=信息画面留位、插画=版面装饰照配，照片多时插画 2-5 处）、persona 澄清配图来源措辞、compose 纯照片位软提示缺装饰插画、live-conformance 场景 A 断言 photo≥1 且 [[img]]/[[deco]]≥1、compose-check 增并存断言；验证：tsc/build/cargo 42/E2E/compose-check 全绿；live-conformance CONFORM OK（A 场景产出 photo=6+[[img]]=4+[[deco]]=1 并存 / B 无照片零照片位）；release 重建（停用户运行实例后 exe 14.9MB+setup 4.3MB）启动冒烟 OK
-- [Debug] 第 30 轮：修复"又生成不了美术素材"（真实持久化会话审计驱动）——四根因：①SSE 每 chunk 独立 from_utf8_lossy 劈开中文→U+FFFD 乱码（重构字节缓冲按完整行解码 + 2 单测）；②prep 空回复（v4-flash 推理吃光 1200 预算）把兜底话术当正式回复泄漏（msg24/28）→ 空回复重试 + prep max_tokens 3200；③引擎协议只在 prep.ready 附加，创作会话延续句（needPrep=false）上下文无协议→模型写【照片位N】纯文本而非 ::: photo（新增 creativeSession 强制注入协议）；④gen_svg 瞬态空结果加原样重试。验证：tsc/build/cargo 42/compose/E2E 全绿；live-conformance CONFORM OK（A/B）；真实链路复刻 REGRESSION OK（C 澄清链无兜底泄漏收敛 ready / D 延续句注入协议产出 7 ::: photo 0 乱码渲染虚线占位）；release 重建补记
-## 2026-09-07
-- [Change] 规则：用户明确"每次更新都要更新桌面版 release"——CLAUDE.md 新增铁律 7 + REQUIREMENTS 〇节 2（永久禁令）：代码变更验证后必 tauri build 重建 release + 冒烟（29 轮曾漏建，已补）
-- [Build] 第 29 轮后全功能 release 重建——pnpm tauri build --bundles nsis（2026-09-08 00:15）：release exe 14.9MB + setup 4.3MB（含第 29 轮全部改动）；release exe 启动冒烟存活后关闭 OK
-- [Change] 第 29 轮：注入内容审阅改造（docs/ai-context 审阅驱动）——persona 精简至 ~30% 通用助手化、工艺细则迁新知识点 排版引擎/engine-write-protocol（注册表置顶 + App digest 兜底）；prep 必取引擎协议 + 澄清理解型可跨轮 + WRITE 允许正文前说明（2.1/2.2）；SVG 提示复杂度契约（分层/明暗/材质/细节密度）+ gen_svg CLARIFY 有界回问（新增 refine_brief 命令）；ChatPane 删用户可见 mock、verify-ui 改 sendPrompt 文本驱动；live-conformance 注入引擎协议 + 修历史累积 bug；tsc/build/compose/cargo 40/E2E 全绿；真实模型 CONFORM OK（A 校园 7 照片位 / B 插画 0 照片位，0 泄漏）
-- [New Feature] 第 28 轮：真实产物合格性修复 + 验收闸门（实机审计驱动）——风格名归一（校园风→校园）；::: photo 照片位（口径 A，预览虚线占位、抑制无素材误报）+ persona 配图来源分支；prep 3 轮不收敛降级直接撰写（不再把兜底话术当回复）；新增 scripts/live-conformance.mjs 真实模型合规闸门——A 照片位/B 插画双场景全绿；build/compose/E2E/cargo 38 全绿
-## 2026-09-06
-- [Build] 第 27 轮后全功能 release 重建——pnpm tauri build --bundles nsis：release exe 14.2MB + setup 4.1MB（2026-09-06 23:46）；启动冒烟存活后关闭 OK；含到第 27 轮全部功能
-- [Change] 第 27 轮：全项目结构重构（零行为变化）——删旧 retrieve/三层任务路由死代码与休眠 chat-error 监听、清理遗留模式/风格 CSS、修复 SSE EOF 无尾换行残留不解析（O-8，补 sse_tail_delta 单测）；cargo 38 + build/compose/E2E/app 编译全绿
-- [Change] 第 23-25 轮真实模型 live 闭环（联网）：模糊→多维度澄清（不产出）；明确→模型自选 load 4 点文件→digest 流式成稿 3422 字 v2（无 400）；gen_svg 改专用 deepseek-chat（v4-flash 画图推理失控），11s 直出 53 元素具体 SVG；cargo 36/36 + live 4/4 + build/compose/E2E 全绿
-- [New Feature] 第 26 轮：微信草稿箱发布——publish.rs（token 缓存/素材上传替换 data 图/draft.add）+ 公众号配置区块 + 桌面发布按钮；cargo 37 过（含本地假微信服务器端到端契约单测）+ build/compose/E2E/app 编译全绿；真实微信接口 LIVE-PENDING（封面/字段待测试号核对）
-- [New Feature] 第 25 轮：知识注册表 + 工具按需取用——system 只注入 ≤3500 字注册表目录；Rust prep_turn（tools/tool_calls）让模型创作前置自选读哪些点，取完 READY 再带工具结果流式成稿；cargo 26 过 + build/compose/E2E 全绿；live 待联网
-- [Change] 第 24 轮：素材改图像子智能体——主模型只写图位占位（[[img:…]]/[[deco:…]]），Rust gen_svg 非流式按描述画具体插画，前端 materialize 替换 ::: art 块再 compose+PNG；浏览器 mock 样例池近似；cargo 26 过 + E2E 全绿（占位全替换断言）；live 待联网
-- [Change] 第 23 轮：界面删模式/风格控件、类型风格交 LLM 自决；创作前需求全澄清（v5）；风格不限预置（[[palette]] 自定义色板渲染，未收录名回退警告）；busy 分"思考·生成"两档；统一 1500-2500 字口径；build/compose/E2E 全绿（新增 palette/未知风格/S1.9）；live 待联网
-- [Change] 撰写按理解还原的需求文件 docs/REQUIREMENTS-understanding.md——通读四文件+源码三层（前端/Rust/管线）后重建现状需求规格（定位/架构/FR/NFR/领域模型 + 10 条代码观察待议）；非轮次登记册
-- [Change] 依用户 8 项意见把需求文档修订为目标态（v2，仅改文档不动代码）：发布直达公众号草稿箱▲ / 创作前需求全澄清▲ / 删模式·风格控件改 LLM 自决 / 风格不限于预置▲ / busy 分"思考·生成"两档▲ / 知识改"注册表+工具按需调用"▲ / 素材改图像子智能体产出▲；落点见附录 A 对照表
-## 2026-09-05
-- [Change] 第 22 轮：整理散落验证产物归档——docs/artifacts 收纳 E2E 截图/compose/注入/风格样例 19 个（工作区 verify-artifacts 迁入，其余项目产物保留原位）；verify-ui/compose-check 默认输出改项目内；STRUCTURE/REQUIREMENTS 同步
-- [Change] 第 21 轮：素材具体插画化 + 正文加长 + 气泡角饰——素材铁律 v4（具体可辨认插画/明暗层次/禁几何剪影）、正文默认 1500-2500 字、气泡 KEY/TIP/DANGER 必带 ::: art deco 角饰；compose 支持 deco 定义/引用/未定义与偏短警告；chat.rs max_tokens 64000；compose-check 41 项 + E2E 41 项全绿；live 1518 字 + 双气泡角饰 + 7 处具体插画（元素 16-41）0 警告
-- [Change] 第 20 轮：风格选型教程注入 + 反模板化（"只有风格参考没有风格选择教程，全国潮模板"）——auto 创作注入风格速查（00-索引：内容类型→首选/备选），persona 规则 v3（先选型再声明、风格=皮肤禁模板复刻）；E2E 40 项全绿（S8 风格速查命中）；真实三场景 auto：咖啡→日系/科技→科技/节日国货→国潮，差异化非复刻
-- [Change] 第 19 轮：三层数据库按任务路由注入（"我需要的就是最终的三层数据库"）——retrieval 升级：类型→type/copy-tpl、风格→style 全文、营销→合规红线，路由文件 8000 字、主题词优先；persona 注入即权威 + auto 强制声明 theme；E2E 39 项全绿（S8 路由命中断言）；真实注入对比：4 点文件 23.6KB 注入 → 促销模板+国潮库色素材（5 处 0 警告）
-- [Change] 第 18 轮：撤销前端对话状态机（用户永久禁令"绝对禁止"）——删 App askRef/CLARIFY_SYSTEM 澄清回合与 needs 前端导入，send 直通模型自主；禁令写入 CLAUDE.md 铁律第 6 条 + REQUIREMENTS「〇、永久禁令」；E2E 全绿；第 17 轮文案/组件化/风格三项保留
-- [Change] 第 17 轮：四项质量修复（文案克制/组件必用/强制询问/风格落地）——palettes.ts 8 风格主题表（知识库色板）+ compose theme（UI 优先/正文 [[theme]] 声明/底色）+ persona 语气与结构规则 + App 强制澄清回合状态机（缺 ≥2 先问再写）+ 组件化引擎校验；E2E 37 项全绿（S1.8 主题色）；真实模型 live 国潮主题渲染落地、文案克制；Rust 零改动
-- [Change] 第 16 轮：素材用量升级——组件装饰全覆盖（用户："量太少，每个组件都必须使用美术素材"；1 问确认口径）——persona 铁律 v2（每篇 5-8 处、banner/小节/气泡/分隔/容器装饰位全覆盖、单屏 ≤1）；compose 引擎 0/<4 处用量警告；mock ×5 素材；chat.rs max_tokens 32000（推理吃光 16k 实测）；E2E 33 项全绿（S1.8 five art assets）；真实模型 live 6 处素材全达标 0 警告
-- [New Feature] 第 15 轮：现场生成美术素材（回应"为什么没素材了"）——::: art 容器：模型按知识库现场绘制 SVG，引擎校验元素 ≥6 与 viewBox，canvas 渲染 PNG data URI 内嵌预览/导出；persona 强制每篇 ≥1 素材；E2E 32 项全绿（S1.8 素材渲染 data 图）；真实模型 live 咖啡题材 SVG 15 元素 0 警告
-- [New Feature] 第 14 轮：移植 DSH 完整创作工艺（方案 B，用户选）——compose.ts 转写 wechat-mp 转换器（v2 语法→微信合法 HTML，DESIGNS 双色系/间距 v5/平面化 v10/art 移除警告）；persona 改输出 ```v2 围栏正文；```v2→compose→预览+质量检查，```html 直通保留；会话恢复重放；修复 reasoning max 无 max_tokens 推理吃光预算（补 16000）；E2E 31 项全绿（新 S1.8 compose 渲染断言）；真实模型 live 产出 900 字 v2 正文渲染 0 警告
-- [Change] 第 13 轮：与 DSH 全面对齐（差异检查驱动）——Rust 默认模型 deepseek-chat→deepseek-v4-flash + 请求体 reasoning_effort max（实测兼容）；删除 App 本地创作/对话路由与 expectRef，persona 统一为对话+创作一体、模型自主判断（闲聊/答疑/反问/取消）；needs 降级仅供模拟端近似；E2E 28 项全绿 S9a-d 语义保持；live 冒烟 + 整篇抽样（v4-flash 16.7s 6919 字 0 issues）
-- [Change] 第 12 轮：通用对话模式（用户否决固定澄清卡）——删除 ClarifyCard 与挂卡分流；请求路由为「创作/对话」两类：明确写推文才进入创作（信息不足由 AI 在对话里自然反问、回答后直接产出；"算了"取消），闲聊/答疑走通用对话人设正常聊天；需求默认注改为模型正文前一句话说明；模拟端三类回复；E2E 28 项全绿含 S9a 反问成文/S9b 直接写/S9c 闲聊/S9d 反问后取消；Rust 零改动
-## 2026-09-04
-- [New Feature] 第 11 轮：结构化需求澄清卡（req-clarify 落地）——五维度需求评估（类型/风格/字数/调性/配图），缺≥2 弹卡选项补齐、确认后生成；直接写/演示话题跳过但附需求默认注；修会话恢复 React key 冲突（idSeq 提升）；E2E 21 项全绿含 S9a/S9b；Rust 零改动
-- [Change] 第 10 轮：常驻会话栏 + 对话流净化（需求报告驱动）——SessionRail 左侧栏（顶栏按钮=折叠开关，SessionMenu 退役）；气泡只显说明文字（splitAssistant），HTML 收进「查看 HTML 源码」展开（默认收起）；E2E 全绿含新 S1.7 三项断言 + S8 侧栏 1→2→1；Rust 零改动
-- [New Feature] 第 9 轮：多会话上下文窗口（像 DSH）——sessions.rs（sessions/<id>.json + state.json，旧 draft.json 自动迁移不丢稿）+ 会话菜单（新建/切换/删除/当前高亮）+ App currentId 状态机（自动保存绑定当前会话）；修 StrictMode 双跑引导；Rust 17/17；E2E 全绿含 S8 1→2→1；release 重建
-- [Build] 第 8 轮：全功能 release 重建（含 1-7 轮功能，32s）+ 安装闭环复验（装/启/卸 exit 0）；清理 dead_code；cargo 16/16 无警告——最终交付产物 setup.exe
-- [New Feature] 第 7 轮：应用内 API 设置——顶栏设置面板（Key 掩码/端点/模型，settings.json/localStorage），密钥解析 env>设置>~/.dsh 兼容回退（pick_key 纯函数）；Rust 16/16；E2E 七场景全绿含 S7 保存→刷新持久→恢复默认
-- [Build] 第 6 轮：安装器真实验证——setup 静默安装 exit 0 → 安装版启动存活 → 卸载 exit 0 目录清理，发布闭环完成
-- [Build] 第 5 轮：发布打包——tauri build --bundles nsis 成功（release exe 12.2MB + setup 3.7MB），release exe 启动冒烟通过；RELEASE-NOTES.md 发布说明；清理 dead_code；回归 13/13
-- [New Feature] 第 4 轮：会话自动存档/恢复（draft.rs→文档/wechat-mp-workspace/draft.json 损坏容错，浏览器 localStorage；防抖自动保存+流结束即存+顶栏已自动保存；E2E S1.6 刷新恢复/清空清存储通过）+ 导出目录统一 workspace/exports + live_article_sample 真实整篇抽样（3753 字 0 issues）；Rust 13/13
-- [New Feature] 第 3 轮：导出 HTML（Rust export.rs 写 文档/wechat-mp-exports/ 文件名消毒，10/10 单测；浏览器 <a download>；E2E S1.5 下载 2254B 通过）+ 知识库懒加载减包（主包 2388kB→236kB gzip 75kB，149 懒加载 chunk）；E2E 三场景全绿，窗口自动重启含新命令
-- [New Feature] 第 2 轮：生成体验产品化——模式/风格选择注入提示词并参与检索 + 输出质量检查护栏（quality.ts：零 emoji/零渐变/零阴影/无 style-script-外链图检查）；预览栏质量条 q-ok/q-fail；E2E 双向全绿（S1 通过 / S2 违规样本检出 4 项问题），截图 wxmp-desktop-ok.png/-fail.png
-## 2026-08-29
-- [New Feature] 第 1 轮：桌面双栏骨架 + 极简智能体链路——Tauri2+React19 脚手架（1380x880「公众号推文助手」）、src/lib（persona/知识检索/双通道 chat/HTML 提取）、ChatPane+PreviewPane(375px 手机壳 iframe)、Rust chat.rs（env/.dsh 密钥解析+SSE 流式+chat-delta 事件，6 单测+live 冒烟 OK）、知识语料 src/knowledge 三层 149 文件、verify-ui.mjs E2E 4/4 PASS（截图 verify-artifacts/wxmp-desktop-ui.png）；tauri dev 窗口启动确认
-- [Build] 第 0 轮：项目初始化——create-tauri-app react-ts、四文件体系+REQUIREMENTS+README+.gitignore、pnpm11 esbuild 许可、git init；踩坑：pnpm 只读 pnpm-workspace.yaml、playwright/chromium 版本不匹配用 executablePath、验证条件误用按钮禁用态
+## 2026-09-30
+
+- [Fix] 入库前验证抓出真缺陷：`prep-contract-check.mjs` 的依赖探测早于 `outDir` 初始化，解析不到 playwright 时撞 TDZ 抛错、退出码 1 且不落判定文件（静默失败）——探测后移，`runner-negative-check` 由 FAILED(3) 转 18 条全绿。
+- [Chore] 2026-09-24 起六轮改动首次入库并推送 GitHub：289 文件 / 3.21 MB；`.gitignore` 改为排除 `docs/artifacts/**` 的 `*.png`/`*.json`/`*.jsonl`（用户口径：只提交代码与文档），6 个 `scripts/fixtures` 测试夹具按例外保留；`tsc` 干净、11 个离线断言脚本全绿、`cargo test --lib` 133 项。
+- [Review] 独立复测确认原接线等修复有效，但新增三个事实漏拦、准备授权/素材快照、预览及测试判定缺口，第一轮整体关闭结论撤回，见 [复测证据](docs/artifacts/2026-09-30-ds-audit/README.md)。
+- [Docs] 新增 [第二轮 DS 修改指南](docs/design/ds-repair-guide-2026-09-30.md) 与 39 份冻结证据副本，列明 A–F 修复、确定性回归、版本及真实交付验收；本轮未改产品代码。
+- [Decision] 用户已明确允许该任务内少量真实模型测试，DS 修复后直接按指南执行四回合及无额外调用的重开/导出，不再等待相同授权；当前尚未执行。
+
+## 2026-09-29
+
+- [Debug] **事实保护接线**（F1，P0）：`App.tsx` 的 `baselineHtml` 只在候选零阻断时建立、而零阻断那版立刻退出循环，导致修复轮基准恒为 null、两轮都传 `body=null`——改为**本回合首个候选的正文投影冻结为基准**，退化比较前移到 `best` 更新与提前退出之前，`accepted` 只可能是完整通过门禁的那一版。
+- [Debug] 事实匹配重写：`FactToken` 加 `canon` 规范化值（时刻/日期/电话/数量），按 `kind|canon` 集合比对取代裸字符串包含（`8:30→18:30` 不再漏检、姓名句式调整不再误判），重叠消解优先级、姓名从右往左取；`bodyIntegrity.ok` 只由**事实缺失**决定（片段丢失仍为提示），修掉"清单无阻断项、gate 却 false"的自相矛盾；新增 `bodyText()` 正文投影（剔 SVG/坐标/行内代码/拒收占位）。
+- [Debug] `deliveryVerdict` 新增 `BodyApplicability` 三态（applied / not-applicable / failed），不再用 `null` 兼表"不适用/没查/查不了"；`failed` 补一条阻断 `body.unverified`。
+- [Change] **准备结果契约**（F2/F3）：新增终结工具 `finish_preparation{outcome: reply|compose|candidate, source?, assetPolicy?}`，`runPrep` 改返回判别联合；旧协议（只回 READY / 只给完整围栏正文）先做一次协议纠偏（占用同一总额预算 3 次），纠偏后仍无结构化结果且**已具备创作操作契约**时才做受测兼容转换并打标；普通答疑里出现 READY 或 v2 示例一律 reply、不提交；预算耗尽与网络/鉴权失败**明确失败**，不再降级成"直接撰写"。
+- [Change] **统一交付入口**：主撰写流、prep 直接候选、自动修复走同一段候选代码与同一门禁；调用模型**之前**读取当前正式文稿并把 revisionId + canonical source + 素材稳定引用标给模型；`PREP_EVERY_TURN` 改 true（准备阶段为唯一模型入口，纯对话以 reply 结束、不追加撰写请求）。
+- [Change] 素材身份退化拦截（F4）：`materializePlaceholders` 新增 `assetPolicy`，`preserve` 时按文档绑定**确定性恢复**同一 assetId/快照并记 `recover`，恢复不了明确失败——不偷偷重画一张；缺省值按"文档已有绑定→preserve"。
+- [Change] 预览外链抑制（F5）：新增纯函数 `src/lib/preview-safe.ts`，`PreviewPane.wrapSrcDoc` 在显示边界把外链 `src/href/srcset/CSS url()` 换成内联占位；门禁/草稿/导出仍用原始 HTML，违规证据完整保留。
+- [Verify] `cargo test --lib` **132 项**（新增终结工具声明断言）；离线九脚本全绿共 **602 条断言**（`delivery-quality-check` 123 / `repair-integrity-check` 58 / `asset-completion-check` 52 等）；`verify-ui` **133 PASS / 0 FAIL**（S1–S25，两次稳定）；新增 `repair-flow-check`（真实 App：丢事实组不得 accepted、保留组必须 accepted、trace 必须有 `bodyApplicability=applied`）、`prep-contract-check`（F2/F3 原文 + 不提交 + 预算封顶无第 4 次请求）、`preview-resource-check`（外链尝试 0 且原始诊断仍在）全绿。
+- [Debug] **对抗式审计（只读）抓到并修掉一个 P0、一个 P1、八个 P2**：P0 是事实抽取产**假事实**（`感谢老师们的辛勤付出` → `name:感谢老师`、`地点在图书馆三楼报告厅` → `place:地点在图书馆`），一次正常改写被判"姓名丢失"→ 阻断整条修复链；另一个 P0 是 v2 正文里的 ```` ``` ```` 代码块让围栏扫描**静默截断**后半篇、截断稿照样标成已验收（同一字节序列无法确定边界，故不猜测性修复，改为如实标记 `v2Ambiguous` 并阻断，模型显式声明的 `source` 不经围栏反推）。P1 是素材工坊「用新版素材重渲染」**绕过门禁写文档库**且提示条与实际情况不符。另修：单项重试的必需素材位未按本候选正文过滤、取消检查排在接受之后（停止后仍可能显示"已验收并保存"）、准备失败留下空气泡、普通答复里的 v2 示例顶掉成品预览、`preview-safe` 单引号占位截断、`stagesChecked` 声明没查过的阶段、草稿落盘 trace 不查返回值、重试被取消仍落草稿。同时清掉自己脚本里的恒真/弱断言并补 60 余条可证伪回归（变异确认会变红）。
+- [Build] release 重建（16:32）+ 隔离 USERPROFILE/WebView2 启动冒烟通过（窗口标题「智序 · 公众号推文助手」，真实工作区 15 会话/3 文档/11 素材/3 trace 计数不变），冒烟进程按 PID 关闭、临时目录已删。
+- [Verify][未完成] **真实模型回合未跑**（首篇/续改/重开/导出需付费授权），F2/F3 只在受控 stub 下证明契约与执行，不能写成"已验收"；微信端观感、后台上传、断电恢复、多实例并发、图像理解均未覆盖。
+
+- [Research][Docs] 按本轮独立验证形成 [DS 完整修复指南](docs/design/ds-repair-guide-2026-09-29.md) 及失败夹具，明确事实保护、prep 完整稿交付、素材保持和预览/验收修复。（**本条为当时的时点记录**：指南后续已实施，见上方各条与 README 状态行。）
+
+- [Change] 批次 C（Rust 侧）：文档存储由"三文件就地覆盖"改为**不可变版本目录 + 提交指针**（`manifest.json` 指针 / `revisions/<rev>` 不可变 / `staging/<txn>` 未提交候选）——写 staging → 读回校验（文件/哈希/绑定/质量记录）→ 目录整体改名安装 → **一次 rename 提交指针**；提交前查 `generation`/`baseRevisionId` 挡住迟到请求，失败时旧指针逐字节不变、不删旧文件；旧三文件迁移为 `revisions/legacy` 且标 `unverified`（无验收记录不得当合格回滚目标），迁移读失败明确报错不覆盖；新增 `list_document_revisions`/`open_document_revision`/`commit_document_revision`（前端待接线）。
+- [Verify] `cargo test --lib` **131 项全绿**（原 120 项无退化，新增 11 项：六个提交中断点/未提交候选不提升/CAS 拒绝/旧指针不变/旧文档迁移/哈希不一致/quality 门禁/草稿与提升/版本一览）；全部用 `std::env::temp_dir()` 隔离，未读写真实工作区、未启动应用、未跑 pnpm；两次变异（就地覆盖、故障点失效）证明断言非恒真。
+
+- [Research][Docs] 新增 [最新稿源码泄漏与质量恢复修改方案](docs/design/quality-recovery-plan-2026-09-29.md)，列明统一门禁、自动修复复检、完整版本回滚及故障注入验收；仅方案，尚未实施。
+
+- [Debug] 全量修复（11 个并行 agent：4 写 + 7 只读审计驱动）：修掉三条系统性倾向——①Rust **读路径/扫描路径**把"读不出来"折叠成"不存在"（影响扫描曾把"某文档读不出"当"没有引用"，用户据此覆盖素材就会改坏它），现在列表带 `unreadable`、扫描带 `scan_warning`、设置损坏带 `load_error`；②前端**持久化链路**把"失败"折叠成"空"（素材库读失败 → 正文里已有的引用被判成"不存在"并触发自动重写），现在 lib 层区分失败与为空、四个界面给失败态+重试、删会话失败不再清空会话栏；③**测试假绿**（恒真断言、断言实现副本、把验收结论硬编码进产物报告），逐条换成可证伪断言并用变异验证。另修素材协议五处不一致（含"未识别协议行原样漏进正文"）、`svgBlock` 区分"没有"与"读不出来"（后者曾导致重画一张库里已有的图）、流式零增量曾被当成功、prep 工具字段缺失曾静默降级、`verify-ui` 每跑一次就覆盖 README 配图且硬编码作者机器路径。
+- [Verify] `cargo test` 120 项、离线六脚本全绿、`verify-ui` S1–S21 全绿（90 PASS，新增 S19/S20/S21）、`raster-check` OK；`verify-ui` 路径缺失时明确报错 exit 2（不静默跳过）。
+
+- [Verify] 两个新契约先写断言（`scripts/verify-ui.mjs`）：S14 用 MutationObserver 提交序列 + rAF 逐帧两路采样，实测"用新版更新"按钮 `data-ref-update` 契约下 `data-busy` 走 1→0 且忙碌期间 `disabled` 同步为真（强断言）；S19 断言"保存成功路径下不渲染 `.save-error/[data-save-error]`"并**先证明这一轮真的落盘**，另加源码结构断言（PreviewPane 契约 + App 侧 setSaveError/传参）——失败分支在浏览器 mock 下结构上走不到（`documents.ts` 的 `lsWrite` 吞掉 setItem 异常、`saveDocument` 仍返回非 null），故为弱断言、不伪造。`scripts/trace-check.mjs` 增 `/models` 失败缓存 60 秒 TTL 与"空连接不计命中"的**结构断言**（含反向对照，真正行为断言在 cargo test）。
+
+- [Debug] 真机三小样验收（驱动真实桌面应用、真实模型，隔离工作区）：①有库复用 0 次绘图 ②仅缺一张新图恰好 1 次绘图 ③只改正文 0 次绘图——三题全过。过程中逼出一个真 bug：非流式输出上限 8000 使绘图**必然**返回空正文（实测 `finish_reason: length`、`completion` 正好用满 8000、`responseLength: 0`，两次重试均 35 秒后失败；改到 32000 后一次成功，实际耗 18574 token 产出 6874 字 SVG）；另修我自己埋点的缺口（空正文把 `finish_reason`/`usage` 丢掉，导致只看到"空返回"分不清原因）。顺带证实：一次成功绘图要 74.5 秒（印证"不重复画"的价值与 240 秒预算合理），失败结果确实没被写成正文。
+- [Change] 输出上限不再靠猜：直接查服务端（`GET /models`）——`deepseek-flash` 上下文窗口 1,048,576、**最大输出 393,216**、推理档位 low/high/max 且默认 high。改为运行时查询并按「端点+模型」缓存，查不到则退回已验证可用的 32000；上限按模型真实值钳制（猜低会静默截断、猜高会被 400 拒而 400 不重试）。推理档位显式钉成 `high`——实测降 `low` 会让**4/4 全部出现元素跑出画布**（`high` 4/4 过闸），只快约 15%。
+- [Verify] `cargo test` 101 项（含上限钳制/兜底/端到端发值断言；并修掉假服务端口复用造成的随机失败）；改动后重跑真机第 ②③ 题：新画横幅一次成功（`stop`、`completion 21238`、8358 字 SVG、83.6 秒），改正文 0 次绘图；证据（原始 JSONL + 截图）随仓库保留在 `docs/artifacts/2026-09-28-repair/`。
+
+## 2026-09-28
+
+- [Change] 素材修复第二批（阶段 4–6）：素材解析改三段式（先决策 → 最多 2 个并发绘制 → 按原行序组装），同描述共享在途任务；新增三层超时（连接 15s / 单次非流式 180s / 单素材位 240s，均可环境变量覆盖，流式不设总超时）；"停止"接后端取消句柄（kill 在途等待、流式事件带 runId 丢弃迟到增量、停止后不再派发与入库，但不承诺服务端停计费）；鉴权/参数错误（4xx）新分类 `auth` 且不重试，限流/5xx 归网络类并按服务端 `Retry-After` 提示在剩余预算内等待重试；自动修订接上既有 `revise` 档。
+- [Change] 素材质检改按**真实显示尺寸**（角饰 60px）栅格化，新增主体实际像素与对比度 P90 两项指标；阈值由样例实测校准（合格通过、浅色消失与"缩成一个点"被拦下，三枚真实库素材全部通过）；库素材不经过复检，既有库存不被批量重画；角饰作画提示收紧（单一主体、粗轮廓、透明边距、明度上限）。
+- [Verify] `cargo test` 95 项（新增可控假 HTTP 服务 5 项：延迟/超时/错误分类/流式元信息/取消）、`pnpm build`、六个离线断言脚本同绿（`trace-check` 新增并发峰值=2 与顺序组装、取消后 0 派发；新增 `raster-check` 实测校准）、E2E S1–S18 全绿；`fixture-repair` 产出「筑基」稿修复副本与前后对比（四枚已有素材复用、绘图 0 次）；release 重建（`智序_0.1.0_x64-setup.exe` 22:39）并启动冒烟 12 秒通过。真实模型三小样需付费授权，未跑。
+
+- [Debug][Change] 素材复用与交付修复第一批（阶段 1–3）：修掉三条真实根因——中文分类引用被整条丢掉、质检反馈教模型写内部容器 `::: art deco` 导致"定义了仍未定义"、自动修订每轮重做素材解析放大等待；新增按回合 JSONL 请求证据（阶段/模型/单调耗时/尝试序号/返回长度/finish_reason/usage/五类失败分类，不记密钥与正文）、素材引用宽匹配+按 ID 校验、旧角饰块只恢复不绘图、一轮创作的素材台账（成功即复用、失败不重获预算、每位最多 2 画 + 1 补描述）、未完成素材清单与单项重试；成品不再残留素材协议与失败说明。真实失败样例回归：四枚已有素材全部恢复绑定且这四位绘图尝试为 0。
+- [Verify] `cargo test` 83 项、`pnpm build`、五个离线断言脚本（新增 `trace-check` 五类故障注入）与 E2E S1–S18 全绿；release 重建（`智序_0.1.0_x64-setup.exe` 21:43）并启动冒烟 12 秒通过——首次构建曾被使用者正在运行的实例锁住 exe，请其关闭后重跑成功。
+
+- [New Feature] 对话区「AI 工作中」气泡：合并原先三处分散提示为一个助手侧气泡（阶段标签 + 真实细节 + 本轮已耗时），阶段为 读取资料/思考中/撰写正文/素材任务/排版与质检/自动修订/保存文档；prep 工具、主流式首 token、素材派发与第 N/M 张、保存均上报真实信号；纯展示不参与流程（加不变式断言）。实测发现独立「质量检查」阶段（<1ms）无法被绘制、用户确认并入「排版与质检」，保存阶段用 flushSync + 带超时的让帧保证到达 DOM。
+- [Build] release 重建（`智序_0.1.0_x64-setup.exe`）并启动冒烟 12 秒通过；`progress-check` 新增、verify-ui S1–S17 全绿。
+
+- [Change] 删除前端解释性小字：顶栏副标题/知识库计数/已自动保存、知识命中调试区、参考图说明、会话栏底注、各页头说明句、设置两段长说明与锁定说明、素材库括号解释与空态引导；保留功能反馈（保存/导出/错误/质检）与行内数据（消息数、版本号、时间）。连带清掉 3 个死状态与 12 条失效 CSS，使用手册同步改口径；verify-ui S1–S16 全绿、release 重建并启动冒烟。
+
+## 2026-09-24
+
+- [Change] 模型全部临时锁定为 deepseek-flash（创作/画图/看图三路，env 与设置里的其它模型被忽略）；设置面板显示锁定状态；`LOCKED_MODEL` 改回 None 即恢复可配置。未实测 flash 出图能力。
+
+- [Debug] P0 素材复用确定性修复：长度归一化命中 + 配色冲突否决、分类过滤前置、`|new` 强制新建、角饰多别名（不再触发整篇重写）、分类不符只警告、新建素材进快照。
+- [Change] P1 素材质量：按角色拆素材契约（小构件不再套大插画要求）、新增确定性 SVG 质检（画布外/不可见/铺满/含文字一律拦下）、角饰避让不再压字或裁切。
+- [Change] P1 对话：去掉「含问号」启发式、短篇分档不再强塞组件（阈值 350 字）、修订保留旧预览、局部问题局部改、推理预算旋钮（默认不变）。
+- [New Feature] P2 交互：预览点选组件插入文本锚点（不注入脚本、不自动发送）、真实任务进度、对话与工坊参考图、ChatMsg 多模态图像输入、视觉复核（默认关，限次缓存）、工坊连续修改前后对比。
+- [Verify] 新增 2 个离线断言脚本 + compose-check 扩充全通过；cargo test 71 项、pnpm build、verify-ui S1–S16 全通过；release 重建成功并启动冒烟；真实模型仅跑最便宜的一条线上冒烟。
+- [Research] 只读调查体验与素材链路，隔离确认错误复用、角饰引用和无效 SVG 放行，形成多模态改进方案；未开发、未调用付费模型。
+
+- [Docs] 新增 GOAL 与完成标准，收敛文档入口并补充静态证据，备份后归档 14 张旧截图，保留源码与历史决策；详见整理记录。
+
+## 2026-09-15
+
+- [Change] 整理文档导航、需求与进度，保留 V3 决策，清除旧报告、提示词副本与重复验证产物，原文已备份。
+
+## 2026-09-09（历史里程碑）
+
+- [New Feature] 文档库、素材库、复用与固化快照、图片导出完成发布阶段整合。
+- [Build] 智序 0.1.0 发布，具体当时验收见 RELEASE-NOTES.md。
+- [Change] 最新稿源码泄漏与质量恢复闭环（质量恢复计划 A–E 五批，2026-09-29 实施）：**A 解析止损**——`compose.ts` 抽出**有边界的块收集** `collectBlockBody`（遇到下一个块起点即停，不再"一路扫到下一个 `:::`"）；`::: photo` 按**单行指令**解析、后续行一律退回正文，历史多行块只在无歧义（候选范围内全是纯文本行且确有闭合）时兼容，歧义输入一律按单行；孤立 `:::` 显式跳过（旧实现会掉进段落分支且不推进 i，**是死循环**）；`ComposeResult` 新增结构化 `issues`（稳定 code + severity + **源文行号**）与 `rejectedArts`，并逐节点做**可见文本泄漏检查**（跳过代码块与行内代码，合法代码示例不被误杀）。**B 统一门禁**——新增 `src/lib/delivery-quality.ts`（解析/素材/栅格/HTML/正文完整性 + 容量/版本 → 一条问题清单 + `DeliveryVerdict`；`bodyIntegrity` 给出**具体丢失片段与事实**）；`checkHtml` 失败不再"红条照显示、稿子照保存"；素材被排版层拒收**当场回写台账**（ok→failed）。**C 版本存储**——Rust `documents.rs` 改为 `manifest.json` 提交指针 + `revisions/<id>/` 不可变版本 + `staging/<txn>/`，写 staging → 读回校验 → 目录改名安装 → **一次 rename 提交**，提交前查 generation/baseRevisionId，失败时旧指针逐字节不变；旧三文件迁移为 `revisions/legacy` 且标 `unverified`。**D 修复与回滚**——回合产出改为**一串候选**：每轮跑同一套门禁，无阻断项即提交；有阻断项才修（先由解析器做确定性修复，剩需要改正文的才喂回模型）；退化（新增阻断项 / 事实丢失）撤销候选；预算用尽或不可修 → 草稿另存、成品维持上一份已验收版本；`PreviewPane` 四态标识 + **独立的草稿导出入口**。**E 交付验证**——新增失败样例夹具（含真实 `source.md` 整份只读副本）、`photo-swallow-check`（`--prove-red` 实测修复前 **10 条红**）、`asset-completion-check`、`delivery-quality-check`；E2E 新增 **S22**（好稿→成品 / 失败候选→**回退到上一版成品**且成品指针未被覆盖）。
+- [Debug] 顺带修掉四个真 bug：①`resolvePreview` 只回传 `{html,warnings,arts}`，**丢掉结构化解析问题** → 纯正文稿（无占位）把"缺组件的半成品"直接判为可提交、自动修订一次都不跑；②必需素材位按**跨轮累计台账**计，模型改写后引用已不在正文、台账那条 `failed` 仍挂着 → `unfinished()` 永远非空 → **该候选永远阻断、修不进去**（实测打死 S14 复用样例）；③保存时把"最新候选的源文"配上"已验收候选的 HTML"——正是计划点名禁止的**新源文配旧 HTML 混合版本**（实测导致文档固化快照清零、影响扫描查不到引用）；④`documents.ts` 桌面读取路径直接透传 Rust 的 snake_case 字段，`updatedAt` 等**在桌面端恒为 undefined**（列表路径有映射所以看不出来）。
+- [Verify] `cargo test --lib` **131 项**全绿（含 11 项版本存储的故障注入/迁移/CAS 用例，全程 `temp_dir()` 隔离）；离线断言 **9 个脚本**全绿（新增 `delivery-quality-check` 53 条、`photo-swallow-check` 含真实源文用例、`asset-completion-check` 45 条）；浏览器 E2E **107 PASS / 0 FAIL（S1–S22）** 连跑两次稳定；`tsc` 干净。release 重建与启动冒烟见详细进度。
+- [Build] release 重建（`pnpm tauri build --bundles nsis`）：`wechat-mp-desktop.exe` 15.7 MB / `智序_0.1.0_x64-setup.exe` 4.6 MB（13:17）；启动冒烟用**隔离 USERPROFILE**（临时目录）跑到 14 秒确认窗口起来了、隔离目录下自动建出 `wechat-mp-workspace`，真实工作区计数**未变**（会话 15 / 文档 3 / 素材 11），冒烟进程已按 PID 关闭、临时目录已清。

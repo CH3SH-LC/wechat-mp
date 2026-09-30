@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
+# net/io-util 供 tests 里的"可控假 HTTP 服务"使用（阶段 6：延迟/超时/错误/取消）
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 
 [dependencies]
@@ -28,4 +29,8 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "multipart"] }
 regex = "1"
 base64 = "0.22"
-
+# sync: 取消信号（watch）；time: 超时与假服务延迟；macros: tokio::select!。tauri 本身已依赖 tokio。
+tokio = { version = "1", features = ["sync", "time", "macros"] }
+# sha2: 不可变版本的文件哈希（§7.2 提交校验 + 读取时完整性比对）。锁文件里早就有了（传递依赖），
+# 这里只是把它提成直接依赖，不引入新的包。
+sha2 = "0.10"

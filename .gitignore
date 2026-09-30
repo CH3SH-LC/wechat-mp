@@ -27,5 +27,10 @@ dist-ssr
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# E2E/导出整图样例（占用大；证据截图已按名归档 docs/artifacts）
+# 运行证据（截图与 JSON 判定数据只留本地，不进仓库）
+# 报告类文件（.md/.html/.txt）仍提交，它们是可读的结论，不随每次运行重新生成。
+# 注意 `docs/artifacts/tuiwen-*.png` 只匹配顶层，按日期归档的子目录匹配不到，故用 ** 递归。
+docs/artifacts/**/*.png
+docs/artifacts/**/*.json
+docs/artifacts/**/*.jsonl
 docs/artifacts/tuiwen-*.png

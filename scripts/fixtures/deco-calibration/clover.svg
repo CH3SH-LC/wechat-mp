@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">
+  <!-- 主体花簇集中在右下区域 -->
+  
+  <!-- 背景光晕/氛围 -->
+  <ellipse cx="260" cy="260" rx="85" ry="60" fill="#e8f0e0" opacity="0.35"/>
+  <ellipse cx="240" cy="270" rx="55" ry="35" fill="#d8e8cf" opacity="0.3"/>
+  
+  <!-- 主茎秆从右下方长出 -->
+  <path d="M225 290 Q200 250 185 225" stroke="#5a7a4a" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+  <path d="M225 290 Q210 255 195 235" stroke="#6a8a5a" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  
+  <!-- 左侧分枝 -->
+  <path d="M210 275 Q195 268 180 275" stroke="#5a7a4a" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  
+  <!-- 右侧分枝 -->
+  <path d="M215 255 Q230 245 245 250" stroke="#5a7a4a" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  
+  <!-- 左侧延伸小枝 -->
+  <path d="M200 290 Q185 285 175 295" stroke="#6a8a5a" stroke-width="2" fill="none" stroke-linecap="round"/>
+  
+  <!-- 主四叶草 - 左上第一叶（深绿，背光部） -->
+  <path d="M175 195 Q160 175 170 160 Q180 148 192 158 Q200 168 195 185 Q190 198 175 195 Z" fill="#4a6a3a"/>
+  <!-- 第一叶亮面 -->
+  <path d="M175 195 Q168 182 173 168 Q178 158 187 163 Q193 172 190 184 Q187 193 175 195 Z" fill="#5a7a4a" opacity="0.7"/>
+  
+  <!-- 主四叶草 - 顶部第二叶 -->
+  <path d="M178 195 Q172 175 182 158 Q190 145 203 152 Q212 162 208 178 Q204 192 190 198 Q180 200 178 195 Z" fill="#5a7a4a"/>
+  <!-- 第二叶亮面/受光 -->
+  <path d="M181 195 Q176 179 184 165 Q190 155 200 160 Q206 169 203 180 Q199 190 190 195 Q185 197 181 195 Z" fill="#7a9a6a" opacity="0.6"/>
+  
+  <!-- 主四叶草 - 右侧第三叶 -->
+  <path d="M193 192 Q205 178 222 182 Q233 188 232 202 Q228 214 214 216 Q202 215 193 205 Q188 198 193 192 Z" fill="#6a8a5a"/>
+  <!-- 第三叶亮面 -->
+  <path d="M194 193 Q204 183 217 186 Q226 191 225 201 Q222 209 212 211 Q203 210 196 203 Q192 198 194 193 Z" fill="#8aaa7a" opacity="0.65"/>
+  <!-- 第三叶叶脉 -->
+  <path d="M213 187 Q212 198 207 208" stroke="#5a7a4a" stroke-width="1.2" fill="none" opacity="0.6"/>
+  
+  <!-- 主四叶草 - 下方第四叶 -->
+  <path d="M186 200 Q172 208 172 222 Q175 234 187 236 Q199 235 206 224 Q209 212 200 204 Q193 198 186 200 Z" fill="#4a6a3a"/>
+  <!-- 第四叶受光面 -->
+  <path d="M186 202 Q176 208 176 219 Q179 229 188 230 Q197 229 202 221 Q204 213 198 207 Q192 203 186 202 Z" fill="#7a9a6a" opacity="0.55"/>
+  
+  <!-- 主四叶草中心点/亮斑 -->
+  <circle cx="193" cy="199" r="4" fill="#9aba8a" opacity="0.8"/>
+  <circle cx="193" cy="199" r="2.2" fill="#c0d8b0" opacity="0.9"/>
+  
+  <!-- 左侧小一叶 -->
+  <path d="M165 285 Q150 275 148 262 Q149 252 158 250 Q167 252 170 262 Q171 275 165 285 Z" fill="#6a8a5a"/>
+  <path d="M165 285 Q155 278 153 268 Q154 260 161 258 Q167 260 169 268 Q170 275 165 285 Z" fill="#8aaa7a" opacity="0.6"/>
+  
+  <!-- 右侧小枝上的叶 -->
+  <path d="M245 240 Q255 230 258 218 Q257 208 248 207 Q239 209 237 219 Q236 232 245 240 Z" fill="#5a7a4a"/>
+  <path d="M246 238 Q253 230 255 221 Q254 213 249 212 Q243 214 242 222 Q241 232 246 238 Z" fill="#7a9a6a" opacity="0.6"/>
+  
+  <!-- 右下方的顶部第三叶（补充层） -->
+  <path d="M235 260 Q248 252 255 243 Q260 235 255 228 Q247 222 239 228 Q233 236 233 250 Q233 257 235 260 Z" fill="#6a8a5a"/>
+  <path d="M236 258 Q246 251 251 244 Q255 239 251 234 Q246 230 241 234 Q237 240 236 250 Q236 255 236 258 Z" fill="#8aaa7a" opacity="0.55"/>
+  
+  <!-- 左上小茎延伸出的叶 -->
+  <path d="M165 255 Q155 247 155 236 Q157 226 166 226 Q175 229 175 240 Q174 250 165 255 Z" fill="#5a7a4a"/>
+  <path d="M165 253 Q158 248 158 240 Q160 232 167 231 Q173 234 173 242 Q172 249 165 253 Z" fill="#8aaa7a" opacity="0.5"/>
+  
+  <!-- 上方小枝末端的小四叶（迷你） -->
+  <path d="M205 220 Q198 212 202 205 Q207 200 213 205 Q217 211 212 218 Q210 223 205 220 Z" fill="#7a9a6a" opacity="0.7"/>
+  <path d="M212 218 Q218 212 224 214 Q229 218 226 224 Q222 229 215 226 Q211 223 212 218 Z" fill="#6a8a5a" opacity="0.7"/>
+  
+  <!-- 垂坠小茎和微型叶（右下角） -->
+  <path d="M262 272 Q268 280 270 290" stroke="#7a9a6a" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <path d="M268 280 Q274 275 278 278 Q279 283 274 286 Q269 285 268 280 Z" fill="#8aaa7a" opacity="0.7"/>
+  <path d="M270 290 Q276 295 281 292 Q283 287 278 285 Q273 285 270 290 Z" fill="#7a9a6a" opacity="0.65"/>
+  
+  <!-- 右下角小芽苞 -->
+  <ellipse cx="228" cy="289" rx="4" ry="3" fill="#6a8a5a" opacity="0.8"/>
+  <ellipse cx="228" cy="289" rx="2" ry="1.5" fill="#9aba8a" opacity="0.7"/>
+  
+  <!-- 极小散叶点缀・增加密度 -->
+  <path d="M155 298 Q149 294 150 289 Q155 287 159 291 Q160 296 155 298 Z" fill="#7a9a6a" opacity="0.6"/>
+  <path d="M248 296 Q243 292 245 287 Q250 286 253 290 Q253 295 248 296 Z" fill="#8aaa7a" opacity="0.5"/>
+  
+  <!-- 散落星点・青春气息 -->
+  <circle cx="158" cy="230" r="1.5" fill="#c8d8b8" opacity="0.7"/>
+  <circle cx="240" cy="225" r="1.2" fill="#c8d8b8" opacity="0.6"/>
+  <circle cx="228" cy="235" r="1" fill="#b0c8a0" opacity="0.5"/>
+  <circle cx="175" cy="242" r="1.3" fill="#c8d8b8" opacity="0.6"/>
+  <circle cx="252" cy="255" r="1.2" fill="#c8d8b8" opacity="0.5"/>
+  <circle cx="145" cy="272" r="1.4" fill="#c8d8b8" opacity="0.55"/>
+  <circle cx="190" cy="295" r="1" fill="#c8d8b8" opacity="0.5"/>
+  <circle cx="163" cy="300" r="1.2" fill="#c8d8b8" opacity="0.45"/>
+  <circle cx="208" cy="108" r="1" fill="#c8d8b8" opacity="0.4"/>
+  
+  <!-- 底部地面暗影过渡 -->
+  <path d="M140 295 Q180 288 220 292 Q260 296 285 290 L285 300 L140 300 Z" fill="#d8e5d0" opacity="0.45"/>
+  <path d="M150 300 Q200 294 260 298 L260 300 L150 300 Z" fill="#c5d8b8" opacity="0.4"/>
+  
+  <!-- 主四叶草叶际间的小脉络线条 -->
+  <path d="M183 185 Q178 175 180 167" stroke="#4a6a3a" stroke-width="0.8" fill="none" opacity="0.4"/>
+  <path d="M200 182 Q206 173 203 165" stroke="#4a6a3a" stroke-width="0.8" fill="none" opacity="0.4"/>
+  
+  <!-- 左侧放大叶的叶脉 -->
+  <path d="M157 264 Q155 256 159 251" stroke="#5a7a4a" stroke-width="0.7" fill="none" opacity="0.4"/>
+  
+  <!-- 背景散光微光 -->
+  <circle cx="210" cy="245" r="18" fill="#e8f0e0" opacity="0.2"/>
+  <circle cx="185" cy="225" r="15" fill="#e8f0e0" opacity="0.18"/>
+  <circle cx="250" cy="270" r="20" fill="#e8f0e0" opacity="0.15"/>
+</svg>

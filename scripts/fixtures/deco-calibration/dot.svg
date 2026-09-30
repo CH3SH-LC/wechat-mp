@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" fill="none">
+<!-- 不可接受样例：颜色够深、位置在右下，但主体小到缩到 60px 只剩一个点 -->
+<circle cx="240" cy="165" r="6" fill="#2f6fed"/>
+<circle cx="252" cy="176" r="4" fill="#c0392b"/>
+<circle cx="228" cy="176" r="3" fill="#2f6fed"/>
+<circle cx="240" cy="184" r="3" fill="#2f6fed"/>
+</svg>

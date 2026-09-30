@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" fill="none">
+<!-- 合格样例：单一可辨主体（一片大叶子 + 枝条）、集中在右下、颜色够深、留出透明边距。
+     主体约 148×132 单位，缩到 60px 宽后约 30×26px。 -->
+<path d="M120 190 C150 120 200 80 268 62 C264 130 220 178 150 194 Z" fill="#2f6fed"/>
+<path d="M150 194 C170 150 210 108 262 68" stroke="#1b4fb0" stroke-width="8" fill="none" stroke-linecap="round"/>
+<circle cx="272" cy="160" r="16" fill="#c0392b"/>
+</svg>

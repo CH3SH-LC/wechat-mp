@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" width="300" height="200">
+  <defs>
+    <linearGradient id="blueStar" x1="0.2" y1="0" x2="0.7" y2="1">
+      <stop offset="0" stop-color="#d3e6f8"/>
+      <stop offset="0.55" stop-color="#a9c9e8"/>
+      <stop offset="1" stop-color="#7ea8d0"/>
+    </linearGradient>
+    <linearGradient id="blueStarSoft" x1="0.1" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#e0eefb"/>
+      <stop offset="1" stop-color="#a3c4e4"/>
+    </linearGradient>
+    <radialGradient id="pinkDot" cx="0.34" cy="0.28" r="0.85">
+      <stop offset="0" stop-color="#fde4ec"/>
+      <stop offset="0.6" stop-color="#f2c1d2"/>
+      <stop offset="1" stop-color="#e5a4bb"/>
+    </radialGradient>
+    <linearGradient id="pinkStar" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#fce0e9"/>
+      <stop offset="1" stop-color="#eeb0c6"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#e7f1fb" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#e7f1fb" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <circle cx="224" cy="142" r="72" fill="url(#glow)"/>
+
+  <path d="M290 194 Q 240 176 206 118" fill="none" stroke="#b6d3ed" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M288 188 Q 262 180 251 160" fill="none" stroke="#c6dcef" stroke-width="2.6" stroke-linecap="round"/>
+
+  <ellipse cx="243" cy="152" rx="11" ry="5.5" fill="#c3dbf1" transform="rotate(-32 243 152)"/>
+  <ellipse cx="268" cy="174" rx="9" ry="4.6" fill="#d2e5f6" transform="rotate(-24 268 174)"/>
+
+  <circle cx="214" cy="178" r="9" fill="url(#pinkDot)"/>
+  <circle cx="275" cy="140" r="6.5" fill="url(#pinkDot)"/>
+  <circle cx="167" cy="146" r="4.6" fill="url(#pinkDot)" opacity="0.85"/>
+
+  <path d="M224 104 Q 224 126 254 134 Q 224 142 224 164 Q 224 142 194 134 Q 224 126 224 104 Z" fill="url(#blueStar)"/>
+  <path d="M215 118 Q 215 126 225 128 Q 215 130 215 138 Q 215 130 205 128 Q 215 126 215 118 Z" fill="#eef6fd" opacity="0.85"/>
+
+  <path d="M264 150 Q 264 161 280 166 Q 264 171 264 182 Q 264 171 248 166 Q 264 161 264 150 Z" fill="url(#blueStarSoft)"/>
+  <path d="M180 154 Q 180 164 194 168 Q 180 172 180 182 Q 180 172 166 168 Q 180 164 180 154 Z" fill="url(#blueStarSoft)"/>
+  <path d="M197 100 Q 197 108 208 111 Q 197 114 197 122 Q 197 114 186 111 Q 197 108 197 100 Z" fill="url(#pinkStar)"/>
+</svg>

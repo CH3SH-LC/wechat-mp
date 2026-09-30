@@ -1,7 +1,7 @@
 // chat.ts —— 对话通道：Tauri 下走 Rust 流式 LLM；浏览器(纯 vite)下走本地模拟
 import { invoke } from '@tauri-apps/api/core'
-import { evaluate, isCancel, isCreateRequest, isDemoTopic } from './needs'
-import { REVISE_MARKER } from './revise'
+import { evaluate, isCancel, isCreateRequest, isDemoTopic } from './needs.ts'
+import { REVISE_MARKER } from './revise.ts'
 
 // 消息可承载工具回合（第 25 轮）：assistant 带 tool_calls（content 为空）、tool 结果带 tool_call_id
 export interface ChatMsg {
@@ -9,6 +9,11 @@ export interface ChatMsg {
   content: string | null
   tool_call_id?: string
   tool_calls?: ChatToolCall[]
+  /**
+   * P2：本回合附带的参考图（data URL）。Rust 侧只会把它们折叠到最后一条 user 消息上，
+   * 中间轮次的图片会被丢弃（官方视觉接口只允许 user 携带图像，也避免重复计费）。
+   */
+  images?: string[]
 }
 
 export interface ChatToolCall {
@@ -22,8 +27,42 @@ export function inTauri(): boolean {
 }
 
 // ---------- Rust 通道 ----------
-export async function sendChatRust(messages: ChatMsg[]): Promise<void> {
-  await invoke('chat_stream', { messages })
+
+/**
+ * 回合类型（P1，2026-09-24 调查 §5）：决定推理强度与输出上限。
+ * `write` = 撰写正文；`revise` = 自动质检后的定点/整篇修订；`chat` = 普通对话与澄清。
+ * 省略（或传 null）＝沿用默认预算（max / 64000）——**不传即不降级**。
+ *
+ * 现状（2026-09-29 更正）：调用方**已经不是"一律不传"**——`App.tsx` 撰写回合传 `'write'`、
+ * 自动修订传 `'revise'`（后者是阶段 4 第 6 条"接上已实现的 high/32000 修订档"）。
+ * 具体档位见 `src-tauri/src/chat.rs::turn_budget`；发送前还会经 `clamp_to_model` 收敛到模型真实上限。
+ */
+export type TurnKind = 'write' | 'revise' | 'chat'
+
+export async function sendChatRust(messages: ChatMsg[], turn?: TurnKind, runId?: string): Promise<void> {
+  await invoke('chat_stream', { messages, turn: turn ?? null, runId: runId ?? null })
+}
+
+/**
+ * 阶段 4：后端取消句柄。桌面模式下"停止"必须真的让后端停下来——
+ * 否则前端虽然不再显示增量，请求仍在跑、仍在计费，迟到响应还会与新回合竞争。
+ * 边界：只保证**本地停止等待与后续处理**，不承诺服务端已停止计费。
+ */
+export async function cancelChatRun(runId: string, reset = false): Promise<boolean> {
+  if (!inTauri()) return false
+  try {
+    return reset
+      ? await invoke<boolean>('cancel_reset', { runId })
+      : (await invoke('cancel_run', { runId }), false)
+  } catch {
+    return false
+  }
+}
+
+/** 流式增量事件的载荷（阶段 4：带 runId，前端据此丢弃上一回合的迟到增量） */
+export interface DeltaPayload {
+  runId?: string | null
+  delta: string
 }
 
 // ---------- 本地模拟（无 Tauri / 无密钥时演示链路） ----------
@@ -120,7 +159,26 @@ function buildReuseV2(): string {
   )
 }
 
-// 第 32 轮：自动质检自检用的"缺组件/无素材"样稿——E2E S10 让首稿故意不达标，验证引擎检出后自动重写收敛。
+// 阶段 2/3 的故障演示稿（E2E S18）：引用一个素材库里并不存在的素材。
+// 覆盖三件在真实故障中出过问题的事：引用不可用要有明确结果、协议文本不得残留进正文、
+// 未完成素材要以**可逐项重试**的形式出现在界面而不是被当成正文段落。
+// 修订轮仍返回本稿（见 sendChatMock 的 stuck 分支），以模拟"重写正文解决不了素材问题"。
+const STUCK_ASSET_V2 = `[[theme:校园]]
+
+[[banner:素材故障演示|引用了一个素材库里没有的素材]]
+
+这一段用来演示"引用不可用"时的处理：引用会被解析器拒绝，正文里不会残留任何引用代码，问题以可操作的形式出现在预览区，而不是变成文章段落。
+
+::: card 发生了什么
+- 引用写错：素材库里并不存在这个素材
+- 正文保持干净：不残留任何素材协议文本
+- 预览区给出可逐项重试的未完成清单
+:::
+
+[[asset:art-inline|no-such-asset-id|测试用：素材库里并不存在这个素材]]
+
+结尾一句话，说明正文其余内容不受影响。`
+
 const DEFICIENT_V2 = `[[theme:校园]]
 
 [[banner:军训慰问速写|副标题]]
@@ -164,26 +222,32 @@ export function sendChatMock(
 ): StreamHandle {
   const user = [...messages].reverse().find((m) => m.role === 'user')
   const u = user?.content ?? ''
+  // 「素材故障样例」是贯穿整轮的标记：修订轮也返回同一份故障稿，
+  // 用来模拟"素材侧的问题靠重写正文解决不了"（阶段 3 的核心场景）。
+  const stuck = messages.some((m) => (m.content ?? '').includes('素材故障样例'))
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
   const asked = (lastAssistant?.content ?? '').includes('？')
   const wrapArticle = (v2: string) => `好的，需求已明确，按所选风格直接产出（v2 正文，素材交给素材智能体生成）：\n\n\`\`\`v2\n${v2}\n\`\`\``
   const article = wrapArticle(SAMPLE_V2)
   const reuseArticle = wrapArticle(buildReuseV2())
   const deficientArticle = `按默认需求先产出一版（示例为缺组件的半成品，供自检演示）：\n\n\`\`\`v2\n${DEFICIENT_V2}\n\`\`\``
+  const stuckArticle = `按需求产出一版（示例含一个无法解析的素材引用，供故障演示）：\n\n\`\`\`v2\n${STUCK_ASSET_V2}\n\`\`\``
   const badArticle = `好的，按要求演示违规输出：\n\n\`\`\`html\n${MOCK_BAD.html}\n\`\`\``
   let full: string
   if (isCancel(u)) {
     full = CANCEL_REPLY
   } else if (u.includes(REVISE_MARKER)) {
     // 第 32 轮：自动质检回路的修订指令 → 模拟端返回合规稿（SAMPLE_V2），验证自检收敛到 q-ok
-    full = article
+    // 阶段 3：素材故障样例轮**不**收敛——素材问题不该靠重写正文解决
+    full = stuck ? stuckArticle : article
   } else if (asked) {
     // 对上一条澄清问题的回答：直接进入创作
     full = article
   } else if (isDemoTopic(u) || u.includes('违规')) {
     full = badArticle
   } else if (isCreateRequest(u)) {
-    full = u.includes('自检缺组件') ? deficientArticle
+    full = u.includes('素材故障样例') ? stuckArticle
+      : u.includes('自检缺组件') ? deficientArticle
       : u.includes('素材库复用气泡角饰') ? reuseArticle
       : evaluate(u).needsClarify ? CLARIFY_QUESTION : article
   } else {

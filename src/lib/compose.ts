@@ -6,6 +6,7 @@
 
 import { parsePaletteDirective, resolveTheme, themeDeclaration } from './palettes.ts'
 import type { StylePalette } from './palettes.ts'
+import { checkSvgQuality } from './svg-quality.ts'
 
 export interface ComposeDesign {
   key: 'text' | 'promo'
@@ -225,6 +226,29 @@ export interface DecoSpec {
   svg: string
   alt: string
   idx: number // arts 列表占位编号（@@ARTn@@）
+  hAt60: number // P0：按 viewBox 宽高比折算的"60px 宽时显示高度"，供气泡预留避让空间
+}
+
+// 角饰显示尺寸与避让（P0，2026-09-24 调查 §3）：角饰按 60px 宽显示，但气泡原本只留固定内边距，
+// 高角饰会压字；vivid 气泡还有 overflow:hidden，超高部分直接被裁掉。这里按实际高度预留底部空间。
+const DECO_W = 60
+const DECO_MAX_H = 56
+
+/** 由 viewBox 宽高比折算指定显示宽度下的高度（无法解析时按正方形估） */
+function heightAtWidth(svg: string, width: number): number {
+  const m = /viewBox="\s*[\d.\-]+\s+[\d.\-]+\s+([\d.\-]+)\s+([\d.\-]+)"/.exec(svg)
+  if (!m) return width
+  const w = parseFloat(m[1])
+  const h = parseFloat(m[2])
+  if (!w || w <= 0 || !h || h <= 0) return width
+  return Math.round((h / w) * width)
+}
+
+/** 气泡为右下角饰预留的底部内边距（含角饰贴底 10px 与 4px 缓冲，上限 76px） */
+function decoReserve(spec: DecoSpec | null | undefined): number {
+  if (!spec) return 0
+  const h = Math.min(spec.hAt60, DECO_MAX_H)
+  return Math.min(10 + h + 4, 76)
 }
 
 function bubble(
@@ -250,16 +274,19 @@ function bubble(
   const artName = DECO_MAP[decoName] || decoName
   // 角饰来源：预置资产 URL（artUrls）> 现场装饰素材（::: art deco 定义，第 21 轮）
   let src = artName && artUrls && artUrls[artName] ? artUrls[artName] : null
-  if (!src && decoMap && decoMap[decoName]) src = '@@ART' + decoMap[decoName].idx + '@@'
+  const spec = decoMap ? decoMap[decoName] : undefined
+  if (!src && spec) src = '@@ART' + spec.idx + '@@'
+  // P0：角饰按实际高度预留底部内边距（vivid 气泡还有 overflow:hidden，不留就会裁切）
+  const reserve = decoReserve(spec)
   const decoImg = src
-    ? '<img src="' + src + '" alt="" style="position:absolute;right:12px;bottom:10px;width:60px;height:auto;pointer-events:none;opacity:.9;display:block" />' : ''
+    ? '<img src="' + src + '" alt="" style="position:absolute;right:12px;bottom:10px;width:' + DECO_W + 'px;height:auto;max-height:' + DECO_MAX_H + 'px;pointer-events:none;opacity:.9;display:block" />' : ''
   if (vivid) {
     const bg = kind === 'danger' ? d.danger : kind === 'tip' ? d.tip : d.orange
-    return '<section style="margin:0 0 16px;border-radius:14px;padding:16px 18px 14px;background:' + bg + ';position:relative;overflow:hidden">' +
+    return '<section style="margin:0 0 16px;border-radius:14px;padding:16px 18px ' + Math.max(14, reserve) + 'px;background:' + bg + ';position:relative;overflow:hidden">' +
       '<p style="margin:0 0 6px;font-size:14px;font-weight:700;color:#ffffff">' + ttl + '</p>' +
       bodyP + decoImg + '</section>'
   }
-  return '<section style="margin:0 0 16px;background:' + meta.bg + ';border-left:4px solid ' + meta.c + ';border-radius:6px;padding:14px 16px;position:relative">' +
+  return '<section style="margin:0 0 16px;background:' + meta.bg + ';border-left:4px solid ' + meta.c + ';border-radius:6px;padding:14px 16px ' + Math.max(14, reserve) + 'px;position:relative">' +
     '<p style="margin:0 0 6px;font-size:14px;font-weight:700;color:' + meta.c + '">' + ttl + '</p>' +
     bodyP + decoImg + '</section>'
 }
@@ -434,12 +461,50 @@ export interface ArtSpec {
   wide: boolean // true=整行全宽；false=居中 ≤56%（行内装饰）
 }
 
+/**
+ * 解析阶段的**结构化问题**（2026-09-29 质量恢复计划 §3.2）。
+ *
+ * 为什么要有它：这一轮真实故障里，照片位把后面的素材块整段吞掉、把 SVG 源码转义成可见文字，
+ * 而产出只有一个 `warnings: string[]`——调用方只能靠 `includes('某个中文子串')` 反推发生了什么，
+ * 既定位不到源文位置，也没法判定"这算不算阻断成品"。中文文案只该负责展示，不该当分支条件。
+ *
+ * 每条问题带足够的**机器可读**信息：稳定代码、严重度、源文行范围、关联的素材标识。
+ */
+export interface ComposeIssue {
+  /** 稳定代码（分支只认它，不认中文文案）：如 `parse.unclosed-block`、`parse.leak`、`asset.rejected` */
+  code: string
+  severity: 'blocking' | 'warning' | 'info'
+  /** 面向用户的说明（可展示，但不作为判定依据） */
+  message: string
+  /** 源文行号，1-based、闭区间 */
+  line: number
+  endLine: number
+  /** 关联的素材标识（`::: art …` 头里的别名/ID 候选，用于把问题映射回素材位台账） */
+  assetRefs?: string[]
+  /** 证据摘要（可核对的片段/数值，供界面与日志展示；不参与分支判定） */
+  evidence?: string
+}
+
+/** `::: art …` 被本地质检拒收的记录：素材位据此**回写台账**，不再"读到了就算完成" */
+export interface RejectedArt {
+  /** 头部的别名/ID 候选（空格分隔的整段，逐个与台账比对） */
+  refs: string[]
+  line: number
+  reason: string
+  /** 拒收发生在预扫描的 `::: art deco <名称>` 定义里（气泡角饰），否则是整行图 */
+  deco: boolean
+}
+
 export interface ComposeResult {
   html: string
   plainText: string
   images: ComposeImage[]
   arts: ArtSpec[]
   warnings: string[]
+  /** 结构化解析问题（与 warnings 并存：warnings 继续负责展示，issues 负责判定与定位） */
+  issues: ComposeIssue[]
+  /** 被质检拒收的现场素材块（供调用方回写素材位台账并计入交付门禁） */
+  rejectedArts: RejectedArt[]
   mode: 'text' | 'promo'
   modeLabel: string
 }
@@ -451,6 +516,103 @@ export function svgElementCount(svg: string): number {
     .replace(/<(defs|clipPath|mask|filter|linearGradient|radialGradient|pattern|stop|style|desc|title|metadata)[\s\S]*?<\/\1>/gi, '')
   const m = body.match(/<(circle|rect|ellipse|line|path|polygon|polyline|image)\b/gi)
   return m ? m.length : 0
+}
+
+// ---------- 有边界的块收集（2026-09-29 质量恢复计划 §3.1/§3.2） ----------
+
+/**
+ * 是否是"块起点"（`::: <kind>`）。与单独一行的结束标记 `:::` 区分开——
+ * 这个区别就是本轮事故的分水岭：旧解析器把**后面某个块的结束符**当成了本块的结束符。
+ */
+function isBlockStart(t: string): boolean {
+  return /^:::\s*\S/.test(t)
+}
+
+interface BlockScan {
+  /** 块体行（原样保留，调用方按需 trim） */
+  body: string[]
+  /** 主循环应移动到的下一个索引（已消费的位置之后） */
+  end: number
+  /** 是否找到本块的结束标记（单独一行的 `:::`） */
+  closed: boolean
+}
+
+/**
+ * 有边界的块体收集：从 `start` 起向后收集，**遇到下一个块起点即停止**，不跨越块边界。
+ *
+ * 旧实现是"一路扫到下一个 `:::`"——可那个 `:::` 很可能是后面某个块的结束符。真实故障
+ * `s1790565874610554000` 正是如此：`::: photo …` 后面跟着普通段落与一个 `::: art` 素材块，
+ * `:::` 只在**素材块**末尾出现，于是照片位把段落、素材块头与整段 SVG 全部吞进自己的"说明"里，
+ * 再转义输出成可见文字（3 处源码泄漏，成品里 0 个 art）。本函数是这条根因的确定性修复：
+ * 程序错误用程序修，不让模型反复重写文章去补偿。
+ */
+function collectBlockBody(lines: string[], start: number): BlockScan {
+  const body: string[] = []
+  for (let k = start; k < lines.length; k++) {
+    const t = lines[k].trim()
+    if (t === ':::') return { body, end: k + 1, closed: true }
+    if (isBlockStart(t)) return { body, end: k, closed: false }
+    body.push(lines[k])
+  }
+  return { body, end: lines.length, closed: false }
+}
+
+/**
+ * 历史多行照片块（`::: photo 说明` + 若干纯文本说明行 + `:::`）的兼容识别。
+ *
+ * 正式协议里 `::: photo 说明` 是**单行指令**，正文从下一行开始（引擎协议 §三.3）。但历史产物
+ * 里确实存在多行块写法，所以要兼容——**兼容的条件必须收紧**：
+ *
+ * 候选范围内只允许纯文本行，且必须真的存在闭合标记。空行、标题、块起点、任何 `[[…]]` 行、
+ * 引用/气泡、列表、表格、围栏、分割线都构成**正文边界** → 判定为"不是旧块"，
+ * 该行按单行指令解析，其余行照常作为正文渲染。
+ *
+ * 歧义输入（例如"单行照片位 + 空行 + 段落 + 后面某个块的 `:::`"）一律按单行处理——
+ * 宁可少吞，也不静默吞掉正文。返回闭合行号；返回 null 表示不是合法旧块。
+ */
+function scanLegacyPhotoBody(lines: string[], start: number): number | null {
+  for (let k = start; k < lines.length; k++) {
+    const t = lines[k].trim()
+    if (t === ':::') return k
+    if (t === '') return null
+    if (isBlockStart(t)) return null
+    if (/^#{1,6}\s/.test(t)) return null
+    if (t.startsWith('[[')) return null
+    if (t.startsWith('>')) return null
+    if (t.startsWith('```')) return null
+    if (t.startsWith('|')) return null
+    if (/^\s*[-*+]\s+/.test(t) || /^\s*\d+\.\s+/.test(t)) return null
+    if (/^(-{3,}|\*{3,}|_{3,}|~{3,})$/.test(t)) return null
+  }
+  return null
+}
+
+/** 成品可见文本里**不允许出现**的内部协议痕迹（2026-09-29 计划 §3.2"检查可见文本是否泄漏"） */
+const LEAK_PATTERNS: { re: RegExp; what: string; hint: string }[] = [
+  { re: /<svg\b/i, what: '转义的 SVG 源码', hint: '多半是照片位/素材块把后面的 SVG 吞进了自己的说明' },
+  { re: /:::\s*art\b/, what: '内部素材容器标记 ::: art', hint: '`::: art` 是引擎内部格式，不该出现在正文里' },
+  { re: /\[\[(?:asset|img|deco)\s*:/, what: '未解析的素材协议行', hint: '素材解析没有消费掉这条引用/占位' },
+]
+
+/** 行内代码 span（`inline()` 产出）：去掉后再查泄漏，合法代码示例不能被全局字符串规则误杀 */
+const INLINE_CODE_SPAN = /<span style="background-color:[^"]*font-family:Consolas,Menlo,monospace[^"]*">[\s\S]*?<\/span>/g
+
+function visibleTextOf(html: string): string {
+  return html
+    .replace(INLINE_CODE_SPAN, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** 截断到 n 字符（证据摘要用）。刻意本地实现——compose 是零业务依赖的纯排版模块 */
+function clip(s: string, n: number): string {
+  const t = String(s || '').replace(/\s+/g, ' ').trim()
+  return t.length > n ? t.slice(0, n) + '…' : t
 }
 
 export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResult {
@@ -469,28 +631,71 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const decoMap: Record<string, DecoSpec> = {}
   const lines = String(md || '').split(/\r?\n/)
   const out: string[] = []
+  // 与 out 一一对应的元信息：该节点来自源文哪一行、是不是"代码节点"（泄漏检查要跳过代码）
+  const outMeta: { line: number; code: boolean }[] = []
+  const issues: ComposeIssue[] = []
+  const rejectedArts: RejectedArt[] = []
   let i = 0
   let h2Counter = 0
 
-  // 预扫描：::: art deco 名称 装饰素材定义（第 21 轮）——SVG 校验合格后注册供气泡角饰引用
+  /** 产出一个节点；`line` = 该节点对应的源文起始行（1-based），供问题定位 */
+  function emit(html: string, line: number, opts2?: { code?: boolean }): void {
+    out.push(html)
+    outMeta.push({ line, code: !!opts2?.code })
+  }
+
+  /**
+   * `::: art` 头部的别名/ID 候选（空格分隔）。素材解析层把「本文别名 / 气泡引用词 / 库名称 / 库 ID」
+   * 一起写进头部，因此这里逐个取出，交给调用方与素材位台账比对——拒收的素材位据此回写。
+   */
+  function artRefs(head: string): string[] {
+    return head.trim().split(/\s+/).filter(Boolean)
+  }
+
+  function noteRejected(refs: string[], line: number, reason: string, deco: boolean): void {
+    rejectedArts.push({ refs, line, reason, deco })
+    issues.push({
+      code: 'asset.rejected',
+      severity: 'blocking',
+      message: `素材未通过本地质检（${reason}），该处已用占位文本代替：${refs[0] || '未知素材'}`,
+      line,
+      endLine: line,
+      assetRefs: refs,
+    })
+  }
+
+  // 预扫描：::: art deco 名称… 装饰素材定义（第 21 轮；P0 起支持多别名）——SVG 校验合格后注册供气泡角饰引用。
+  // P0（2026-09-24 调查 §2）：素材解析器会同时写入"本文别名 / 气泡引用词 / 库名称 / 库 ID"，
+  // 全部指向同一个 DecoSpec；**只占一个 arts 条目**（否则 @@ARTn@@ 索引与素材用量统计会错位）。
   {
     let j = 0
     while (j < lines.length) {
-      const m = lines[j].match(/^:::\s*art\s+deco\s+([a-zA-Z0-9_-]+)\s*[^\n]*$/)
+      const m = lines[j].match(/^:::\s*art\s+deco\s+([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)*)(?:\s+\S.*)?$/)
       if (m) {
-        const name = m[1]
-        j++
-        const raw: string[] = []
-        while (j < lines.length && lines[j].trim() !== ':::') { raw.push(lines[j]); j++ }
-        j++
+        const names = m[1].split(/\s+/).filter(Boolean)
+        const label = names[0]
+        const head = lines[j].replace(/^:::\s*art\s+deco\s*/, '')
+        const startLine = j + 1
+        const scan = collectBlockBody(lines, j + 1)
+        j = scan.end
+        const raw = scan.body
         const svgM = /<svg\b[^>]*viewBox="[^"]*"[\s\S]*<\/svg>/i.exec(raw.join('\n').trim())
-        const n = svgM ? svgElementCount(svgM[0]) : 0
-        if (svgM && n >= 6) {
+        const verdict = svgM ? checkSvgQuality(svgM[0], 'deco') : null
+        if (svgM && verdict && verdict.ok) {
           const idx = arts.length
-          arts.push({ svg: svgM[0], alt: '气泡角饰:' + name, wide: false })
-          decoMap[name] = { svg: svgM[0], alt: name, idx }
+          arts.push({ svg: svgM[0], alt: '气泡角饰:' + label, wide: false })
+          const spec: DecoSpec = { svg: svgM[0], alt: label, idx, hAt60: heightAtWidth(svgM[0], DECO_W) }
+          for (const nm of names) decoMap[nm] = spec
         } else {
-          warnings.push('气泡装饰素材 deco:' + name + ' 未达标（需带 viewBox 且图形元素 ≥6 个），已忽略')
+          const why = verdict && verdict.failures.length ? verdict.failures[0] : '块内没有可用的 SVG'
+          // 阶段 2：`::: art deco` 是**解析后的内部格式**，不该由主模型书写。走到这里说明
+          // 素材解析层没能把它恢复成库素材——提示改写法，而不是引导模型继续写内部容器。
+          warnings.push(
+            '现场角饰定义 deco:' + label + ' 不可用（' + why + '），已忽略：角饰请用 [[asset:bubble|素材ID|用途]] 引用，或用 [[deco:名称|说明]] 占位',
+          )
+          // 计划 §6：库素材**读取成功不等于验收完成**——排版拒收必须回写台账，
+          // 否则"库里读到了"会被当成交付成功，而正文里其实是个占位空框。
+          noteRejected(artRefs(head), startLine, why, true)
         }
         continue
       }
@@ -500,6 +705,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
 
   function collectList(): void {
     const ordered = /^\s*\d+\.\s+/.test(lines[i])
+    const startLine = i + 1
     const items: string[] = []
     while (i < lines.length) {
       const line = lines[i]
@@ -508,15 +714,16 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       items.push(inline(escapeHtml(m[1]), d))
       i++
     }
-    out.push(listBlock(d, ordered, items))
+    emit(listBlock(d, ordered, items), startLine)
   }
 
   function collectTable(): boolean {
+    const startLine = i + 1
     const rows: string[] = []
     while (i < lines.length && lines[i].trim().startsWith('|')) { rows.push(lines[i].trim()); i++ }
     if (rows.length < 2) { i -= rows.length; return false }
     if (!/^\|?[\s:|-]+\|?$/.test(rows[1].replace(/\s/g, ''))) { i -= rows.length; return false }
-    out.push(tableBlock(d, rows))
+    emit(tableBlock(d, rows), startLine)
     warnings.push('检测到表格：微信后台对表格支持有限，建议截图转图片后使用')
     return true
   }
@@ -528,11 +735,13 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
 
     // 围栏代码块
     if (line.startsWith('```')) {
+      const fenceLine = i + 1
       i++
       const code: string[] = []
       while (i < lines.length && !lines[i].trim().startsWith('```')) { code.push(lines[i]); i++ }
       i++
-      out.push(codeBlock(d, code))
+      // code: true —— 代码块是**合法**展示内容，泄漏检查必须跳过它（否则正文里的代码示例会被误杀）
+      emit(codeBlock(d, code), fenceLine, { code: true })
       continue
     }
 
@@ -541,7 +750,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     if (h) {
       const level = h[1].length
       if (d.key === 'promo' && level === 2) h2Counter++
-      out.push(heading(d, level, h[2], d.key === 'promo' && level === 2 ? h2Counter : null))
+      emit(heading(d, level, h[2], d.key === 'promo' && level === 2 ? h2Counter : null), i + 1)
       i++
       continue
     }
@@ -549,7 +758,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 分割线变体
     const hr = line.match(/^(-{3,}|\*{3,}|_{3,}|~{3,})$/)
     if (hr) {
-      out.push(divider(d, hr[1].charAt(0) === '*' ? '***' : hr[1].charAt(0) === '_' ? '___' : hr[1].charAt(0) === '~' ? '~~~' : '---'))
+      emit(divider(d, hr[1].charAt(0) === '*' ? '***' : hr[1].charAt(0) === '_' ? '___' : hr[1].charAt(0) === '~' ? '~~~' : '---'), i + 1)
       i++
       continue
     }
@@ -560,71 +769,121 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
 
     // 横幅 [[banner:主|副]]
     const bn = line.match(/^\[\[banner:([^|\]]+)(?:\|([^\]]+))?\]\]$/)
-    if (bn) { out.push(banner(d, bn[1], bn[2] || '')); i++; continue }
+    if (bn) { emit(banner(d, bn[1], bn[2] || ''), i + 1); i++; continue }
 
     // 装饰标题 [[title:文字]] / [[title:文字|box|vine]]
     const tt = line.match(/^\[\[title:([^\]|]+)(?:\|([a-z]+))?\]\]$/)
-    if (tt) { out.push(titleBlockStyled(d, tt[1], tt[2] || '', artUrls)); i++; continue }
+    if (tt) { emit(titleBlockStyled(d, tt[1], tt[2] || '', artUrls), i + 1); i++; continue }
 
     // 花边分隔线 [[lace]]
-    if (/^\[\[lace\]\]$/.test(line)) { out.push(laceDivider(d)); i++; continue }
+    if (/^\[\[lace\]\]$/.test(line)) { emit(laceDivider(d), i + 1); i++; continue }
 
     // 美术素材 ::: art [wide|inline] 说明 / ::: art deco 名称（第 21 轮：deco 为气泡角饰定义，预扫描已注册）
     const artC = line.match(/^:::\s*art(?:\s+(deco)\s+([a-zA-Z0-9_-]+))?(?:\s+(wide|inline))?\s*(.*)$/)
     if (artC) {
+      const artLine = i + 1
       if (artC[1] === 'deco') {
-        i++
-        while (i < lines.length && lines[i].trim() !== ':::') i++
-        i++
+        // 预扫描已消费并注册（合格）或已记入 rejectedArts（不合格）；主循环只需整体跳过。
+        i = collectBlockBody(lines, i + 1).end
         continue
       }
       const wide = artC[3] === 'wide'
       const alt = artC[4].trim() || '美术素材'
-      i++
-      const rawLines: string[] = []
-      while (i < lines.length && lines[i].trim() !== ':::') {
-        rawLines.push(lines[i])
-        i++
-      }
-      i++
-      const svgRaw = rawLines.join('\n').trim()
+      const artHead = line.replace(/^:::\s*art\s*(?:wide|inline)?\s*/, '')
+      const scan = collectBlockBody(lines, i + 1)
+      i = scan.end
+      const svgRaw = scan.body.join('\n').trim()
       const svgM = /<svg\b[^>]*viewBox="[^"]*"[\s\S]*<\/svg>/i.exec(svgRaw)
-      const n = svgM ? svgElementCount(svgM[0]) : 0
-      if (svgM && n >= 6) {
+      const verdict = svgM ? checkSvgQuality(svgM[0], wide ? 'wide' : 'inline') : null
+      if (svgM && verdict && verdict.ok) {
         const idx = arts.length
         arts.push({ svg: svgM[0], alt, wide })
         const imgStyle = wide
           ? 'width:100%;height:auto;display:block;margin:12px 0;border-radius:8px'
           : 'max-width:56%;height:auto;display:inline-block;vertical-align:middle;border-radius:8px'
         const imgTag = '<img src="@@ART' + idx + '@@" alt="' + escapeHtml(alt) + '" style="' + imgStyle + '" />'
-        out.push(wide ? imgTag : '<section style="text-align:center;margin:12px 0">' + imgTag + '</section>')
+        emit(wide ? imgTag : '<section style="text-align:center;margin:12px 0">' + imgTag + '</section>', artLine)
       } else {
-        warnings.push('美术素材未达标（需为带 viewBox 的 SVG 且图形元素 ≥6 个），已用占位文本替换')
-        out.push(P(d) + '（此处原为美术素材「' + escapeHtml(alt) + '」，未达标已略过）' + '</p>')
+        const why = verdict && verdict.failures.length ? verdict.failures[0] : '需为带 viewBox 的 SVG'
+        warnings.push('美术素材未达标（' + why + '），已用占位文本替换')
+        // 计划 §6：`compose`/渲染器必须返回失败素材的 slotId，回写台账与候选问题清单——
+        // 否则"库里读到了"会被当成交付成功，而正文里其实是个空框。
+        noteRejected(artRefs(artHead), artLine, why, false)
+        emit(P(d) + '（此处原为美术素材「' + escapeHtml(alt) + '」，未达标已略过）' + '</p>', artLine)
       }
       continue
     }
 
     // 照片位（第 28 轮，口径 A）：用户提供真实照片时用可替换占位块，发布前在微信后台换真图。
     // 不计素材数、不触发插画相关警告（有 photo 位即视为"以照片配图"意图）。
+    //
+    // 2026-09-29 质量恢复计划 §3.1（真实故障根因）：`::: photo 说明` 是**单行指令**，正文从下一行开始。
+    // 旧实现"一路扫到下一个 `:::`"造成的实际后果（文档 s1790565874610554000，3 处泄漏）：
+    // 照片位后面跟着普通段落和一个 `::: art` 素材块，全文只在**素材块末尾**有一个 `:::`，
+    // 于是照片位把段落、素材块头与整段 SVG 全吞进自己的"说明"，再 escapeHtml 成可见文字——
+    // 正文里 0 个有效素材、3 处转义 SVG 与内部 `::: art` 文本。程序错误用程序修：
+    // 这里改为**有边界**收集，且默认按单行解析；多行旧块只在无歧义时才兼容。
     const photoC = line.match(/^:::\s*photo(?:\s+(.*))?$/)
     if (photoC) {
       const head = (photoC[1] || '').trim()
-      i++
-      const notes: string[] = []
-      while (i < lines.length && lines[i].trim() !== ':::') {
-        const t = lines[i].trim()
-        if (t) notes.push(t)
-        i++
+      const startLine = i + 1
+      const scan = collectBlockBody(lines, i + 1)
+      const legacyEnd = scan.closed ? scanLegacyPhotoBody(lines, i + 1) : null
+      if (legacyEnd !== null) {
+        // 历史多行块：候选范围内**全是纯文本说明行**，且真的闭合。兼容读取，但记 info 级提示，
+        // 让作者/模型知道这种写法正在被淘汰（正式协议是单行指令）。
+        const notes = scan.body.map((l) => l.trim()).filter(Boolean)
+        i = legacyEnd + 1
+        const label = head || notes.shift() || '照片位'
+        const note = notes.length ? notes.join(' / ') : '（发布前在微信后台替换为真实照片）'
+        warnings.push('照片位使用了历史多行块写法（::: photo … :::）：仍可渲染，但正式写法是单行指令 `::: photo 说明`（下一行起即正文）')
+        issues.push({
+          code: 'parse.legacy-photo-block',
+          severity: 'info',
+          message: '照片位按历史多行块读取（正式写法是单行指令）',
+          line: startLine,
+          endLine: legacyEnd + 1,
+        })
+        emit(
+          '<section style="margin:0 0 16px;border:2px dashed #cbd5e1;border-radius:12px;padding:12px 14px;background:#f8fafc;text-align:left">' +
+            '<p style="margin:0 0 4px;font-size:14px;font-weight:700;color:#1f2d3d;letter-spacing:0.5px">【照片位】' + escapeHtml(label) + '</p>' +
+            '<p style="margin:0;font-size:12.5px;line-height:1.6;color:#8a94a6;letter-spacing:0.5px">' + escapeHtml(note) + '</p>' +
+            '</section>',
+          startLine,
+        )
+        continue
       }
+      // 单行指令：说明只取行内头部；紧随其后的行一律**退回正文**，照片位不吞任何后续内容。
       i++
-      const label = head || notes.shift() || '照片位'
-      const note = notes.length ? notes.join(' / ') : '（发布前在微信后台替换为真实照片）'
-      out.push(
+      if (!head) {
+        // 头部没写说明：这不是错误，但要说清"未闭合也不会吞正文"的语义（旧实现正是在这里吃文末）。
+        warnings.push('照片位 ::: photo 未写说明：请写成单行 `::: photo 说明`（说明写在同一行），下一行起即正文')
+        issues.push({
+          code: 'parse.photo-no-label',
+          severity: 'warning',
+          message: '照片位没有说明文字（单行指令应把说明写在同一行）',
+          line: startLine,
+          endLine: startLine,
+        })
+      }
+      if (scan.closed) {
+        // 存在一个孤立的 `:::`：旧的无界扫描会把它当成照片位的结束、并把中间内容当说明吞掉。
+        // 现在中间内容由主循环按正文正常渲染，那个 `:::` 会在走到它时被"孤立标记"分支跳过并上报。
+        // 这里只补一句协议说明——**不**把中间内容当说明，这是本次修复的关键。
+        issues.push({
+          code: 'parse.photo-trailing-close',
+          severity: 'warning',
+          message: '照片位是单行指令，后面不需要 `:::` 结尾；该标记将被跳过',
+          line: scan.end,
+          endLine: scan.end,
+        })
+      }
+      emit(
         '<section style="margin:0 0 16px;border:2px dashed #cbd5e1;border-radius:12px;padding:12px 14px;background:#f8fafc;text-align:left">' +
-          '<p style="margin:0 0 4px;font-size:14px;font-weight:700;color:#1f2d3d;letter-spacing:0.5px">【照片位】' + escapeHtml(label) + '</p>' +
-          '<p style="margin:0;font-size:12.5px;line-height:1.6;color:#8a94a6;letter-spacing:0.5px">' + escapeHtml(note) + '</p>' +
+          '<p style="margin:0 0 4px;font-size:14px;font-weight:700;color:#1f2d3d;letter-spacing:0.5px">【照片位】' + escapeHtml(head || '照片位') + '</p>' +
+          '<p style="margin:0;font-size:12.5px;line-height:1.6;color:#8a94a6;letter-spacing:0.5px">（发布前在微信后台替换为真实照片）</p>' +
           '</section>',
+        startLine,
       )
       continue
     }
@@ -634,41 +893,55 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     if (cont) {
       const kind = cont[1]
       const title = cont[2].trim()
-      i++
+      const contLine = i + 1
+      // 2026-09-29：改用**有边界**收集——遇到下一个块起点即停，不再"一路扫到下一个 `:::`"。
+      // 旧实现会把后面某个块的结束符当成自己的结束符，把中间内容整段并进本容器（计划 §3.1）。
+      const scan = collectBlockBody(lines, i + 1)
       const bodyLines: string[] = []
       const stepItems: string[] = []
-      while (i < lines.length && lines[i].trim() !== ':::') {
-        const l = lines[i].trim()
+      for (const rawLine of scan.body) {
+        const l = rawLine.trim()
         if (kind === 'steps' && /^[-*+]\s+/.test(l)) stepItems.push(l.replace(/^[-*+]\s+/, ''))
         else if (l !== '') bodyLines.push(l)
-        i++
       }
-      i++ // 跳过 :::
+      i = scan.end
+      if (!scan.closed) {
+        // 未闭合：已收集到的内容照常渲染（容器语义不因缺一个 `:::` 而丢内容），
+        // 但必须**说清楚**——其后正文可能被并入本容器。结构化问题带源文范围，供交付门禁定位。
+        warnings.push('容器 ' + kind + ' 未闭合（缺少结尾的 :::）：已按收集到的内容渲染，其后正文可能被并入该容器，请补上结尾的 :::')
+        issues.push({
+          code: 'parse.unclosed-block',
+          severity: 'blocking',
+          message: `容器 ${kind} 未闭合（缺少结尾的 :::），其后内容可能被并入该容器`,
+          line: contLine,
+          endLine: scan.end,
+        })
+      }
       if (kind === 'steps') {
-        out.push(steps(d, stepItems.map((s) => escapeHtml(s))))
+        emit(steps(d, stepItems.map((s) => escapeHtml(s))), contLine)
       } else if (kind === 'timeline') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
-        if (items.length >= 1) out.push(timelineBlock(d, items))
-        else out.push(P(d) + 'timeline 需至少 1 个节点（- 内容）' + '</p>')
+        if (items.length >= 1) emit(timelineBlock(d, items), contLine)
+        else emit(P(d) + 'timeline 需至少 1 个节点（- 内容）' + '</p>', contLine)
       } else if (kind === 'band') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
-        if (items.length >= 1) out.push(bandBlock(d, items, title))
-        else out.push(P(d) + 'band 需至少 1 行内容（- 文字）' + '</p>')
+        if (items.length >= 1) emit(bandBlock(d, items, title), contLine)
+        else emit(P(d) + 'band 需至少 1 行内容（- 文字）' + '</p>', contLine)
       } else if (kind === 'frame') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
-        if (items.length >= 1) out.push(frameBlock(d, items))
-        else out.push(P(d) + 'frame 需至少 1 行内容（- 文字）' + '</p>')
+        if (items.length >= 1) emit(frameBlock(d, items), contLine)
+        else emit(P(d) + 'frame 需至少 1 行内容（- 文字）' + '</p>', contLine)
       } else if (kind === 'cols') {
         const cols = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
-        if (cols.length >= 2) out.push(colsBlock(d, cols))
-        else out.push(P(d) + bodyLines.map((l) => inline(escapeHtml(l.replace(/^[-*+]\s+/, '')), d)).join('<br/>') + '</p>')
+        if (cols.length >= 2) emit(colsBlock(d, cols), contLine)
+        else emit(P(d) + bodyLines.map((l) => inline(escapeHtml(l.replace(/^[-*+]\s+/, '')), d)).join('<br/>') + '</p>', contLine)
       } else if (kind === 'imgrow') {
         const imgs = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => {
           const mm = l.replace(/^[-*+]\s+/, '').match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/)
           return mm ? { src: mm[2], alt: mm[1] } : null
         }).filter((x): x is { src: string; alt: string } => x !== null)
-        if (imgs.length >= 2) out.push(imgrowBlock(d, imgs))
-        else out.push(P(d) + 'imgrow 需至少 2 张图片（- ![说明](路径)）' + '</p>')
+        if (imgs.length >= 2) emit(imgrowBlock(d, imgs), contLine)
+        else emit(P(d) + 'imgrow 需至少 2 张图片（- ![说明](路径)）' + '</p>', contLine)
       } else if (kind === 'imgcard') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => l.replace(/^[-*+]\s+/, ''))
         let img: { src: string; alt: string } | null = null
@@ -678,21 +951,28 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
           if (mm && !img) { img = { src: mm[2], alt: mm[1] }; continue }
           caps.push(it)
         }
-        if (img) out.push(imgcardBlock(d, img, caps))
-        else out.push(P(d) + 'imgcard 需一张图片（第一项 - ![说明](路径)）' + '</p>')
+        if (img) emit(imgcardBlock(d, img, caps), contLine)
+        else emit(P(d) + 'imgcard 需一张图片（第一项 - ![说明](路径)）' + '</p>', contLine)
       } else {
-        out.push(card(d, title, bodyLines.map((s) => escapeHtml(s))))
+        emit(card(d, title, bodyLines.map((s) => escapeHtml(s))), contLine)
       }
       continue
     }
 
     // 提示气泡框 > [!KIND|deco] 标题（v10：|grass 等图案角饰）
-    const alert = line.match(/^>\s*\[!(\w+)(?:\|([a-z0-9-]+))?\]\s*(.*)$/)
+    // P0：角饰词放宽到大写字母与下划线，与 `::: art deco` 定义侧的口径一致——
+    // 否则模型写 `> [!KEY|Blossom]` 时会静默丢掉角饰（既不加也不警告）。
+    const alert = line.match(/^>\s*\[!(\w+)(?:\|([A-Za-z0-9_-]+))?\]\s*(.*)$/)
     if (alert) {
+      const alertLine = i + 1
       const kind = alert[1].toLowerCase()
       const decoName = alert[2] || ''
       if (decoName && !(DECO_MAP[decoName] && artUrls[DECO_MAP[decoName]]) && !decoMap[decoName]) {
-        warnings.push('气泡角饰 ' + decoName + ' 未定义：请先用 ::: art deco ' + decoName + ' 定义现场装饰素材')
+        warnings.push(
+          '气泡角饰 ' +
+            decoName +
+            ' 未定义：请在气泡前用 [[asset:bubble|素材ID或名称|用途]] 引用库素材，或用 [[deco:名称|说明]] 占位让系统制作',
+        )
       }
       const first = alert[3].trim()
       const body: string[] = []
@@ -702,19 +982,20 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         if (l !== '') body.push(l)
         i++
       }
-      out.push(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls, decoMap))
+      emit(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls, decoMap), alertLine)
       continue
     }
 
     // 普通引用
     if (line.startsWith('>')) {
+      const quoteLine = i + 1
       const quote: string[] = []
       while (i < lines.length && lines[i].trim().startsWith('>')) {
         const l = lines[i].trim().replace(/^>\s?/, '')
         if (l !== '') quote.push(l)
         i++
       }
-      out.push(quoteBlock(d, quote.map((s) => escapeHtml(s))))
+      emit(quoteBlock(d, quote.map((s) => escapeHtml(s))), quoteLine)
       continue
     }
 
@@ -724,10 +1005,26 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       const alt = imgLine[1]
       const src = imgLine[2]
       if (/^art:\/\//.test(src)) {
-        out.push('<section style="text-align:center;margin:12px 0"><img src="' + src + '" alt="' + alt + '" style="max-width:56%;height:auto;display:inline-block;vertical-align:middle" /></section>')
+        emit('<section style="text-align:center;margin:12px 0"><img src="' + src + '" alt="' + alt + '" style="max-width:56%;height:auto;display:inline-block;vertical-align:middle" /></section>', i + 1)
       } else {
-        out.push('<img src="' + src + '" alt="' + alt + '" style="max-width:100%;border-radius:8px;margin:12px 0;display:block" />')
+        emit('<img src="' + src + '" alt="' + alt + '" style="max-width:100%;border-radius:8px;margin:12px 0;display:block" />', i + 1)
       }
+      i++
+      continue
+    }
+
+    // 孤立块标记 `:::`（2026-09-29 计划 §3.1）：没有对应块起点的结束标记。
+    // 必须**显式**处理——不处理它会掉进下面"普通段落"分支：段落循环在 `l === ':::'` 处立刻 break，
+    // 产出空段落却**不推进 i**，于是主循环原地打转（死循环）。这里是确定性修复，不是兜底装饰。
+    if (line === ':::') {
+      warnings.push('发现孤立的块结束标记 `:::`（前面没有对应的 `::: card/steps/…` 起点）：已跳过，请检查正文块是否成对')
+      issues.push({
+        code: 'parse.orphan-close',
+        severity: 'warning',
+        message: '孤立的块结束标记 `:::`（前面没有对应的块起点）',
+        line: i + 1,
+        endLine: i + 1,
+      })
       i++
       continue
     }
@@ -739,16 +1036,17 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     if (line.startsWith('|')) { if (collectTable()) continue }
 
     // 普通段落（合并连续行）
+    const paraLine = i + 1
     const para: string[] = []
     while (i < lines.length) {
       const l = lines[i].trim()
       if (l === '' || /^(#{1,6})\s/.test(l) || /^(-{3,}|\*{3,}|_{3,}|~{3,})$/.test(l) || l.startsWith('```') ||
         l.startsWith('>') || /^\s*[-*+]\s+/.test(l) || /^\s*\d+\.\s+/.test(l) || l.startsWith('|') ||
-        /^:::\s*(card|steps|cols|imgrow|imgcard|timeline|band|frame|art)/.test(l) || l === ':::' || /^(\[\[banner:|\[\[title:)/.test(l)) break
+        /^:::\s*(card|steps|cols|imgrow|imgcard|timeline|band|frame|art|photo)/.test(l) || l === ':::' || /^(\[\[banner:|\[\[title:|\[\[lace)/.test(l)) break
       para.push(inline(escapeHtml(l), d))
       i++
     }
-    out.push(paraBlock(d, para.join('<br/>')))
+    emit(paraBlock(d, para.join('<br/>')), paraLine)
   }
 
   // 美术资产占位 art:// 替换（桌面版无微信资产库 → 一律移除并警告）
@@ -779,7 +1077,50 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     .replace(/<[^>]+>/g, ' ')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ').trim()
-  if (html2.length >= 20000) warnings.push('正文超过 20000 字符限制（当前约 ' + html2.length + '），微信会拒绝保存')
+
+  // ---- 内部源码泄漏检查（计划 §3.2；本次真实故障的**验收关键**） ----
+  // 为什么逐节点做而不是对整篇做全局字符串匹配：全局规则会把**合法代码示例**误杀
+  // （正文里贴一段 `<svg …>` 或 `::: art` 的代码是正当的）。所以：
+  //   · 跳过 code:true 的节点（围栏代码块）；
+  //   · 行内代码 span 在取可见文本时先剥掉。
+  // 检查的是**可见文本**：剥标签 + 反转义之后再找 `<svg` / `::: art` / `[[asset:`，
+  // 因为泄漏的形态正是"被 escapeHtml 转成可见文字的源码"。
+  for (let k = 0; k < out.length; k++) {
+    const meta = outMeta[k]
+    if (!meta || meta.code) continue
+    const text = visibleTextOf(out[k])
+    for (const p of LEAK_PATTERNS) {
+      const mm = p.re.exec(text)
+      if (!mm) continue
+      const at = meta.line
+      const snippet = clip(text.slice(Math.max(0, mm.index - 40), mm.index + 80), 120)
+      warnings.push(`正文出现内部源码泄漏（${p.what}）：${p.hint}`)
+      issues.push({
+        code: 'parse.leak',
+        severity: 'blocking',
+        message: `正文可见文字里泄漏了${p.what}——${p.hint}`,
+        line: at,
+        endLine: at,
+        evidence: snippet,
+      })
+      break // 同一节点只报一次
+    }
+  }
+
+  if (html2.length >= 20000) {
+    // 计划 §4：这条长度规则**尚未在微信后台验证过计算口径**（源文 / 渲染 HTML / 内嵌图片数据
+    // 与实际发布格式不是同一尺寸）。所以登记为明确的**长度风险**，不当作已验证的平台拒绝事实，
+    // 也不擅自移除这层保护。severity 用 warning（不是 blocking），由交付门禁按目标格式规则决定是否阻断。
+    warnings.push('正文超过 20000 字符限制（当前约 ' + html2.length + '），微信会拒绝保存')
+    issues.push({
+      code: 'limit.length-unverified',
+      severity: 'warning',
+      message: '渲染 HTML 超过 20000 字符（该口径未在真实发布格式上验证，先按长度风险登记）',
+      line: 0,
+      endLine: 0,
+      evidence: `html ${html2.length} 字符`,
+    })
+  }
   // 未知风格名且无自定义色板 → 警告（第 23 轮：风格不限预置，缺色板回退默认双色系）
   if (themeName && !pal && !custom) {
     warnings.push('风格「' + themeName + '」未收录且正文未提供 [[palette]] 自定义色板，已回退默认双色系')
@@ -788,26 +1129,83 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // 第 28 轮：照片位（::: photo）视为"真实照片配图"，不报"未包含美术素材"硬错。
   // 第 31 轮：照片位与装饰插画并存口径——纯照片位仍提示补组件装饰插画；有插画即不催数量。
   const photoUsed = /^:::\s*photo\b/m.test(String(md || ''))
-  if (arts.length === 0 && !photoUsed) {
-    warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
-  } else if (arts.length === 0 && photoUsed) {
-    warnings.push('正文只有照片位、没有任何装饰插画（[[img]]/[[deco]]）：真实照片是信息画面，横幅/气泡/小节等组件装饰位仍应配生成插画，与照片位错开同屏')
-  } else if (arts.length < 4 && !photoUsed) {
-    warnings.push('素材用量偏低（当前 ' + arts.length + ' 处，建议 5-8 处并覆盖各组件装饰位）')
-  }
-  // 组件化校验（第 17 轮：结构规则——容器 ≥2 + 气泡 ≥1 + 列表/引用 ≥1）
   const src = String(md || '')
   const containers = (src.match(/^:::\s*(?:steps|cols|card|band|frame|timeline)\b/gm) || []).length
   const bubbles = (src.match(/^>\s*\[!/gm) || []).length
   const listOrQuote = (src.match(/^\s*[-*+]\s+/gm) || []).length + (src.match(/^>\s*(?!\[!)/gm) || []).length
-  if (containers < 2 || bubbles < 1 || listOrQuote < 1) {
-    warnings.push(
-      '组件化不足（当前容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处；要求容器 ≥2 且气泡 ≥1 且列表或引用 ≥1）',
-    )
+
+  // P1（2026-09-24 调查 §5）：配额改为由**成品自身长度**分档（内容派生，不是前端意图判断）。
+  // 短通知不再被强塞组件与素材——否则自动质检会把一条短通知反复推回"长篇模板"重写。
+  // 注意：revise.fixableWarnings 是按 includes(key) 匹配 FIXABLE_KEYS 的，
+  // 所以 short 档的提示文案**刻意不含**那些子串，从而不会触发整篇自动重写。
+  // 分档阈值刻意偏低（350）：只有真正的短通知/快讯才免配额；一篇四五百字的成文仍按正常标准要求组件，
+  // 否则"短文豁免"会顺带把"没有组件的普通成文"也放过。
+  const scale: 'short' | 'mid' | 'long' = plainText.length < 350 ? 'short' : plainText.length < 1400 ? 'mid' : 'long'
+  const artFloor = scale === 'mid' ? 3 : 4
+  if (scale === 'short') {
+    if (arts.length === 0 && !photoUsed) {
+      warnings.push('短篇提示：未配插画素材（短通知可以不配；若要一点装饰，加 1 处 [[img:inline]] 即可）')
+    }
+    if (containers < 2 || bubbles < 1 || listOrQuote < 1) {
+      warnings.push(
+        '短篇提示：没有使用排版组件（容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处）；短通知保持现状即可，需要强调时加 1 个气泡或 1 处列表',
+      )
+    }
+  } else {
+    if (arts.length === 0 && !photoUsed) {
+      warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
+      issues.push({
+        code: 'quality.no-art',
+        severity: 'warning',
+        message: '正文未包含美术素材',
+        line: 0,
+        endLine: 0,
+      })
+    } else if (arts.length === 0 && photoUsed) {
+      warnings.push('正文只有照片位、没有任何装饰插画（[[img]]/[[deco]]）：真实照片是信息画面，横幅/气泡/小节等组件装饰位仍应配生成插画，与照片位错开同屏')
+      issues.push({
+        code: 'quality.photo-only',
+        severity: 'warning',
+        message: '正文只有照片位、没有任何装饰插画',
+        line: 0,
+        endLine: 0,
+      })
+    } else if (arts.length < artFloor && !photoUsed) {
+      warnings.push(
+        '素材用量偏低（当前 ' + arts.length + ' 处，建议 ' + artFloor + '-8 处并覆盖各组件装饰位）',
+      )
+      issues.push({
+        code: 'quality.low-art',
+        severity: 'warning',
+        message: `素材用量偏低（当前 ${arts.length} 处，建议 ${artFloor}-8 处）`,
+        line: 0,
+        endLine: 0,
+      })
+    }
+    // 组件化校验（第 17 轮：结构规则——容器 ≥2 + 气泡 ≥1 + 列表/引用 ≥1）
+    if (containers < 2 || bubbles < 1 || listOrQuote < 1) {
+      warnings.push(
+        '组件化不足（当前容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处；要求容器 ≥2 且气泡 ≥1 且列表或引用 ≥1）',
+      )
+      issues.push({
+        code: 'quality.low-structure',
+        severity: 'warning',
+        message: `组件化不足（容器 ${containers} / 气泡 ${bubbles} / 列表或引用 ${listOrQuote}）`,
+        line: 0,
+        endLine: 0,
+      })
+    }
   }
-  // 正文偏短提示（第 21 轮：默认应充实到 1500-2500 字）
+  // 正文偏短提示（第 21 轮：默认应充实到 1500-2500 字）——有意短篇是正常态，只作 info 展示
   if (plainText.length < 600) {
     warnings.push('正文偏短（约 ' + plainText.length + ' 字），建议充实内容至 1500-2500 字（用户明确要求短篇除外）')
+    issues.push({
+      code: 'quality.short-body',
+      severity: 'info',
+      message: `正文偏短（约 ${plainText.length} 字）`,
+      line: 0,
+      endLine: 0,
+    })
   }
-  return { html: html2, plainText, images, arts, warnings, mode: modeKey, modeLabel: d.label }
+  return { html: html2, plainText, images, arts, warnings, issues, rejectedArts, mode: modeKey, modeLabel: d.label }
 }

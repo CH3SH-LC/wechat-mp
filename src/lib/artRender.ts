@@ -32,6 +32,39 @@ export async function svgToPngDataUri(svg: string): Promise<string> {
   }
 }
 
+/**
+ * SVG → 小尺寸 PNG data URL（P2 视觉复核用）。
+ * 视觉接口按图计费且有单边像素上限，所以先缩到 max 边长再送去"看"；
+ * 渲染失败时退回原尺寸 PNG，再不行退回 SVG data URI（调用方据此跳过该候选）。
+ */
+export async function svgToThumbDataUri(svg: string, max = 256): Promise<string> {
+  const viewBox = /viewBox="\s*[\d.\-]+\s+[\d.\-]+\s+([\d.\-]+)\s+([\d.\-]+)"/.exec(svg)
+  const w = viewBox ? parseFloat(viewBox[1]) : 300
+  const h = viewBox ? parseFloat(viewBox[2]) : 300
+  if (!w || !h || w <= 0 || h <= 0) return svgDataUri(svg)
+  const scale = Math.min(1, max / Math.max(w, h))
+  const cw = Math.max(8, Math.round(w * scale))
+  const ch = Math.max(8, Math.round(h * scale))
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = cw
+    canvas.height = ch
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return svgDataUri(svg)
+    const img = new Image()
+    const ok = await new Promise<boolean>((resolve) => {
+      img.onload = () => resolve(true)
+      img.onerror = () => resolve(false)
+      img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
+    })
+    if (!ok) return svgToPngDataUri(svg)
+    ctx.drawImage(img, 0, 0, cw, ch)
+    return canvas.toDataURL('image/png')
+  } catch {
+    return svgToPngDataUri(svg)
+  }
+}
+
 // 把 compose 输出中的 @@ARTn@@ 占位逐一替换为渲染结果
 export async function renderArtPlaceholders(html: string, arts: { svg: string }[]): Promise<string> {
   let out = html

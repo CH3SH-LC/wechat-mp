@@ -1,94 +1,85 @@
-# wechat-mp-desktop 项目结构
+# 项目结构
 
-> 最后更新：2026-09-09
-> 新增、删除、重命名文件或目录时必须同步更新本文件。
+更新：2026-09-30（复测与第二轮指南）。本文维护模块位置；使用方式见 [开发指南](docs/DEVELOPMENT.md)，完整文档入口见 [文档导航](docs/README.md)。
 
----
-## 顶层结构
+## 顶层
+
+```text
 wechat-mp-desktop/
-├── CLAUDE.md              # 工作区入口指令
-├── README.md              # 项目说明（开发命令/密钥说明）
-├── STRUCTURE.md           # 本文件
-├── PROGRESS.md            # 详细开发进度
-├── PROGRESS-LITE.md       # 精简开发进度
-├── REQUIREMENTS.md        # 需求登记册（逐轮登记）
-├── index.html             # Vite 页面入口（lang zh-CN，无图标请求）
-├── package.json           # pnpm 前端依赖与脚本
-├── pnpm-workspace.yaml    # pnpm 11 构建许可（esbuild）
-├── tsconfig.json / tsconfig.node.json  # TypeScript 配置
-├── vite.config.ts         # Vite 配置（端口 1420 strictPort，Tauri 专用）
-├── public/                # 静态资源（空占位）
-├── scripts/
-│   ├── verify-ui.mjs      # E2E 冒烟：对话/创作/预览断言+截图（playwright；S1-S12 回归 + S13 素材工坊 + S14 素材复用/固化/改版影响）
-│   ├── compose-check.mjs  # composeMarkdown 转换器断言（node 直跑 TS）
-│   ├── compose-cli.mjs    # 命令行 compose：md → html（真实模型产物验证用）
-│   ├── live-knowledge-probe.mjs # 三层知识路由注入的真实模型验证（读库点文件 → persona → 模型 → compose）
-│   ├── live-style-choice.mjs    # 风格选型验证（同质注入 × 三主题，检查 theme 选择与反模板化）
-│   └── live-conformance.mjs # 真实模型合规验收闸门：A 照片位+装饰插画并存 / B 无照片纯插画 + V3-R3 场景 C 素材库清单→[[asset]] 复用（真机跑）
+├── CLAUDE.md                 协作规则
+├── GOAL.md                   项目目标、范围与完成标准
+├── README.md                 产品与安装入口
+├── REQUIREMENTS.md           当前需求、约束与待办
+├── PROGRESS.md               近期详细变更与里程碑
+├── PROGRESS-LITE.md          近期一句话摘要
+├── STRUCTURE.md              模块地图
+├── RELEASE-NOTES.md          版本发布记录
 ├── docs/
-│   ├── REQUIREMENTS-understanding.md  # 需求文档（目标态，2026-09-06 依 8 项意见修订；▲ 标未实现待迭代）
-│   ├── information/     # 需求报告（…quality-r17.md、knowledge-routing.md、style-choice.md、art-concrete.md、2026-09-09-v3-docs-assets-design.md V3 大版本设计：文档化+素材库+素材智能体分离）
-│   ├── ai-context/      # 注入内容对照（persona/prep 壳/素材智能体提示/mock 说明；V3-R3 已同步 search_assets 与素材库复用条款）
-│   └── artifacts/       # 验证产物归档（E2E 截图 + compose/注入/风格选型样例；verify-ui/compose-check 默认输出至此）
-├── src/                   # 前端源码
-│   ├── main.tsx           # React 入口
-│   ├── App.tsx            # 主布局：顶栏(对话/文档库 页签)+ 对话/文档库工作区；状态中枢（V3-R1：turn 尾段终稿自动落文档、applySession 文档快照恢复）
-│   ├── App.css            # 全局样式（顶栏/对话/预览/手机壳 + V3-R1 view-tabs/docs-pane）
-│   ├── components/
-│   │   ├── ChatPane.tsx   # 左中栏：消息流（净化+源码展开+busy 两档）+ 输入（无模式/风格控件、无 mock 演示按钮）
-│   │   ├── PreviewPane.tsx# 右栏：375px 手机壳 iframe 预览 + 质量条 + 缩放/复制/导出图片/导出HTML/清空（第34轮去发布草稿箱按钮）
-│   │   ├── SessionRail.tsx# 左侧常驻会话栏：列表/新建/切换/删除/当前高亮
-│   │   ├── DocsPane.tsx   # V3-R1 文档库工作区：自动保存的推文文档列表/打开/删除
-│   │   ├── AssetWorkshop.tsx # V3-R2 素材工坊工作区：选分类→素材智能体制作入库→语义元数据编辑→检索→替换源(version+1)→删除→影响扫描逐篇"用新版更新"
-│   │   └── SettingsPanel.tsx # 设置弹层：API Key/端点/模型，保存/恢复默认
-│   ├── lib/
-│   │   ├── compose.ts     # v2 排版语法 → 微信合法 HTML 确定性转换器（::: art 素材 + ::: photo 照片位 + 校验）
-│   │   ├── palettes.ts    # 风格主题表（知识库 8 风格色板：日系/国潮/校园/科技/极简/商务/手账/森系）
-│   │   ├── artRender.ts   # SVG 素材 → PNG data URI（canvas 2x；回退 svg data URI）
-│   │   ├── htmlToImage.ts # 第34轮 正文 HTML→图片：375px 版式 foreignObject 2x 光栅化 → 长图 + 按屏分页 PNG
-│   │   ├── exportImages.ts# 第34轮 导出图片桥：Tauri→export_images 落盘开目录 / 浏览器→逐张下载
-│   │   ├── image-agent.ts # 素材解析器(V3-R3)：[[asset:分类|名称|用途]] 库引用解析 + 传统占位先检索库（强命中才转引用）→ 未命中委托素材智能体 gen_svg（桌面现场补做自动入库 origin=article-fallback）；mockArtSvg 样例池
-│   │   ├── asset-library.ts # V3-R2 个人素材库双通道（Tauri assets 命令 / 浏览器 wxmp-assets-v1）：八类分类表 + CRUD + bigram 语义检索（风格软参考）+ sanitizeName
-│   │   ├── asset-agent.ts # V3-R2 素材智能体编排：kindForCategory + generateAssetSvg + makeWorkshopAsset（校验后入库）
-│   │   ├── persona.ts     # 统一系统提示词（V3-R3：创作段配图条款——不手写 SVG、有素材库清单先 [[asset]] 复用）
-│   │   ├── needs.ts       # 请求启发式（浏览器 mock 近似 + isCreateRequest 真实桌面 prep 触发判定）
-│   │   ├── retrieval.ts   # 知识取用：懒加载 + buildRegistry(注册表，≤3500 字，排版引擎组置顶) + loadEngineProtocol + runKnowledgeTool
-│   │   ├── prep.ts        # 创作前置工具循环：runPrep + PREP/WRITE_INSTRUCTION（理解型澄清/允许正文前说明；空回复重试不泄漏兜底话术）
-│   │   ├── chat.ts        # 对话通道：Tauri→Rust 流式 / 浏览器→本地 mock（内部测试桩；第32轮 REVISE_MARKER/缺组件样稿；V3-R3 增"素材库复用"样本 [[asset]] 引用）
-│   │   ├── extract.ts     # 围栏解析：extractHtml(html 直通) + splitAssistant(prose/code/v2=末个围栏) + collapseAssistantDraft(叠稿归一)
-│   │   ├── revise.ts      # 第32轮 自动质检自检：fixableWarnings(六类可修项，V3-R3 增 库素材引用缺失) + buildReviseContent + REVISE_MARKER/MAX_AUTO_REVISES=2（产物质量门禁，非对话状态机）
-│   │   ├── quality.ts     # 输出 HTML 质量检查（零 emoji/渐变/阴影/外链图/style 标签）
-│   │   ├── exportHtml.ts  # 导出：Tauri→export_html 命令 / 浏览器→<a download>
-│   │   ├── sessions.ts    # 多会话：Tauri→sessions 命令 / 浏览器→localStorage（含旧键迁移）
-│   │   ├── documents.ts   # V3-R1 推文文档：Tauri→documents 命令 / 浏览器→localStorage wxmp-docs-v1（终稿自动落盘/就地刷新/删除；V3-R3 snapshots 素材固化快照）
-│   │   └── settings.ts    # API 设置 + 公众号配置（wx_appid/wx_secret）：Tauri→save/load_settings / 浏览器→localStorage
-│   └── knowledge/         # 知识语料（文本/视觉/插图/其它 + 00-GUIDE/design-logic + 排版引擎协议）
-│       ├── 00-GUIDE.md    # 三层路由总表
-│       ├── design-logic-components.md
-│       ├── 排版引擎/      # engine-write-protocol.md（桌面 compose v2 引擎协议：语法/素材引用[[asset]]与占位/风格/审美 + 第33轮 §四.5/6 小标题/气泡写法要点）
-│       ├── 文本/ 视觉/ 插图/ 其它/   # 四方面 + 各方向 00-索引 + 点文件
-└── src-tauri/             # Rust 后端
-    ├── Cargo.toml         # 依赖：tauri2/reqwest(rustls)/serde + dev tokio
-    ├── tauri.conf.json    # 窗口 1380x880「智序 · 公众号推文助手」；productName 智序（发布轮品牌化）；bundle.resources 打包 使用手册.html
-    ├── capabilities/default.json  # core:default（含事件监听）
-    ├── resources/         # 发布轮：随安装包发布的资源
-    │   └── 使用手册.html   # 面向无技术背景用户的中文图文手册（单文件 HTML，应用内「使用手册」按钮打开）
-    ├── icons/             # 应用图标
-    └── src/
-        ├── main.rs        # 入口（调 lib::run）
-        ├── lib.rs         # Builder + 24 命令注册（chat_stream/gen_svg/refine_brief/prep_turn/export/open_manual/sessions/settings/documents/assets）+ WxTokenState setup
-        ├── chat.rs        # LLM 客户端：resolve_config(env>settings>~/.dsh)、SSE 流式（字节缓冲按行解码防中文乱码）、gen_svg（V3-R2 增 divider/heading 分类 kind）、refine_brief、prep_turn（V3-R3 tools 含 search_assets）、单测+live
-        ├── export.rs      # 导出 HTML + 第34轮 export_images（长图/分页 PNG 写 exports/img-*/并开目录，2 单测）
-        ├── manual.rs      # 发布轮：open_manual 定位并打开随包《使用手册》（find_manual 兼容资源根/resources 两布局，3 单测）
-        ├── documents.rs   # V3-R1 推文文档（documents/<id>/：meta+source.md+article.html，list/open/save/delete，6 单测；snapshots 素材固化字段）
-        ├── assets.rs      # V3-R2 个人素材库（assets/items/<id>/：meta+source.svg；list/add/get/update(替换源 version+1+影响扫描)/delete，5 单测）
-        ├── sessions.rs    # 多会话（workspace/sessions/<id>.json + state.json；旧 draft 迁移；5 单测）
-        ├── settings.rs    # API 设置 + 公众号配置（workspace/settings.json，损坏→默认，2+ 单测）
-        └── publish.rs     # 第26轮 微信草稿箱发布（休眠，UI 已撤）：access_token 缓存/素材上传/draft.add（9 纯函数单测；真实接口 LIVE-PENDING，第34轮起停用改图片手动上传）
+│   ├── README.md             文档导航与维护约定
+│   ├── DEVELOPMENT.md        开发、验证、打包
+│   ├── ai-context/README.md  提示词和知识注入源码索引
+│   ├── design/docs-assets.md V3 决策及实现差异
+│   │   working-bubble.md 「AI 工作中」气泡的决策与阶段口径
+│   │   repair-2026-09-28-batch1.md 素材复用故障的根因、修复口径与分批安排（批次一）
+│   │   repair-2026-09-28-batch2.md 等待控制、实际尺寸视觉检查与真机三小样验收（批次二）
+│   │   repair-2026-09-29-full.md 输出上限与推理档位的实测口径（查服务端而非猜）
+│   │   quality-recovery-plan-2026-09-29.md 最新稿源码泄漏与自动修复、完整版本回滚方案（A–E 五批已实施，含两处口径裁决）
+│   │   ds-repair-guide-2026-09-29.md 第一轮任务与实施时点记录（整体关闭结论已被第二轮复测更新）
+│   │   ds-repair-guide-2026-09-30.md 当前 DS 执行指南：复测缺口修复、回归、发布及已授权的少量真实模型验收
+│   │   improvement-review-2026-09-24.md 体验与素材问题调查建议（P0/P1/P2 已实施）
+│   ├── maintenance/          文档整理范围、证据与恢复说明
+│   └── artifacts/            发布期配图、排版样例、按日期归档的运行证据（2026-09-24/ 2026-09-28-repair/ 2026-09-29-e2e/ 2026-09-29-e2e-final/ 2026-09-29-photo-swallow/ 2026-09-29-capability-review/ 2026-09-29-repair-integrity/ 2026-09-29-repair-flow/ 2026-09-29-prep-contract/ 2026-09-29-preview-resource/）、README.md
+├── src/                      React 前端与运行时知识库
+├── src-tauri/                Rust 后端、配置与安装资源
+├── scripts/                  验证与手动渲染脚本
+├── public/                   静态资源
+├── index.html                页面入口
+├── package.json              前端依赖与命令
+├── pnpm-lock.yaml            依赖锁定
+├── pnpm-workspace.yaml       构建许可
+├── tsconfig*.json            TypeScript 配置
+└── vite.config.ts            Vite 配置
+```
 
-## 当前核心事实
-- 运行时：Node 24 / Rust 1.95；包管理器：pnpm 11（onlyBuiltDependencies esbuild）
-- 前端构建：`pnpm build`（tsc && vite build）；桌面运行：`pnpm tauri dev`
-- LLM：OpenAI 兼容接口，默认 https://api.deepseek.com/chat/completions，模型 deepseek-v4-flash（reasoning_effort max，与 DSH 一致；创作前置 prep_turn 用 tools/function-calling，省略 reasoning_effort；图像子智能体 gen_svg 专用 deepseek-chat，可 DEEPSEEK_IMAGE_MODEL 覆盖——v4-flash 画图推理失控）
-- 密钥：env DEEPSEEK_API_KEY → ~/.dsh/.credentials.yaml
-- 验证：`scripts/verify-ui.mjs`（playwright + 本机 chromium-1234）+ `cargo test`（含 `--ignored` live 冒烟）
+`.git/`、`.vscode/` 为仓库/编辑器配置；`node_modules/`、`dist/`、`src-tauri/target/` 为本地依赖或构建产物。
+
+`docs/artifacts/2026-09-30-ds-audit/` 新增第二轮审计精选副本：README、evidence-index、regression-inputs、总审计、facts/prep/preview 三专项及日志/截图。39 份原件副本按 SHA-256 校验；不是下一轮修复通过产物，内含调查脚本禁止原地运行。
+
+## 前端模块
+
+| 路径（src/ 下） | 职责 |
+| --- | --- |
+| main.tsx、App.tsx、App.css | 入口、工作区/回合编排和样式 |
+| components/ChatPane.tsx、WorkingBubble.tsx、PreviewPane.tsx、SessionRail.tsx | 对话、AI 工作中气泡（阶段标签+细节+计时）、375px 预览（四态标识：成品/已恢复上一版/草稿未通过/修复中 + 独立草稿导出入口）、会话侧栏 |
+| components/DocsPane.tsx、AssetWorkshop.tsx、SettingsPanel.tsx | 文档库、素材工坊、设置 |
+| lib/persona.ts、prep.ts、retrieval.ts、needs.ts、chat.ts | 系统提示、工具准备、知识读取、请求判断与双通道对话 |
+| lib/compose.ts、palettes.ts、artRender.ts、quality.ts | 排版、色板、SVG 渲染与质量检查；compose 返回**结构化解析问题**（稳定 code + 源文行范围）与被质检拒收的素材块（`issues` / `rejectedArts`） |
+| lib/delivery-quality.ts | 交付门禁：把解析/素材/栅格/HTML/正文完整性+容量+版本汇成一条问题清单，输出 `DeliveryVerdict`（阻断项为 0 才允许提交成品）；`bodyIntegrity` 按**规范化事实**（`kind\\|canon`）比对并给出具体丢失片段，`bodyText()` 提供正文投影（剔 SVG/行内代码/拒收占位）；`BodyApplicability` 三态显式区分"已比 / 不适用 / 比不了" |
+| lib/extract.ts、revise.ts | 提取成稿、归一叠稿和自动修订 |
+| lib/image-agent.ts、asset-agent.ts、asset-library.ts、asset-categories.ts | 素材解析复用与有界并发绘制（阶段 4：最多 2 个并发、同输入共享在途、位预算 240s）、制作与库操作；分类表（零依赖纯数据，解析层与工坊共用） |
+| lib/asset-resolve.ts、asset-ledger.ts、svg-quality.ts、svg-raster.ts | 引用解析与复用判定、一轮创作的素材结果表（成败/预算/指纹）、素材 SVG 确定性质检（解析层 / 按真实显示尺寸的栅格层） |
+| lib/trace.ts、vision.ts、progress.ts、preview-pick.ts、preview-safe.ts | 请求证据与失败分类（纯函数层）、视觉复核（限次与缓存）、任务阶段事件与展示文案、预览组件拾取、**预览显示层的外部资源抑制**（纯函数 `neutralizeExternalResources`：把外链 src/href/srcset/CSS url() 换成内联占位；门禁与导出仍用原始 HTML） |
+| lib/documents.ts、sessions.ts、settings.ts | 文档、会话和设置持久化（读失败与"为空"**区分**返回：`{ok:…}` / boolean，界面据此给失败态 + 重试） |
+| lib/exportHtml.ts、exportImages.ts、htmlToImage.ts | HTML/图片导出 |
+| knowledge/ | 文本、视觉、插图、其它及排版引擎协议；应用运行时加载，非历史文档 |
+
+## 桌面后端（src-tauri/ 下）
+
+- `src/main.rs` / `src/lib.rs`：启动、命令注册与状态管理。
+- `src/chat.rs`：DeepSeek SSE（含消息线上形态 `to_wire`/`build_messages`、回合预算）、prep、图像生成及补充说明、视觉复核；**模型真实上限运行时查询与缓存**（`GET /models`）、网络超时、每个模型调用都写一条请求证据；`tests::fake` 是可控假 HTTP 服务（延迟/超时/错误/取消/上限的离线测试）。
+- `src/documents.rs`：文档存储——**不可变版本目录 + 提交指针**（`documents/<docId>/{manifest.json, revisions/<revisionId>/{source.md,article.html,meta.json}, staging/<transactionId>/}`；写 staging → 校验 → 目录整体改名安装 → 一次 rename 提交指针；旧三文件布局迁移为 `revisions/legacy`）。命令：`list_documents`（`items` + `unreadable`）、`open_document`、`save_document`、`delete_document`、`list_document_revisions`、`open_document_revision`、`commit_document_revision`。
+- `src/assets.rs` / `src/sessions.rs` / `src/settings.rs`：本地数据域；列表读取**如实区分"读不出来"**（`unreadable` / `state_warning` / `scan_warning` / `load_error`），不再把 IO 失败折叠成"不存在"。
+- `src/cancel.rs`：运行取消句柄（按 runId 的 `watch` 信号、`run_cancellable` 包装、`cancel_run`/`cancel_reset` 命令）。
+- `src/trace.rs`：业务追踪日志（按回合独立 JSONL、轮转与大小上限、失败分类词表、单调时钟计时）。
+- `src/export.rs` / `src/manual.rs`：导出文件与打开手册。
+- `src/publish.rs`：旧草稿发布兼容逻辑，命令仍注册，当前界面入口停用。
+- `resources/使用手册.html`：安装包内置用户教程。
+- `tauri.conf.json`、`capabilities/`、`icons/`、`Cargo.toml`、`Cargo.lock`、`build.rs`：打包、安全能力、图标、依赖与构建。
+
+## scripts/
+
+- 当前检查：`verify-ui.mjs`、`compose-check.mjs`、`asset-resolve-check.mjs`、`svg-quality-check.mjs`、`progress-check.mjs`、`trace-check.mjs`、`raster-check.mjs`、`fixture-repair.mjs`、`delivery-quality-check.mjs`、`photo-swallow-check.mjs`（照片位吞并源码泄漏的回归；`--prove-red` 从 git 取修复前版本证红；用例 ⑥ 打在真实最新稿的整份只读副本上）、`asset-completion-check.mjs`（素材完成状态：排版拒收回写台账、复用路径同过适用门禁、预算不被自动流程重置）、`repair-integrity-check.mjs`（事实规范化与正文投影的纯函数回归：正反对照、口径一致、"比不了必须阻断"）、`repair-flow-check.mjs`（**真实 App** + 受控模型输出：丢事实组不得 accepted、保留组必须 accepted、trace 必须有 `bodyApplicability=applied`）、`prep-contract-check.mjs`（真实 `runPrep` + stub `prep_turn`：reply/compose/candidate 三分支、旧协议兼容、普通答疑不提交、参数非法、预算封顶无第 4 次请求）、`preview-resource-check.mjs`（从发送前记录所有请求：外链尝试必须为 0，且原始违规诊断仍在门禁记录里）、`live-conformance.mjs`、`live-three-samples.mjs`（真机三小样：CDP 驱动真实桌面应用打真实模型，需隔离工作区）。
+- `lib/ls-stub.mjs`：内存 localStorage 桩，让素材链路可无头驱动（供 `asset-resolve-check.mjs` 用）。
+- `lib/fixtures.mjs`：读取 `fixtures/` 下的真实失败样例；`fixtures/2026-09-28-basement/` 是 2026-09-28「筑基」失败稿 + 四枚库素材 + 当时告警的**只读**副本（脚本只读不写），`fixtures/deco-calibration/` 是角饰实际尺寸检查的校准样例（含真实库素材副本与两个合成退化样例），`fixtures/2026-09-29-photo-swallow/` 是照片位吞并后续素材块的失败样例（最小片段 + 真实结构裁剪版 + **真实 `source.md` 整份只读副本**，含前后对比证据）。
+- 手动转换：`compose-cli.mjs`。
+- 旧专项实验：`live-knowledge-probe.mjs`、`live-style-choice.mjs`；保留代码，使用限制见开发指南。

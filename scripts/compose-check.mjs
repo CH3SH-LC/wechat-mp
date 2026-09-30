@@ -1,7 +1,12 @@
 ﻿// compose-check.mjs —— composeMarkdown 转换器校验（第 14/15 轮）
 // 用法：node scripts/compose-check.mjs [outDir]
 import { composeMarkdown, svgElementCount } from '../src/lib/compose.ts'
+import { buildReviseContent, fixableWarnings, locateIssues } from '../src/lib/revise.ts'
 import { writeFileSync } from 'fs'
+
+// P1：组件化/素材配额按成品长度分档（<600 字为短篇档，不再强塞组件）。
+// 需要触发长文档警告的用例必须先把正文撑过 600 字。
+const FILLER = '这是一段用来把正文撑到长文档位的填充文字，重复若干遍以确保总长度超过六百字。'.repeat(18)
 
 const FLAG_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210" fill="none">
 <rect x="60" y="140" width="5" height="62" fill="#c96f4a"/>
@@ -110,14 +115,25 @@ check('steps numbered circles', (r.html.match(/border-radius:50%/g) || []).lengt
 check('band rgba pattern', r.html.includes('rgba(') && r.html.includes('band') === false)
 check('badge rendered', r.html.includes('border-radius:20px'))
 check('title box rendered (campus blue)', r.html.includes('border:2px solid #2f6fed'))
-check('key bubble rendered (campus vivid)', r.html.includes('padding:16px 18px 14px;background:#2f6fed'))
+// P0：气泡底部内边距改为按角饰实际高度预留（避免压字 / vivid 气泡 overflow:hidden 裁切），
+// 故断言语义而非固定像素值。
+check('key bubble rendered (campus vivid)', /padding:16px 18px \d+px;background:#2f6fed/.test(r.html))
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
-check('bubble deco rendered (corner img)', r.html.includes('width:60px;height:auto;pointer-events:none') && (r.html.match(/@@ART/g) || []).length >= 5)
+check('bubble deco rendered (corner img)', r.html.includes('width:60px;height:auto;max-height:56px;pointer-events:none') && (r.html.match(/@@ART/g) || []).length >= 5)
 check('no short-body warning', !r.warnings.some((w) => w.includes('正文偏短')))
-const noComp = composeMarkdown('## 标题\n\n- 列表项\n\n正文段落。', { mode: 'text' })
+const noComp = composeMarkdown(`## 标题\n\n- 列表项\n\n${FILLER}`, { mode: 'text' })
 check('componentized warning (no container/bubble)', noComp.warnings.some((w) => w.includes('组件化不足')))
+
+// P1（2026-09-24 调查 §5）：短通知不得被强塞组件与素材，也不得因此触发整篇自动重写
+const shortNotice = composeMarkdown('## 停水通知\n\n明天上午 9 点到 11 点停水，请提前储水。\n\n- 请提前储水\n', { mode: 'text' })
+check('短通知不报组件化不足', !shortNotice.warnings.some((w) => w.includes('组件化不足')), shortNotice.warnings.join('|'))
+check('短通知不报素材配额', !shortNotice.warnings.some((w) => w.includes('素材用量偏低') || w.includes('未包含美术素材')))
+check('短通知给出非可修复的短篇提示', shortNotice.warnings.some((w) => w.includes('短篇提示')))
+check('短通知不触发自动重写', fixableWarnings(shortNotice.warnings).length === 0, JSON.stringify(fixableWarnings(shortNotice.warnings)))
+// 长文仍按原口径要求组件（短篇放宽不得顺带废掉长文质量闸门）
+check('长文仍报组件化不足', noComp.warnings.some((w) => w.includes('组件化不足')))
 check('SAMPLE componentized clean', !r.warnings.some((w) => w.includes('组件化不足')))
 const shortBody = composeMarkdown('::: art deco a\n' + FLOWER_SVG + '\n:::\n\n> [!KEY|b] 标题\n> 内容\n\n正文一句话。', { mode: 'text' })
 check('short body warning', shortBody.warnings.some((w) => w.includes('正文偏短')))
@@ -125,6 +141,25 @@ check('undefined deco warning', shortBody.warnings.some((w) => w.includes('气�
 check('art collected 5 (2 wide)', r.arts.length === 5 && r.arts.filter((a) => a.wide).length === 2, `arts=${r.arts.length}`)
 check('art placeholder in html', r.html.includes('@@ART0@@'))
 check('art wide img style', r.html.includes('width:100%;height:auto;display:block;margin:12px 0'))
+
+// 1e) P0（2026-09-24 调查 §2）：角饰块多别名——一个 `::: art deco` 定义可被多个引用词命中，
+// 且只占一个 arts 条目（否则 @@ARTn@@ 索引与素材用量统计错位）。
+const multiAlias = composeMarkdown(
+  '::: art deco aliasA aliasB asset-id\n' + FLOWER_SVG + '\n:::\n\n> [!KEY|aliasB] 标题\n> 内容\n\n> [!TIP|aliasA] 标题\n> 内容',
+  { mode: 'text' },
+)
+check('multi-alias deco registers one art', multiAlias.arts.length === 1, `arts=${multiAlias.arts.length}`)
+check('multi-alias deco resolves aliasB', !multiAlias.warnings.some((w) => w.includes('aliasB 未定义')))
+check('multi-alias deco resolves aliasA', !multiAlias.warnings.some((w) => w.includes('aliasA 未定义')))
+check('multi-alias deco renders both bubbles', (multiAlias.html.match(/@@ART0@@/g) || []).length === 2)
+
+// P0：角饰避让——气泡底部内边距随角饰高度变化（方角饰比扁角饰留得多）
+const tallDeco = '::: art deco t\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" fill="none"><circle cx="220" cy="220" r="40" fill="#c96f4a"/><circle cx="250" cy="200" r="18" fill="#e8b48a"/><path d="M170 260 q30 -30 80 -20" stroke="#5f8d8a" stroke-width="4" fill="none"/><circle cx="200" cy="250" r="10" fill="#8fb8a4"/></svg>\n:::\n\n> [!KEY|t] 标题\n> 内容'
+const flatDeco = '::: art deco f\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 160" fill="none"><circle cx="220" cy="80" r="30" fill="#c96f4a"/><circle cx="255" cy="60" r="14" fill="#e8b48a"/><path d="M170 130 q30 -20 80 -14" stroke="#5f8d8a" stroke-width="4" fill="none"/><circle cx="195" cy="110" r="9" fill="#8fb8a4"/></svg>\n:::\n\n> [!KEY|f] 标题\n> 内容'
+const tallPad = Number(/padding:16px 18px (\d+)px/.exec(composeMarkdown(tallDeco, { mode: 'auto' }).html)?.[1] ?? 0)
+const flatPad = Number(/padding:16px 18px (\d+)px/.exec(composeMarkdown(flatDeco, { mode: 'auto' }).html)?.[1] ?? 0)
+check('deco clearance grows with ornament height', tallPad > flatPad && flatPad > 14, `tall=${tallPad} flat=${flatPad}`)
+check('deco clearance capped', tallPad <= 76, `tall=${tallPad}`)
 
 // 1c) 主题：opts.theme（UI）优先于正文声明；日系底色/主色落地
 const uiTheme = composeMarkdown(SAMPLE, { mode: 'auto', theme: 'japanese' })
@@ -151,7 +186,8 @@ check('alias theme no unknown-style warning', !aliasTheme.warnings.some((w) => w
 
 // 第 28 轮：照片位（::: photo）渲染为可替换占位块。第 31 轮：照片位与装饰插画并存口径——
 // 纯照片位不报"未包含美术素材"硬错，但软提示补装饰插画；照片位 + 已落地插画 → 素材告警清零
-const photoDoc = '::: photo 活动现场全景\n主席台与观众席，拍一张横幅视角\n:::\n\n正文内容。'
+// 注意：该口径属长文档档（<600 字的短篇档改用「短篇提示」，不再软催装饰插画）
+const photoDoc = '::: photo 活动现场全景\n主席台与观众席，拍一张横幅视角\n:::\n\n' + FILLER
 const pr = composeMarkdown(photoDoc, { mode: 'text' })
 check('photo block rendered', pr.html.includes('【照片位】') && pr.html.includes('dashed'))
 check('photo does not false-flag no-material', !pr.warnings.some((w) => w.includes('未包含美术素材')))
@@ -161,9 +197,9 @@ const par = composeMarkdown(photoArtDoc, { mode: 'text' })
 check('photo + art coexists no material warning', par.arts.length === 1 && !par.warnings.some((w) => w.includes('装饰插画')) && !par.warnings.some((w) => w.includes('素材用量偏低')))
 
 // 1a) 素材用量警告：0 处与不足 4 处均提示
-const zero = composeMarkdown('## 标题\n\n正文段落，没有任何素材。', { mode: 'text' })
+const zero = composeMarkdown(`## 标题\n\n${FILLER}`, { mode: 'text' })
 check('zero-art warning', zero.warnings.some((w) => w.includes('未包含美术素材')))
-const low = composeMarkdown('::: art inline 一\n' + FLOWER_SVG + '\n:::\n\n::: art inline 二\n' + FLOWER_SVG + '\n:::\n\n正文。', { mode: 'text' })
+const low = composeMarkdown('::: art inline 一\n' + FLOWER_SVG + '\n:::\n\n::: art inline 二\n' + FLOWER_SVG + '\n:::\n\n' + FILLER, { mode: 'text' })
 check('low-art (2) warning', low.arts.length === 2 && low.warnings.some((w) => w.includes('素材用量偏低')))
 
 // 1b) 素材元素计数：样本 ≥6；劣质素材（<6）被拦截
@@ -191,11 +227,82 @@ check('local image warning', a.warnings.some((w) => w.includes('本地图片')))
 check('table warning', a.warnings.some((w) => w.includes('表格')))
 check('table rendered', a.html.includes('<table style='))
 
+// 3b) P1 局部修订：可定位到行的问题走"只改这几行"口径，结构问题才整篇重写
+const localV2 = '第一段正文。\n\n> [!KEY|second] 记得带\n> 内容\n\n末段。'
+const localMsg = buildReviseContent(localV2, ['气泡角饰 second 未定义：请先用 ::: art deco second 定义现场装饰素材'])
+check('局部问题定位到行', locateIssues(localV2, ['气泡角饰 second 未定义：…'])[0]?.line === 3)
+check('局部问题要求逐字保留', localMsg.includes('逐字保留') && localMsg.includes('第 3 行'))
+check('局部问题附上原行文本', localMsg.includes('> [!KEY|second] 记得带'))
+const structMsg = buildReviseContent(localV2, ['组件化不足（当前容器 0 个 / 气泡 1 个 / 列表或引用 1 处）'])
+check('结构问题仍走整篇修订', !structMsg.includes('逐字保留') && structMsg.includes('按下列问题修订重写一遍'))
+const mixedMsg = buildReviseContent(localV2, ['气泡角饰 second 未定义', '素材用量偏低（当前 1 处）'])
+check('局部+结构混合走整篇修订', !mixedMsg.includes('逐字保留'))
+
 // 4) 普通对话文本（无语法）不产生 HTML 结构
 const c = composeMarkdown('就是随便聊聊，没有什么排版。', { mode: 'auto' })
 check('plain chat text mode text', c.mode === 'text')
 check('paragraph wrapped', c.html.includes('<p style='))
 
 writeFileSync(`${outDir}/compose-sample.html`, r.html, 'utf8')
-console.log(failed === 0 ? 'COMPOSE OK' : `COMPOSE FAILED (${failed})`)
+
+// ============================================================================
+// 2026-09-29 质量恢复计划 §3：照片位与块解析（真实故障 s1790565874610554000 的回归）
+// 故障形态：`::: photo` 后面跟着普通段落与一个 `::: art` 素材块，全文只在**素材块末尾**有一个 `:::`。
+// 旧实现"一路扫到下一个 `:::`"→ 照片位把段落 + 素材块头 + 整段 SVG 吞进自己的"说明"，
+// 再 escapeHtml 成可见文字：成品 0 个有效 art、3 处转义 SVG、3 处内部 `::: art` 文本。
+// 下面每条断言都可证伪——把 collectBlockBody 换回无界扫描即变红。
+// ============================================================================
+const visibleOf = (html) =>
+  html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+
+// ① 单行照片位 + 段落 + art 块：三者都要独立渲染，源文范围不跨块
+const swallow = `::: photo 现场照片①｜慰问讲话\n\n这是照片位后面的正文段落，绝不能被吞进照片说明。\n\n::: art wide 收尾插画\n${FLOWER_SVG}\n:::\n\n这一段在素材块之后，同样必须保留。`
+const sw = composeMarkdown(swallow, { mode: 'text' })
+const swVisible = visibleOf(sw.html)
+check('单行照片位不吞后续段落', swVisible.includes('绝不能被吞进照片说明'))
+check('单行照片位不吞后续素材块', sw.arts.length === 1, `arts=${sw.arts.length}`)
+check('单行照片位不吞块后正文', swVisible.includes('同样必须保留'))
+check('成品可见文本无转义 SVG', !swVisible.includes('<svg'))
+check('成品可见文本无内部 ::: art', !/:::\s*art/.test(swVisible))
+check('泄漏检查报 blocking parse.leak', sw.issues.some((i) => i.code === 'parse.leak' && i.severity === 'blocking') === false, '本用例不该有泄漏')
+check('照片位本身仍渲染', swVisible.includes('【照片位】'))
+
+// ② 历史多行照片块（纯文本说明 + 显式闭合）仍兼容——不能为了修故障把合法旧块判死
+const legacyPhoto = '::: photo 老照片位\n第一行说明\n第二行说明\n:::\n\n正文照常。'
+const lp = composeMarkdown(legacyPhoto, { mode: 'text' })
+check('历史多行照片块仍兼容', visibleOf(lp.html).includes('第一行说明') && visibleOf(lp.html).includes('第二行说明'))
+check('历史多行块记 info（非阻断）', lp.issues.some((i) => i.code === 'parse.legacy-photo-block' && i.severity === 'info'))
+check('历史多行块不误报泄漏', !lp.issues.some((i) => i.code === 'parse.leak'))
+
+// ③ 歧义输入：单行照片位 + 空行 + 段落 + 后面某个块的 `:::` → 必须按单行处理，不吞正文
+const ambiguous = '::: photo 单行说明\n\n段落甲\n\n::: card 卡片\n- 内容\n:::\n\n段落乙'
+const am = composeMarkdown(ambiguous, { mode: 'text' })
+check('歧义输入按单行解析', visibleOf(am.html).includes('段落甲') && visibleOf(am.html).includes('段落乙'))
+check('歧义输入不吞卡片内容', visibleOf(am.html).includes('内容'))
+check('歧义输入不产生转义 SVG/协议泄漏', !am.issues.some((i) => i.code === 'parse.leak'))
+
+// ④ 孤立 `:::` 必须被显式跳过（旧实现会掉进段落分支不推进 i → 死循环）
+const orphan = '正文一段。\n\n:::\n\n正文二段。'
+const orph = composeMarkdown(orphan, { mode: 'text' })
+check('孤立 ::: 被上报而非静默', orph.issues.some((i) => i.code === 'parse.orphan-close'))
+check('孤立 ::: 之后正文照常渲染', visibleOf(orph.html).includes('正文二段'))
+
+// ⑤ 未闭合容器：有显式 blocking 问题 + 带源文行范围（供交付门禁定位）
+const unclosed = '::: card 标题\n- 一行内容'
+const uc = composeMarkdown(unclosed, { mode: 'text' })
+const ucIssue = uc.issues.find((i) => i.code === 'parse.unclosed-block')
+check('未闭合容器报 blocking', ucIssue?.severity === 'blocking')
+check('未闭合容器带源文行范围', ucIssue?.line === 1 && ucIssue.endLine >= 1, JSON.stringify(ucIssue))
+
+// ⑥ 素材被质检拒收 → rejectedArts 回写（供素材位台账定位 slotId）
+const rejected = '::: art wide as-abc123 说明\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="#ccc"/></svg>\n:::'
+const rj = composeMarkdown(rejected, { mode: 'text' })
+check('拒收素材记入 rejectedArts', rj.rejectedArts.length === 1, `n=${rj.rejectedArts.length}`)
+check('拒收记录带别名候选（可回写台账）', rj.rejectedArts[0]?.refs.includes('as-abc123'), JSON.stringify(rj.rejectedArts[0]?.refs))
+check('拒收素材报 blocking asset.rejected', rj.issues.some((i) => i.code === 'asset.rejected' && i.severity === 'blocking'))
+
+console.log(failed === 0 ? 'PHOTO-PARSE OK' : `PHOTO-PARSE FAILED (${failed})`)
 process.exit(failed === 0 ? 0 : 1)

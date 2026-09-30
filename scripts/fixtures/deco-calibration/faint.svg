@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" fill="none">
+<!-- 不可接受样例：形状、位置、尺寸都与 clear.svg 相同，但颜色接近白色——
+     在白色正文底上等于看不见（"浅色会消失"）。用来单独校准对比度阈值。 -->
+<path d="M120 190 C150 120 200 80 268 62 C264 130 220 178 150 194 Z" fill="#f6f8fb"/>
+<path d="M150 194 C170 150 210 108 262 68" stroke="#eef1f6" stroke-width="8" fill="none" stroke-linecap="round"/>
+<circle cx="272" cy="160" r="16" fill="#f2f4f8"/>
+</svg>

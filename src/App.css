@@ -29,14 +29,12 @@ body {
   flex: 0 0 auto;
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; }
-.brand-sub { font-weight: 400; font-size: 12px; color: var(--sub); letter-spacing: 1px; }
 .logo {
   width: 18px; height: 18px; border-radius: 5px;
   background: linear-gradient(135deg, #2f6fed, #4f8ff7);
   display: inline-block;
 }
 .topbar-meta { display: flex; gap: 14px; color: var(--sub); font-size: 12px; }
-.topbar-meta .hint { opacity: 0.75; }
 
 /* ---------- 工作区 ---------- */
 .workspace {
@@ -61,10 +59,6 @@ body {
 .rail-new { padding: 4px 12px; font-size: 12px; border-radius: 8px; }
 .session-rail .session-list { padding: 4px 8px 8px; }
 .session-rail .sess-row { padding: 6px 8px; }
-.rail-foot {
-  margin-top: auto; padding: 8px 14px; font-size: 11px; color: var(--sub);
-  border-top: 1px solid var(--border);
-}
 
 /* ---------- 对话栏 ---------- */
 .chat-pane {
@@ -97,6 +91,25 @@ body {
 .q-title { font-weight: 700; }
 .q-list { margin: 4px 0 0; padding-left: 16px; }
 .q-list li { line-height: 1.6; }
+
+/* 阻断项逐条列明（质量恢复计划 §8 第四条 / §10 末行）：
+   不允许"红了就是不合格"——每条给出稳定代码 + 一句话 + 条数，通过时同样给出"阻断 0 条"的文字结论。
+   仅在传入统一判定（data-strip-source="verdict"）时出现；只看 quality 的旧路径渲染与样式不变。 */
+.quality-strip[data-strip-source="verdict"] { max-height: 260px; }
+.q-blockers { margin-top: 4px; }
+.qb-head { font-weight: 700; }
+.qb-list { list-style: none; margin: 2px 0 0; padding: 0; }
+.qb-list li { display: flex; align-items: baseline; gap: 6px; padding: 2px 0; line-height: 1.6; }
+.qb-code {
+  flex: 0 0 auto; padding: 0 4px; border-radius: 4px; background: rgba(0, 0, 0, 0.07);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace; font-size: 11px;
+}
+.qb-msg { flex: 1 1 auto; word-break: break-all; }
+.qb-count { flex: 0 0 auto; font-weight: 700; }
+.q-clear { margin-top: 4px; }
+.q-unverified { margin-top: 4px; opacity: 0.85; }
+/* 统一判定没覆盖到的既有 checkHtml 问题：照旧列出来，别因为换了清单就少显示问题 */
+.q-legacy { margin-top: 4px; }
 .chat-empty { color: var(--sub); font-size: 13px; margin: auto; text-align: center; max-width: 340px; }
 .chips { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
 .chip {
@@ -137,10 +150,41 @@ body {
   font-size: 11.5px; line-height: 1.55; color: #2b3a4a; white-space: pre-wrap; word-break: break-word;
   max-height: 44vh; overflow-y: auto;
 }
-.typing { color: var(--sub); font-size: 12px; padding-left: 2px; }
-.knowledge-note {
-  color: var(--sub); font-size: 11.5px; background: #eef3fb; border-radius: 6px; padding: 4px 8px;
+
+/* ---------- 「AI 工作中」气泡 ----------
+   合并原先分散的三处指示（.typing 的"正在思考…/正在生成…"、.task-progress 的一行步骤、
+   空气泡里的"…"）：阶段标签 + 真实细节 + 本轮已耗时。纯展示，不参与对话流程。 */
+.work-msg { animation: wb-in 0.18s ease-out; }
+@keyframes wb-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.work-bubble {
+  display: inline-flex; align-items: baseline; gap: 8px; max-width: 96%;
+  background: #f2f4f7; border: 1px solid #e4e8ee; border-radius: 2px 12px 12px 12px;
+  padding: 8px 12px; font-size: 12.5px; line-height: 1.5;
 }
+.wb-dot {
+  flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  animation: wb-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wb-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+@media (prefers-reduced-motion: reduce) {
+  .work-msg { animation: none; }
+  .wb-dot { animation: none; }
+}
+.wb-label { flex: 0 0 auto; font-weight: 700; color: var(--accent); }
+.wb-detail { flex: 1 1 auto; min-width: 0; color: #4a5563; word-break: break-word; }
+.wb-time {
+  flex: 0 0 auto; color: var(--sub); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; /* 秒数跳动时宽度不抖 */
+}
+
+/* P2：参考图条（随下一条消息发送，仅本轮有效） */
+.attach-input { display: none; }
+.attach-strip { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px 0; }
+.attach-chip { position: relative; display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+.attach-chip img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); }
+.attach-del { font-size: 10.5px; color: var(--sub); background: none; border: none; cursor: pointer; padding: 0; }
+.attach-del:hover { color: #c0392b; }
+.attach-err { font-size: 11.5px; color: #c0392b; padding: 4px 12px 0; }
 
 .chat-input-row {
   display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); align-items: flex-end;
@@ -174,6 +218,44 @@ body {
 .mini-publish { border-color: var(--green); color: var(--green); }
 .mini-publish:hover:not(:disabled) { border-color: var(--green); color: var(--green); background: #e4f4ec; }
 
+/* ---------- 文档状态标识（草稿 / 成品）----------
+   质量恢复计划 §8：预览必须说清"显示的是草稿还是已验收成品"，聊天里的新稿不能被误读成已生效。
+   四种状态共用一套版式，只换配色；文案全部来自 PreviewPane 的 DOC_STATE_TEXT，这里不含判断逻辑。
+   docState 为空时该容器不渲染，因此无需"隐藏态"样式。 */
+.doc-state {
+  flex: 0 0 auto; margin: 0 12px 10px; padding: 8px 12px; border-radius: 8px;
+  border: 1px solid transparent; font-size: 12.5px; line-height: 1.6;
+}
+.doc-state .ds-line { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.doc-state .ds-title { font-weight: 700; }
+.doc-state .ds-meta { font-size: 11.5px; opacity: 0.85; }
+.doc-state .ds-detail { margin-top: 2px; word-break: break-all; }
+/* 成品（已验收 / 上一版成品）：与"通过"同一族的绿色 */
+.ds-accepted, .ds-restored { background: #e4f4ec; border-color: #bfe5d2; color: #1f6b4a; }
+/* 草稿未通过：失败色，一眼可见 */
+.ds-draft-failed { background: #fdecec; border-color: #f3c3c3; color: #8f2f2f; }
+/* 修复中：进行中色（与 .compose-warn 同族的琥珀色）——既不是通过也不是失败 */
+.ds-repairing { background: #fdf6ec; border-color: #f0dcb4; color: #8a6a2f; }
+
+/* 草稿导出标识（§8 第三条）：失败候选允许取回，但不静默当成品交付 */
+.draft-export-note {
+  flex: 0 0 auto; margin: 0 12px 10px; padding: 6px 10px; border-radius: 6px;
+  background: #fdf6ec; border: 1px solid #f0dcb4; color: #8a6a2f;
+  font-size: 11.5px; line-height: 1.6; word-break: break-all;
+}
+
+/* 独立的草稿取回入口组（与成品导出按钮并列但分开）：导出的是 draftHtml，不是预览里那份。
+   draftHtml 为空时整组不渲染，因此无需"隐藏态"样式。 */
+.draft-export {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0 12px 10px; padding: 6px 10px; border-radius: 6px;
+  background: #fdf6ec; border: 1px solid #f0dcb4; color: #8a6a2f; font-size: 11.5px;
+}
+.draft-export .de-label { font-weight: 700; }
+
+/* 草稿预览：手机框加虚线边框再给一次提示。文字标识（.doc-state）才是主证据，颜色只是辅助 */
+.preview-body[data-doc-draft="1"] .phone { border-style: dashed; border-color: #d8b878; }
+
 .export-msg {
   flex: 0 0 auto; margin: 0 12px 10px; padding: 6px 10px; border-radius: 6px;
   background: #eef3fb; color: #2457c4; font-size: 12px; word-break: break-all;
@@ -189,6 +271,52 @@ body {
   flex: 0 0 auto; margin: 0 12px 8px; padding: 6px 10px; border-radius: 6px;
   background: #fdf6ec; color: #8a6a2f; font-size: 11.5px; line-height: 1.6;
   word-break: break-all;
+}
+
+/* 未完成素材（阶段 3）：功能反馈而非解释性小字——逐项列出并可直接重试 */
+.asset-issues {
+  flex: 0 0 auto; margin: 0 12px 8px; padding: 8px 10px; border-radius: 6px;
+  background: #fdecec; border: 1px solid #f3c3c3; color: #8f2f2f; font-size: 12px;
+}
+.asset-issues .ai-head { font-weight: 700; margin-bottom: 4px; }
+.asset-issues .ai-list { list-style: none; margin: 0; padding: 0; }
+.asset-issues .ai-list li {
+  display: flex; align-items: center; gap: 6px; padding: 3px 0;
+  border-top: 1px solid #f3c3c3;
+}
+.asset-issues .ai-list li:first-child { border-top: none; }
+.asset-issues .ai-label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.asset-issues .ai-reason { flex: 1 1 auto; color: #a05a5a; font-size: 11.5px; word-break: break-all; }
+
+/* 保存失败（REQUIREMENTS：保存失败只在控制台提示）：功能反馈色而非解释性小字——
+   失败必须一眼看见，且说清"正文还在，可以再发一次"。未失败时该容器不渲染。 */
+.save-error {
+  flex: 0 0 auto; margin: 0 12px 8px; padding: 8px 10px; border-radius: 6px;
+  background: #fdecec; border: 1px solid #f3c3c3; color: #8f2f2f;
+  font-size: 12px; font-weight: 600; line-height: 1.6; word-break: break-all;
+}
+
+/* 读取失败 / 一次性失败提示（会话栏、文档库、素材工坊、顶栏提示条）：与 .save-error 同一族的
+   功能反馈色——失败必须一眼看见，渲染成裸文本等于没提示。这些容器**只在真失败时渲染**
+   （data-list-error="1" 契约），因此无需"隐藏态"样式。 */
+.docs-error, .rail-error, .app-notice, .ws-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: #fdecec; border: 1px solid #f3c3c3; color: #8f2f2f;
+  border-radius: 6px; padding: 8px 10px; font-size: 12px; line-height: 1.6;
+}
+.docs-error .docs-error-text, .rail-error .rail-error-text,
+.app-notice .app-notice-text, .ws-error .ws-error-text {
+  flex: 1 1 auto; min-width: 0; word-break: break-all;
+}
+.app-notice { flex: 0 0 auto; margin: 10px 16px 0; }
+.docs-error, .ws-error, .rail-error { flex: 0 0 auto; }
+
+/* 个别条目读不出来（R1/R3）：整体读取是成功的，只给一条简短提示。
+   与上面的"整体读取失败"分开——不共用 data-list-error 契约，也不铺开 error 全文。 */
+.docs-unreadable, .rail-unreadable, .ws-unreadable {
+  flex: 0 0 auto;
+  background: #fdf6ec; border: 1px solid #f0dcb8; color: #8a6a2f;
+  border-radius: 6px; padding: 6px 10px; font-size: 11.5px; line-height: 1.6;
 }
 
 .topbar-settings { border-color: var(--accent); color: var(--accent); }
@@ -212,7 +340,6 @@ body {
   display: flex; align-items: center; gap: 8px; padding: 12px 20px;
   border-bottom: 1px solid var(--border); font-weight: 700; font-size: 15px;
 }
-.docs-head .hint { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--sub); }
 .docs-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 20px; display: flex; flex-direction: column; gap: 8px; align-content: flex-start; }
 .docs-empty { color: var(--sub); font-size: 13px; text-align: center; padding: 40px; }
 .doc-row {
@@ -232,7 +359,6 @@ body {
   display: flex; align-items: center; gap: 8px; padding: 12px 20px;
   border-bottom: 1px solid var(--border); font-weight: 700; font-size: 15px;
 }
-.ws-head .hint { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--sub); max-width: 640px; text-align: right; }
 .ws-body { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(340px, 46%) 1fr; }
 .ws-left { display: flex; flex-direction: column; min-height: 0; min-width: 0; border-right: 1px solid var(--border); padding: 12px 16px; gap: 10px; }
 .ws-cats { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -294,6 +420,20 @@ body {
 .ws-actions { display: flex; gap: 10px; align-items: center; }
 .ws-save { padding: 7px 18px; font-size: 13px; }
 .ws-svg-editor-label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--text); }
+
+/* P2：素材工坊「连续修改」——自然语言改图 + 参考图 + 前后对比 */
+.ws-edit { display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--border); padding-top: 10px; }
+.ws-edit-title { font-size: 12px; font-weight: 600; color: var(--text); }
+.ws-edit-desc {
+  width: 100%; resize: vertical; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 6px 8px; font-size: 12.5px; font-family: inherit; box-sizing: border-box;
+}
+.ws-edit-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ws-edit-ref-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 5px; border: 1px solid var(--border); }
+.ws-cmp { display: flex; gap: 10px; align-items: stretch; }
+.ws-cmp-col { flex: 1; display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.ws-cmp-col img { width: 100%; max-height: 160px; object-fit: contain; background: #fbfbfb; border: 1px solid var(--border); border-radius: 6px; }
+.ws-cmp-label { font-size: 11px; color: var(--sub); }
 .ws-svg { font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 400; }
 .ws-refs { border: 1px solid #f0c8a0; background: #fff8ef; border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .ws-refs-title { font-size: 11.5px; font-weight: 700; color: #8a5a20; }
@@ -350,8 +490,12 @@ body {
   border-top: 1px dashed var(--border); padding-top: 10px; margin-top: 4px;
   font-size: 12px; font-weight: 700; color: var(--sub);
 }
-.settings-note { margin: 2px 0 0; font-size: 11.5px; color: var(--sub); line-height: 1.6; }
+.settings-group { border-top: 1px dashed var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.settings-check { flex-direction: row !important; align-items: flex-start; gap: 8px; font-size: 12.5px; }
+.settings-check input { margin-top: 2px; }
 .settings-msg { background: #e4f4ec; color: var(--green); border-radius: 6px; padding: 6px 10px; font-size: 12px; }
+/* 失败文案的修饰类：`.settings-msg` 是成功绿，失败若继承它会被读成"成功了" */
+.settings-msg-bad { background: #fdecec; color: #8f2f2f; border: 1px solid #f3c3c3; line-height: 1.6; }
 .settings-foot {
   display: flex; justify-content: space-between; align-items: center;
   padding: 12px 16px; border-top: 1px solid var(--border);

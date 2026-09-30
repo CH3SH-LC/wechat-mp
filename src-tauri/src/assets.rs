@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::sessions::UnreadableItem;
+
 // ---------- 数据形态 ----------
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -82,17 +84,40 @@ pub struct AssetRecord {
     pub svg: String,
 }
 
-/// 引用该素材的文档（影响扫描：改版后是否扩散到老文档由用户逐篇选择）
+/// 引用某素材的文档（影响扫描：改版后是否扩散到老文档由用户逐篇选择）
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RefDoc {
     pub id: String,
     pub title: String,
 }
 
+/// meta.json 读不出来时给引用清单显示的标题。
+/// 显示空白会被误读成"这篇没标题"，所以宁可明说"读不出来"——只影响显示，不影响"未判定"计数。
+const TITLE_UNREADABLE: &str = "（标题读取失败）";
+
+/// 素材列表报告（R2）：正常项与"读不出来"的素材分开放。
+///
+/// 为什么不直接给 `list_assets` 加字段：它返回的是裸 `Vec<AssetMeta>`，前端
+/// `src/lib/asset-library.ts` 直接 `map(fromWire)`；改结构会连带改前端。故保留旧命令不动，
+/// 另开 `list_assets_report` 供界面区分"库是空的"与"有素材坏了"。
+///
+#[derive(Serialize, Deserialize)]
+pub struct AssetListReport {
+    pub items: Vec<AssetMeta>,
+    /// 读不出来（meta 损坏 / IO 失败）的素材目录。不在 items 里，但必须让用户看到。
+    #[serde(default)]
+    pub unreadable: Vec<UnreadableItem>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct UpdateResult {
     pub meta: AssetMeta,
     pub references: Vec<RefDoc>,
+    /// 影响扫描是否完整。**必须让用户看到**：扫描是"改素材前先看看谁在用"的依据，
+    /// 一旦把"某篇文档读不出来"当成"没有引用"，用户会以为可以安全覆盖，实际会改坏那篇文档。
+    /// 为空 = 扫描完整；非空 = 有 N 篇文档未能判定，文案给用户看。
+    #[serde(default)]
+    pub scan_warning: Option<String>,
 }
 
 // ---------- 目录与基础 ----------
@@ -164,28 +189,44 @@ fn derive_usage(category: &str, usage: &str) -> String {
 
 // ---------- 核心操作（base 可注入，便于测试） ----------
 
-fn list_at(base: &Path, category: Option<&str>) -> Result<Vec<AssetMeta>, String> {
+/// 扫描素材目录：返回 (正常素材, 读不出来的素材目录)。
+/// 为什么要把两者分开：旧实现 `if let Ok(Some(m))` 让 meta 损坏的素材从库里"凭空消失"，
+/// 用户看到的是"我的素材被删了？"——坏素材仍不进 items（不能拿坏数据渲染），但必须如实上报。
+fn scan_at(base: &Path, category: Option<&str>) -> Result<(Vec<AssetMeta>, Vec<UnreadableItem>), String> {
     let root = assets_dir_at(base);
     let mut items = Vec::new();
+    let mut unreadable = Vec::new();
     if !root.exists() {
-        return Ok(items);
+        return Ok((items, unreadable));
     }
     for entry in std::fs::read_dir(&root).map_err(|e| format!("读取素材目录失败：{e}"))? {
         let entry = entry.map_err(|e| format!("目录项错误：{e}"))?;
         if !entry.path().is_dir() {
             continue;
         }
-        if let Ok(Some(m)) = read_meta(&entry.path()) {
-            if let Some(c) = category {
-                if m.category != c {
-                    continue;
+        match read_meta(&entry.path()) {
+            Ok(Some(m)) => {
+                if let Some(c) = category {
+                    if m.category != c {
+                        continue;
+                    }
                 }
+                items.push(m);
             }
-            items.push(m);
+            Ok(None) => continue, // 没有 meta.json：本来就不是素材目录（如半途创建的临时目录）
+            Err(e) => unreadable.push(UnreadableItem {
+                id: entry.file_name().to_string_lossy().to_string(),
+                error: e,
+            }),
         }
     }
     items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(items)
+    Ok((items, unreadable))
+}
+
+/// 旧命令用的列表：只要正常素材（保持返回结构不变，前端 src/lib/asset-library.ts 不受影响）
+fn list_at(base: &Path, category: Option<&str>) -> Result<Vec<AssetMeta>, String> {
+    Ok(scan_at(base, category)?.0)
 }
 
 fn get_at(base: &Path, id: &str) -> Result<Option<AssetRecord>, String> {
@@ -222,12 +263,18 @@ fn add_at(base: &Path, input: AssetInput) -> Result<AssetMeta, String> {
     Ok(meta)
 }
 
-/// 扫描某素材被哪些文档引用（解析 documents/*/source.md 中的 [[asset:分类|<id>|…]] 引用行）
-fn scan_usage_at(base: &Path, asset_id: &str) -> Result<Vec<RefDoc>, String> {
+/// 扫描某素材被哪些文档引用（解析 documents/*/source.md 中的 [[asset:分类|<id>|…]] 引用行）。
+///
+/// 返回 `(引用清单, 未判定文档数)`。**第二个返回值是本次修复的重点**：
+/// 旧实现用 `read_to_string(...).unwrap_or_default()` 把"读不出来"折叠成"空文本"，
+/// 于是那篇文档看起来就是"没引用这张素材"——用户据此放心覆盖素材，实际改坏了那篇文档。
+/// 现在只把 `NotFound` 当作"确实没有源文件"，其余 IO 错误一律计入未判定并让用户看到。
+fn scan_usage_at(base: &Path, asset_id: &str) -> Result<(Vec<RefDoc>, usize), String> {
     let root = base.join("documents");
     let mut refs = Vec::new();
+    let mut undecided = 0usize;
     if !root.exists() {
-        return Ok(refs);
+        return Ok((refs, undecided));
     }
     for entry in std::fs::read_dir(&root).map_err(|e| format!("读取文档目录失败：{e}"))? {
         let entry = entry.map_err(|e| format!("目录项错误：{e}"))?;
@@ -235,19 +282,30 @@ fn scan_usage_at(base: &Path, asset_id: &str) -> Result<Vec<RefDoc>, String> {
         if !dir.is_dir() {
             continue;
         }
-        let source = std::fs::read_to_string(dir.join("source.md")).unwrap_or_default();
+        let source = match std::fs::read_to_string(dir.join("source.md")) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue, // 本就没有源文件
+            Err(_) => {
+                undecided += 1; // 读不出来 ≠ 没有引用
+                continue;
+            }
+        };
         if source.contains(&format!("|{asset_id}|")) && source.contains("[[asset:") {
-            // 文档 meta 是 DocMeta 结构（与素材 meta 不同），单独解析取标题
-            let title = std::fs::read_to_string(dir.join("meta.json"))
-                .ok()
-                .and_then(|raw| serde_json::from_str::<crate::documents::DocMeta>(&raw).ok())
-                .map(|m| m.title)
-                .unwrap_or_default();
+            // 文档 meta 是 DocMeta 结构（与素材 meta 不同），单独解析取标题。
+            // 标题取不到只影响显示，不作为"未判定"——引用关系本身已经从 source.md 确认了。
+            // 但**显示成空白也是不诚实的**（空白会被当成"这篇没标题"），读不出来就明说。
+            let title = match std::fs::read_to_string(dir.join("meta.json")) {
+                Ok(raw) => serde_json::from_str::<crate::documents::DocMeta>(&raw)
+                    .map(|m| m.title)
+                    .unwrap_or_else(|_| TITLE_UNREADABLE.to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(), // 本就没有 meta
+                Err(_) => TITLE_UNREADABLE.to_string(),
+            };
             let id = entry.file_name().to_string_lossy().to_string();
             refs.push(RefDoc { id, title });
         }
     }
-    Ok(refs)
+    Ok((refs, undecided))
 }
 
 /// 更新素材：patch 更新元数据（不升版本）；svg 提供时替换源并 version += 1；
@@ -290,8 +348,15 @@ fn update_at(base: &Path, id: &str, patch: AssetPatch, svg: Option<String>) -> R
         meta.version += 1;
     }
     write_files(&dir, &meta, svg.as_deref().filter(|_| has_new_svg))?;
-    let references = scan_usage_at(base, id)?;
-    Ok(UpdateResult { meta, references })
+    let (references, undecided) = scan_usage_at(base, id)?;
+    let scan_warning = if undecided > 0 {
+        Some(format!(
+            "影响扫描不完整：有 {undecided} 篇文档未能读取，无法判定它们是否引用了这张素材——请勿据此断定'没有文档在用'"
+        ))
+    } else {
+        None
+    };
+    Ok(UpdateResult { meta, references, scan_warning })
 }
 
 fn delete_at(base: &Path, id: &str) -> Result<(), String> {
@@ -308,6 +373,14 @@ fn delete_at(base: &Path, id: &str) -> Result<(), String> {
 pub fn list_assets(category: Option<String>) -> Result<Vec<AssetMeta>, String> {
     let base = crate::sessions::workspace_dir()?;
     list_at(&base, category.as_deref())
+}
+
+/// R2 新增：素材列表 + "读不出来"清单。界面据此区分"素材库是空的"与"有素材坏了"。
+#[tauri::command]
+pub fn list_assets_report(category: Option<String>) -> Result<AssetListReport, String> {
+    let base = crate::sessions::workspace_dir()?;
+    let (items, unreadable) = scan_at(&base, category.as_deref())?;
+    Ok(AssetListReport { items, unreadable })
 }
 
 #[tauri::command]
@@ -429,6 +502,81 @@ mod tests {
         delete_at(&base, &m.id).expect("del2 幂等");
         assert!(list_at(&base, None).unwrap().is_empty());
         assert!(update_at(&base, &m.id, AssetPatch::default(), None).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn corrupt_meta_listed_as_unreadable_in_report() {
+        // R2：坏素材不能从库里凭空消失；旧命令结构不变，新命令把"读不出来"如实带出
+        let base = tmp_base("corrupt-meta");
+        let good = add_at(&base, input("b-good", "bubble", "正常素材")).expect("add");
+        let bad_dir = assets_dir_at(&base).join("as-broken");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("meta.json"), "{ 不是合法 JSON").unwrap();
+        std::fs::write(bad_dir.join("source.svg"), "<svg/>").unwrap();
+
+        assert_eq!(list_at(&base, None).expect("list").len(), 1, "旧命令仍只返回正常项");
+        let (items, unreadable) = scan_at(&base, None).expect("scan");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, good.id);
+        assert_eq!(unreadable.len(), 1, "坏素材必须上报");
+        assert_eq!(unreadable[0].id, "as-broken");
+        assert!(!unreadable[0].error.is_empty(), "原因要可直接展示");
+        // 分类过滤只筛正常项，不影响坏素材的上报
+        let (divider, unreadable) = scan_at(&base, Some("divider")).expect("scan cat");
+        assert!(divider.is_empty());
+        assert_eq!(unreadable.len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unreadable_doc_source_makes_scan_incomplete() {
+        // R7：某篇文档的 source.md 读不出来（非 NotFound 的 IO 错误）时，
+        // 影响扫描必须自认"未判定"——不能把它当成"这篇没引用"，否则用户会放心覆盖素材，实际改坏那篇文档
+        let base = tmp_base("scan-undecided");
+        let m = add_at(&base, input("b-scan", "bubble", "扫描用例")).expect("add");
+        // 一份正常文档（不引用该素材）
+        let ok_dir = base.join("documents").join("s-ok");
+        std::fs::create_dir_all(&ok_dir).unwrap();
+        std::fs::write(ok_dir.join("source.md"), "说明\n```v2\n正文\n```").unwrap();
+        // 一份 source.md 读不出来的文档：把 source.md 做成目录 → 读取报非 NotFound 的 IO 错误
+        let bad_dir = base.join("documents").join("s-bad");
+        std::fs::create_dir_all(bad_dir.join("source.md")).unwrap();
+
+        let r = update_at(&base, &m.id, AssetPatch::default(), None).expect("upd");
+        let w = r.scan_warning.expect("source.md 读不出来必须给出扫描告警");
+        assert!(w.contains('1'), "告警应说明未判定的篇数：{w}");
+        assert!(
+            r.references.iter().all(|d| d.id != "s-bad"),
+            "未判定的文档不能作为引用项出现在清单里（不能让用户以为已经查清）"
+        );
+        assert!(r.references.is_empty());
+
+        // 对照：source.md 真不存在（NotFound）时扫描是完整的，不该报未判定
+        std::fs::remove_dir_all(bad_dir.join("source.md")).unwrap();
+        let r2 = update_at(&base, &m.id, AssetPatch::default(), None).expect("upd2");
+        assert!(r2.scan_warning.is_none(), "本来就没有源文件 → 扫描完整");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn unreadable_doc_meta_shows_explicit_title() {
+        // R7 复核补口：引用关系已从 source.md 确认，但标题读不出来时不能显示成空白
+        // （空白会被当成"这篇没标题"），要明说读失败
+        let base = tmp_base("scan-title");
+        let m = add_at(&base, input("b-title", "bubble", "标题用例")).expect("add");
+        let dir = base.join("documents").join("s-t");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("source.md"),
+            format!("```v2\n[[asset:bubble|{}|小花]]\n```", m.id),
+        )
+        .unwrap();
+        std::fs::write(dir.join("meta.json"), "{ 坏").unwrap();
+        let r = update_at(&base, &m.id, AssetPatch::default(), None).expect("upd");
+        assert_eq!(r.references.len(), 1, "引用关系以 source.md 为准");
+        assert_eq!(r.references[0].title, "（标题读取失败）");
+        assert!(r.scan_warning.is_none(), "标题读失败不是'未判定引用'");
         let _ = std::fs::remove_dir_all(&base);
     }
 

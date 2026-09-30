@@ -3,8 +3,8 @@
 // 浏览器模式逐个 <a download> 下载。
 
 import { invoke } from '@tauri-apps/api/core'
-import { inTauri } from './chat'
-import { renderArticleImages } from './htmlToImage'
+import { inTauri } from './chat.ts'
+import { renderArticleImages } from './htmlToImage.ts'
 
 function pad(n: number): string {
   return n < 10 ? `0${n}` : String(n)
