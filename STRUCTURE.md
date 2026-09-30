@@ -53,7 +53,7 @@ wechat-mp-desktop/
 | components/ChatPane.tsx、WorkingBubble.tsx、PreviewPane.tsx、SessionRail.tsx | 对话、AI 工作中气泡（阶段标签+细节+计时）、375px 预览（四态标识：成品/已恢复上一版/草稿未通过/修复中 + 独立草稿导出入口）、会话侧栏 |
 | components/DocsPane.tsx、AssetWorkshop.tsx、SettingsPanel.tsx | 文档库、素材工坊、设置 |
 | lib/persona.ts、prep.ts、retrieval.ts、needs.ts、chat.ts | 系统提示、工具准备、知识读取、请求判断与双通道对话 |
-| lib/compose.ts、palettes.ts、artRender.ts、quality.ts | 排版、色板、SVG 渲染与质量检查；compose 返回**结构化解析问题**（稳定 code + 源文行范围）与被质检拒收的素材块（`issues` / `rejectedArts`） |
+| lib/compose.ts、palettes.ts、artRender.ts、quality.ts | 排版、色板、SVG 渲染与质量检查；compose 返回**结构化解析问题**（稳定 code + 源文行范围）、被质检拒收的素材块（`issues` / `rejectedArts`）以及**作者节点**（`authorUnits`：作者可见文本 + 源文行号，由 `emit` 元信息直接产出，供正文投影与事实保护用；见 `projectionOf` 的三态） |
 | lib/delivery-quality.ts | 交付门禁：把解析/素材/栅格/HTML/正文完整性+容量+版本汇成一条问题清单，输出 `DeliveryVerdict`（阻断项为 0 才允许提交成品）；`bodyIntegrity` 按**规范化事实**（`kind\\|canon`）比对并给出具体丢失片段，`bodyText()` 提供正文投影（剔 SVG/行内代码/拒收占位）；`BodyApplicability` 三态显式区分"已比 / 不适用 / 比不了" |
 | lib/extract.ts、revise.ts | 提取成稿、归一叠稿和自动修订 |
 | lib/image-agent.ts、asset-agent.ts、asset-library.ts、asset-categories.ts | 素材解析复用与有界并发绘制（阶段 4：最多 2 个并发、同输入共享在途、位预算 240s）、制作与库操作；分类表（零依赖纯数据，解析层与工坊共用） |

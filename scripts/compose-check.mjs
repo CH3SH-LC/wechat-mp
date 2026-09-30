@@ -2,9 +2,9 @@
 // 用法：node scripts/compose-check.mjs [outDir]
 //
 // 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
-import { composeMarkdown, svgElementCount } from '../src/lib/compose.ts'
+import { buildAuthorUnits, composeMarkdown, projectionOf, svgElementCount } from '../src/lib/compose.ts'
 import { buildReviseContent, fixableWarnings, locateIssues } from '../src/lib/revise.ts'
-import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
+import { createJudge, guardCrashes, parseRunnerArgs } from './lib/run-result.mjs'
 import { mkdirSync, writeFileSync } from 'fs'
 
 // P1：组件化/素材配额按成品长度分档（<600 字为短篇档，不再强塞组件）。
@@ -101,8 +101,12 @@ ${FLOWER_SVG}
 [[badge:新生指南]] [[badge:开学典礼]]`
 
 let failed = 0
-const outDir = process.argv[2] || 'docs/artifacts'
-const judge = createJudge({ script: 'compose-check', outDir: resolveOutDir('compose-check', outDir) })
+// 用统一解析：既认位置参数、也认 `--out <dir>`，并且**判定目录与产物目录用同一个值**。
+// 之前这里是 `const outDir = process.argv[2]`（原样吃位置参数）、只有 judge 走 resolveOutDir——
+// 于是 `--out <dir>` 时判定结果去了对的地方，`compose-sample.html` 却写进了一个叫 `--out/` 的目录
+// （实测在仓库根建出来过）。证据要么在正确的地方，要么别声称有。
+const { outDir } = parseRunnerArgs()
+const judge = createJudge({ script: 'compose-check', outDir })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -309,5 +313,66 @@ const rj = composeMarkdown(rejected, { mode: 'text' })
 check('拒收素材记入 rejectedArts', rj.rejectedArts.length === 1, `n=${rj.rejectedArts.length}`)
 check('拒收记录带别名候选（可回写台账）', rj.rejectedArts[0]?.refs.includes('as-abc123'), JSON.stringify(rj.rejectedArts[0]?.refs))
 check('拒收素材报 blocking asset.rejected', rj.issues.some((i) => i.code === 'asset.rejected' && i.severity === 'blocking'))
+
+// ⑦ 作者节点投影（DS 修复指南 §4.2）：来源范围、精确边界、三态。
+// 这一节的断言直接打 `buildAuthorUnits` / `projectionOf` 纯函数——它们就是"投影"这件事本身。
+{
+  // ⑦a 行内代码的**作者可见文本必须留下**（这正是当年被正则删掉的那一项）
+  const units = buildAuthorUnits(
+    [
+      '<p style="margin:0 0 16px;color:#3f3f3f">联系电话：<span style="background-color:#f6f8fa;color:#2f6fed">010-55556666</span></p>',
+      // SVG 里**故意放可见文本**：这才是可证伪的形态。纯几何 SVG 被"剥标签"之后本来就不剩字符，
+      // 拿它断言"SVG 不进投影"是恒真的（第一版就是这么写的，变异掉剔除逻辑仍然全绿）。
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 210"><title>SVG标题不该进投影</title><text x="10" y="20">SVG正文不该进投影</text><path d="M0 210 L160 148" fill="#d9a35f"/></svg>',
+      '<p style="color:#3f3f3f">第二段</p>',
+    ],
+    [
+      { line: 3, code: false },
+      { line: 9, code: false },
+      { line: 12, code: false },
+    ],
+  )
+  check('⑦ 作者节点：行内代码的作者文本保留（不被当实现细节删掉）', units.some((u) => u.text.includes('010-55556666')), JSON.stringify(units.map((u) => u.text)))
+  check(
+    '⑦ 作者节点：SVG 整块不进投影（连它内部的 <text>/<title> 也不行——那是画面文字，不是作者正文）',
+    !units.some((u) => /SVG标题不该进投影|SVG正文不该进投影|viewBox|#d9a35f/.test(u.text)),
+    JSON.stringify(units.map((u) => u.text)),
+  )
+  check('⑦ 作者节点：只有 SVG 的节点不产出空单元', units.length === 2, `n=${units.length}`)
+  check('⑦ 作者节点：每个单元带源文行号', units[0]?.line === 3 && units[1]?.line === 12, JSON.stringify(units.map((u) => u.line)))
+
+  // ⑦b 系统占位/报错句由 emit 打标排除——**不**靠匹配文案形状
+  const withSystem = buildAuthorUnits(
+    ['<p>timeline 需至少 1 个节点（- 内容）</p>', '<p>真正的正文</p>'],
+    [
+      { line: 1, code: false, system: true },
+      { line: 2, code: false },
+    ],
+  )
+  check('⑦ 作者节点：系统报错句不进投影（按标记而不是按文案）', withSystem.length === 1 && withSystem[0].text === '真正的正文', JSON.stringify(withSystem))
+
+  // ⑦c 三态：成功 / 有效空内容 / 失败——三者不能互相顶替
+  check('⑦ 投影三态：有正文 → ok', projectionOf([{ text: '正文', line: 1, code: false }]).status === 'ok')
+  check(
+    '⑦ 投影三态：有效空内容 → empty（**不是**失败，短通知不该因此被拦）',
+    projectionOf([]).status === 'empty',
+    projectionOf([]).status,
+  )
+  check('⑦ 投影三态：没有解析树 → failed 且文本为空', projectionOf(null).status === 'failed' && projectionOf(null).text === '')
+
+  // ⑦d 真实样例上的端到端：行号落在源文范围内、投影里没有实现细节
+  const srcLines = SAMPLE.split(/\r?\n/)
+  const proj = projectionOf(r.authorUnits)
+  check('⑦ 真实样例：投影状态 ok', proj.status === 'ok', proj.status)
+  check(
+    '⑦ 真实样例：每个作者节点都带**有效**源文行号（1..源文行数）',
+    r.authorUnits.length > 0 && r.authorUnits.every((u) => u.line >= 1 && u.line <= srcLines.length),
+    `n=${r.authorUnits.length} lines=${JSON.stringify(r.authorUnits.map((u) => u.line))}`,
+  )
+  // 注意正则要写对：`[[\w]+:` 在字符类里其实是"`[` 或词字符 + 冒号"，
+  // 会把正文里的 `8:00` 也匹配上（第一版就是这么误报的），这里显式转义方括号。
+  const implLeak = proj.text.match(/style=|margin:|viewBox|@@ART|\[\[[^\]]+:|\]\]/)
+  check('⑦ 真实样例：投影里不含实现细节（样式/坐标/素材协议占位）', implLeak === null, String(implLeak?.[0] || proj.text.slice(0, 120)))
+}
 
 judge.finish({ label: 'PHOTO-PARSE' })

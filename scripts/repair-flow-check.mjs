@@ -368,6 +368,11 @@ try {
 
     const bodyApplied = state.trace.filter((t) => t.bodyApplicability === 'applied')
     const bodyNA = state.trace.filter((t) => t.bodyApplicability === 'not-applicable')
+    // §4.2：投影必须来自 **compose 的作者节点**，而不是 `legacy-html` 那条弱化回退。
+    // 这条断言的可证伪性在于：把 App 的 `projectionFrom(authorUnits, html)` 换回
+    // `bodyText(html)`（或让 authorUnits 传 null），note 里就会出现 legacy-html 而不再是 投影=ok。
+    const qualityNotes = state.trace.filter((t) => t.kind === 'quality').map((t) => String(t.note || ''))
+    const authorProjectionUsed = qualityNotes.some((n) => n.includes('投影=ok')) && !qualityNotes.some((n) => n.includes('legacy-html'))
     const storedHasFacts = c.mustKeep.every((f) => String(state.doc?.source || '').includes(f))
     const extractedOk = c.mustExtract.every((f) => state.control.baseFacts.includes(`${f.kind}:${f.text}`))
     const result = {
@@ -396,6 +401,11 @@ try {
       `${c.name}：App 真的执行了正文保留比较（trace 有 bodyApplicability=applied）`,
       bodyApplied.length >= 1,
       `applied=${bodyApplied.length} not-applicable=${bodyNA.length}`,
+    )
+    check(
+      `${c.name}：正文投影来自 compose 作者节点（不是 legacy-html 弱化回退）`,
+      authorProjectionUsed,
+      qualityNotes.join(' | ').slice(0, 220),
     )
     check(`${c.name}：全程无外链请求`, offsiteRequests.length === 0, offsiteRequests.join(' / '))
     check(`${c.name}：全程无页面异常`, pageErrors.length === 0, pageErrors.join(' / '))

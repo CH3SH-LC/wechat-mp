@@ -21,8 +21,9 @@
   - **A/E 的判定器与回归**：新增共享判定器 `scripts/lib/run-result.mjs`，12 个 runner 统一为"计划场景齐全 + 检查数 > 0 + 无错误 → 才 PASS"，零检查与异常均为 ERROR、缺依赖为 BLOCKED；补齐 runner 负向回归；修正 `waitForFunction` 超时参数位错位；外链证据断言收紧为**特定** `html.external-img` + 原始违规原文。
   - **E 的构建与冒烟**：`tsc` / `pnpm build` / `cargo test --lib`（133 项）/ 离线断言脚本 / `verify-ui` / App 级 runner 全绿；`pnpm tauri build --bundles nsis` 重建 release；**隔离启动冒烟通过**（窗口标题逐字符相等、隔离工作区自动建立、**真实工作区逐字节未变**）。
 - **未完成（F，BLOCKED）**：L1–L6 六个真实模型回合**全部未执行**。原因是本机 WebView2 运行时不提供 TCP 上的 DevTools 端点，脚本在启动阶段即 BLOCKED（**0 次派发、0 次绘图、无费用**）。排查与证据见 [WebView2 与真机验收](docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md)。**不因此声称任何真实交付能力。**
+- **§4.2 作者节点投影（本轮补完）**：正文投影改由 `compose` 的 `emit` 元信息产出——带源文行号、三态（ok/empty/failed）、`<svg>` 整块剔除而作者代码文本保留、系统占位/报错句按标记排除；仅旧 ```html 直通通道退回正则投影并在 trace 标 `legacy-html`。回归见 `compose-check` ⑦ 节与 `repair-flow-check` 的 App 层断言，两条断言均经变异确认可证伪。
 - 仍需裁决的既有口径（本轮未改）：删除文档会连带删除来源会话。
-- 状态：**A–E 已完成并验证；F 基础设施阻塞，未验收。**
+- 状态：**A–E 已完成并验证（含 §4.2 投影）；F 基础设施阻塞，未验收。**
 
 ### 2026-09-30｜复测缺口与第二轮 DS 修改任务
 

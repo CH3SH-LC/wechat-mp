@@ -505,6 +505,12 @@ export interface ComposeResult {
   issues: ComposeIssue[]
   /** 被质检拒收的现场素材块（供调用方回写素材位台账并计入交付门禁） */
   rejectedArts: RejectedArt[]
+  /**
+   * **作者节点**（带源文行号）-：正文投影与事实保护的输入（DS 修复指南 §4.2）。
+   * 由 `emit` 的元信息直接产出，不再靠对渲染后 HTML 做正则去猜"哪些字是作者写的"。
+   * 用 `projectionOf(result.authorUnits)` 取三态投影。
+   */
+  authorUnits: AuthorUnit[]
   mode: 'text' | 'promo'
   modeLabel: string
 }
@@ -632,16 +638,26 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const lines = String(md || '').split(/\r?\n/)
   const out: string[] = []
   // 与 out 一一对应的元信息：该节点来自源文哪一行、是不是"代码节点"（泄漏检查要跳过代码）
-  const outMeta: { line: number; code: boolean }[] = []
+  const outMeta: { line: number; code: boolean; system?: boolean }[] = []
   const issues: ComposeIssue[] = []
   const rejectedArts: RejectedArt[] = []
   let i = 0
   let h2Counter = 0
 
-  /** 产出一个节点；`line` = 该节点对应的源文起始行（1-based），供问题定位 */
-  function emit(html: string, line: number, opts2?: { code?: boolean }): void {
+  /**
+   * 产出一个节点；`line` = 该节点对应的源文起始行（1-based），供问题定位。
+   *
+   * `system` 标记"这段 HTML 是**系统自己写**的，不是作者写的"——目前只有两类：
+   *   · 素材被本地质检拒收后的占位说明（"此处原为美术素材…未达标已略过"）；
+   *   · 容器写法不合法时的报错句（"timeline 需至少 1 个节点"之类）。
+   * 它们**必须**能从正文投影里排除（DS 指南 §4.2）：投影的用途是"作者到底改了什么事实"，
+   * 而系统占位/报错会随解析状态自己出现或消失——把它们算进投影，就会出现
+   * "用户一个字没改、投影却变了"（或反过来把系统文案当作者事实保护起来）。
+   * 注意：排除的只是**投影**。这两类各自的 `issues` 照常进交付门禁，不会被藏起来。
+   */
+  function emit(html: string, line: number, opts2?: { code?: boolean; system?: boolean }): void {
     out.push(html)
-    outMeta.push({ line, code: !!opts2?.code })
+    outMeta.push({ line, code: !!opts2?.code, system: !!opts2?.system })
   }
 
   /**
@@ -809,7 +825,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         // 计划 §6：`compose`/渲染器必须返回失败素材的 slotId，回写台账与候选问题清单——
         // 否则"库里读到了"会被当成交付成功，而正文里其实是个空框。
         noteRejected(artRefs(artHead), artLine, why, false)
-        emit(P(d) + '（此处原为美术素材「' + escapeHtml(alt) + '」，未达标已略过）' + '</p>', artLine)
+        emit(P(d) + '（此处原为美术素材「' + escapeHtml(alt) + '」，未达标已略过）' + '</p>', artLine, { system: true })
       }
       continue
     }
@@ -922,15 +938,15 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       } else if (kind === 'timeline') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
         if (items.length >= 1) emit(timelineBlock(d, items), contLine)
-        else emit(P(d) + 'timeline 需至少 1 个节点（- 内容）' + '</p>', contLine)
+        else emit(P(d) + 'timeline 需至少 1 个节点（- 内容）' + '</p>', contLine, { system: true })
       } else if (kind === 'band') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
         if (items.length >= 1) emit(bandBlock(d, items, title), contLine)
-        else emit(P(d) + 'band 需至少 1 行内容（- 文字）' + '</p>', contLine)
+        else emit(P(d) + 'band 需至少 1 行内容（- 文字）' + '</p>', contLine, { system: true })
       } else if (kind === 'frame') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
         if (items.length >= 1) emit(frameBlock(d, items), contLine)
-        else emit(P(d) + 'frame 需至少 1 行内容（- 文字）' + '</p>', contLine)
+        else emit(P(d) + 'frame 需至少 1 行内容（- 文字）' + '</p>', contLine, { system: true })
       } else if (kind === 'cols') {
         const cols = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
         if (cols.length >= 2) emit(colsBlock(d, cols), contLine)
@@ -941,7 +957,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
           return mm ? { src: mm[2], alt: mm[1] } : null
         }).filter((x): x is { src: string; alt: string } => x !== null)
         if (imgs.length >= 2) emit(imgrowBlock(d, imgs), contLine)
-        else emit(P(d) + 'imgrow 需至少 2 张图片（- ![说明](路径)）' + '</p>', contLine)
+        else emit(P(d) + 'imgrow 需至少 2 张图片（- ![说明](路径)）' + '</p>', contLine, { system: true })
       } else if (kind === 'imgcard') {
         const items = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => l.replace(/^[-*+]\s+/, ''))
         let img: { src: string; alt: string } | null = null
@@ -952,7 +968,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
           caps.push(it)
         }
         if (img) emit(imgcardBlock(d, img, caps), contLine)
-        else emit(P(d) + 'imgcard 需一张图片（第一项 - ![说明](路径)）' + '</p>', contLine)
+        else emit(P(d) + 'imgcard 需一张图片（第一项 - ![说明](路径)）' + '</p>', contLine, { system: true })
       } else {
         emit(card(d, title, bodyLines.map((s) => escapeHtml(s))), contLine)
       }
@@ -1207,5 +1223,111 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       endLine: 0,
     })
   }
-  return { html: html2, plainText, images, arts, warnings, issues, rejectedArts, mode: modeKey, modeLabel: d.label }
+  return {
+    html: html2,
+    plainText,
+    images,
+    arts,
+    warnings,
+    issues,
+    rejectedArts,
+    authorUnits: buildAuthorUnits(out, outMeta),
+    mode: modeKey,
+    modeLabel: d.label,
+  }
+}
+
+// ---------- 作者节点投影（DS 修复指南 §4.2） ----------
+
+/**
+ * 一个**作者节点**的可比较单元：作者可见的文本 + 它在源文里的起始行。
+ *
+ * 为什么要从 `emit` 的元信息来、而不是对渲染后的 HTML 做正则：正则方式**猜不出边界**——
+ * 它只能按"这些标签/这些字样大概不是作者写的"去筛。历史上正是这种猜法出过事：旧版
+ * `bodyText` 用一条删代码 span 的正则，把作者可见的 `联系电话：`010-55556666`` 里的号码
+ * 一起删掉，于是"删掉行内代码里的电话"整项不受保护（2026-09-30 复测的第三个反例）。
+ * 之后那条正则被撤掉了，但**猜边界**这件事本身没解决，另外还缺三样东西，都是这一版补上的：
+ *   · **来源范围**：出问题时能说清"在源文第几行"，而不是只有一段被我压平过的文本；
+ *   · **三态**：分得开"解析成功但正文确实为空"与"根本建不出投影"；
+ *   · **精确分类**：系统占位/报错句由 `emit` 打标排除，不再靠去匹配某个占位文案的形状。
+ * 解析器本来就知道每个节点的边界与来源行，这个信息不该在渲染成 HTML 之后丢掉。
+ */
+export interface AuthorUnit {
+  /** 作者可见文本（已解码实体、压缩空白；不含样式/坐标/SVG 实现） */
+  text: string
+  /** 源文起始行（1-based） */
+  line: number
+  /** 是不是代码节点（合法作者代码示例：**保留其可见文本**，只是泄漏检查要跳过它） */
+  code: boolean
+}
+
+/** 投影结果的三态（§4.2）：成功 / 有效空内容 / 投影失败——三者不能互相顶替 */
+export type ProjectionStatus = 'ok' | 'empty' | 'failed'
+
+export interface BodyProjection {
+  status: ProjectionStatus
+  /** 供事实比较用的文本（units 的行文本按顺序拼接） */
+  text: string
+  units: AuthorUnit[]
+  /** status !== 'ok' 时说明原因，直接进证据 */
+  reason?: string
+}
+
+/**
+ * 从作者节点建投影。
+ *
+ * 口径（逐条对应指南 §4.2）：
+ *   · **保留**标题、段落、列表、引用、照片说明与**可见作者代码**（`<code>`/`<pre>` 的文本照收；
+ *     "合法代码示例"与"泄漏的内部实现"在投影这一层不区分——泄漏由 `leakIssues` 另行判定并阻断，
+ *     不能靠"把所有代码删掉"来消除泄漏）；
+ *   · **排除** `<svg>` 整块（属性、坐标、路径数据）、系统拒收占位与容器报错句（`system` 标记）；
+ *   · 只有**有效正文一个字都没有**时才是 `empty`（这不是失败：一篇没有数字/地名等受保护事实的
+ *     短文是正常内容，不该因此被拦）；`failed` 留给"建不出投影"本身。
+ */
+export function buildAuthorUnits(
+  out: string[],
+  meta: { line: number; code: boolean; system?: boolean }[],
+): AuthorUnit[] {
+  const units: AuthorUnit[] = []
+  for (let k = 0; k < out.length; k++) {
+    const m = meta[k] || { line: 0, code: false }
+    if (m.system) continue
+    const text = authorTextOf(out[k])
+    if (!text) continue
+    units.push({ text, line: m.line, code: !!m.code })
+  }
+  return units
+}
+
+/**
+ * 单个节点 HTML → 作者可见文本。
+ *
+ * 只做两件事：剔掉 `<svg>` 整块（含其属性与坐标），再把剩下的标签当**分隔**（不是当内容）并解码实体。
+ * 所有作者文字——包括 `<code>` / `<pre>` / `<strong>` 里的——都原样留下。
+ */
+function authorTextOf(html: string): string {
+  return String(html || '')
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** 由作者节点建投影（`units` 为 null/空 → failed，带原因，便于调用方如实阻断而不是当成"通过"） */
+export function projectionOf(units: AuthorUnit[] | null | undefined, reason?: string): BodyProjection {
+  if (!units) {
+    return { status: 'failed', text: '', units: [], reason: reason || '没有可用的作者节点（解析结果缺失）' }
+  }
+  const text = units.map((u) => u.text).join('\n').trim()
+  if (!text) {
+    // 解析成功、但作者确实没写任何可见正文——这是**有效空内容**，不是失败
+    return { status: 'empty', text: '', units, reason: '解析成功，但正文没有任何作者可见文字' }
+  }
+  return { status: 'ok', text, units }
 }

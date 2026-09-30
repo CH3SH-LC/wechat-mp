@@ -12,7 +12,8 @@ import AssetWorkshop from './components/AssetWorkshop.tsx'
 import { PERSONA_RULES, buildRegistrySystem } from './lib/persona.ts'
 import { buildRegistry, ensureKnowledgeLoaded, loadEngineProtocol } from './lib/retrieval.ts'
 import { collapseAssistantDraft, extractHtml, splitAssistant } from './lib/extract.ts'
-import { composeMarkdown } from './lib/compose.ts'
+import { composeMarkdown, projectionOf } from './lib/compose.ts'
+import type { AuthorUnit, BodyProjection } from './lib/compose.ts'
 import { themeDeclaration } from './lib/palettes.ts'
 import { applyRejectedArts, emptyMaterializeInfo, hasPlaceholders, materializePlaceholders, needsMaterialize } from './lib/image-agent.ts'
 import { resetVisionBudget } from './lib/vision.ts'
@@ -75,19 +76,43 @@ interface PreviewParse {
   arts: { svg: string; alt: string; wide: boolean }[]
   issues: ReturnType<typeof composeMarkdown>['issues']
   rejectedArts: ReturnType<typeof composeMarkdown>['rejectedArts']
+  /** 作者节点（带源文行号）；`null` = 这条通道没有解析树（旧 ```html 直通） */
+  authorUnits: AuthorUnit[] | null
 }
 
 function resolvePreview(raw: string): PreviewParse | null {
   const direct = extractHtml(raw)
-  // ```html 直通：旧通道没有经过 v2 解析器，自然没有解析类问题可报（不是"丢了"，是本来就没有）
-  if (direct) return { html: direct.html, warnings: [], arts: [], issues: [], rejectedArts: [] }
+  // ```html 直通：旧通道没有经过 v2 解析器，自然没有解析类问题可报（不是"丢了"，是本来就没有）；
+  // 它也没有作者节点，投影退回按 HTML 取文本（见 `projectionFrom` 的说明，如实标注为弱化）。
+  if (direct) return { html: direct.html, warnings: [], arts: [], issues: [], rejectedArts: [], authorUnits: null }
   const { v2 } = splitAssistant(raw)
   if (v2) {
     if (hasPlaceholders(v2)) return null
     const r = composeMarkdown(v2, {})
-    return { html: r.html, warnings: r.warnings, arts: r.arts, issues: r.issues, rejectedArts: r.rejectedArts }
+    return {
+      html: r.html,
+      warnings: r.warnings,
+      arts: r.arts,
+      issues: r.issues,
+      rejectedArts: r.rejectedArts,
+      authorUnits: r.authorUnits,
+    }
   }
   return null
+}
+
+/**
+ * 正文投影（DS 修复指南 §4.2）：优先用**作者节点**，没有解析树时才退回 HTML 文本。
+ *
+ * 后一条是**已知的弱化**，必须如实标注（`reason` 里带 `legacy-html`）：正则去标签分不清
+ * "作者写的代码文本"与"实现细节"，这正是 §4.2 要求换掉它的原因。它只服务旧的 ```html 直通通道，
+ * 产品正常路径（v2）永远走作者节点。
+ */
+function projectionFrom(units: AuthorUnit[] | null, htmlFallback: string): BodyProjection {
+  if (units) return projectionOf(units)
+  const t = bodyText(htmlFallback)
+  if (!t) return { status: 'empty', text: '', units: [], reason: 'legacy-html：无作者节点，且 HTML 里没有可见文本' }
+  return { status: 'ok', text: t, units: [], reason: 'legacy-html：无作者节点，退回 HTML 文本投影（弱化）' }
 }
 
 // v2 正文 → compose → 素材 PNG 渲染，一步到位（供已 materialize 的正文 / 图位路径使用）
@@ -1030,8 +1055,11 @@ export default function App() {
       /** 模型原始输出（保存草稿用它，用户文字一个字不丢） */
       draftRaw: string
       html: string
-      /** 该候选的**正文投影**（剔素材实现/样式/系统占位后的可比较文本），用于建立与比对事实基准 */
-      projection: string
+      /**
+       * 该候选的**正文投影**（作者节点 → 可比较文本 + 三态）。用于建立与比对事实基准；
+       * 带 `status`/`reason`，因为"有效空内容"与"投影失败"必须能分开（§4.2）。
+       */
+      projection: BodyProjection
       warnings: string[]
       issues: DeliveryIssue[]
       verdict: DeliveryVerdict
@@ -1049,7 +1077,7 @@ export default function App() {
     const evaluate = async (
       round: number,
       raw: string,
-      baseline: string | null,
+      baseline: BodyProjection | null,
       /** prep 直接候选（`finish_preparation { outcome:'candidate' }`）：**它本身就是正文**，
        *  边界由模型显式声明，不必（也不能）再从围栏反推——正文里合法地可以含 ``` 代码块。 */
       declaredV2: string | null = null,
@@ -1081,6 +1109,8 @@ export default function App() {
       let warnings: string[]
       let composeIssues: ReturnType<typeof composeMarkdown>['issues'] = []
       let rejectedArts: ReturnType<typeof composeMarkdown>['rejectedArts'] = []
+      /** 作者节点（§4.2 投影的输入）。`null` = 本候选走的通道没有解析树（旧 ```html 直通） */
+      let authorUnits: AuthorUnit[] | null = null
 
       if (v2 && needsMaterialize(v2)) {
         let matured: string
@@ -1123,6 +1153,7 @@ export default function App() {
         warnings = [...r.warnings, ...materializeWarnings(matInfo)]
         composeIssues = r.issues
         rejectedArts = r.rejectedArts
+        authorUnits = r.authorUnits
       } else {
         const c = resolvePreview(raw)
         if (!c) return null
@@ -1133,6 +1164,7 @@ export default function App() {
         // 漏掉这一段会让"缺组件的半成品"直接判为可提交。
         composeIssues = c.issues
         rejectedArts = c.rejectedArts
+        authorUnits = c.authorUnits
       }
 
       // 阶段 3 第 6 条：完成状态以**绑定与实际渲染**为准，不采信助手一句"修好了"。
@@ -1165,9 +1197,16 @@ export default function App() {
       //   混成同一件事，于是基准建不起来的那些回合会被永久说成"不适用"（见下方分支的说明）。
       // - **修复轮（round ≥ 1）**：必须对照**本回合首个候选冻结的事实基准**。不跟上一次成品比——
       //   用户完全可以要求整篇重写，拿历史成品当退化信号会把正常需求误判成回退。
-      // - **缺基准 / 投影为空**：按"该比却比不了"处理（`failed`），由门禁补一条阻断。
+      // - **投影失败 / 缺基准**：按"该比却比不了"处理（`failed`），由门禁补一条阻断。
+      //   **有效空内容不算失败**（§4.2）：解析成功但作者确实没写可见文字时，本来就没有可保护的事实。
       //   绝不能再用 null 同时表示"不适用""没检查""检查失败"。
-      const projection = bodyText(html)
+      //
+      // 投影来自 **compose 的作者节点**（带源文行号），不再对渲染后的 HTML 做正则去标签：
+      // 正则只能按形状猜边界（当年就是这么把 `联系电话：`010-55556666`` 里的号码删掉的），
+      // 而且拿不到来源行、也分不开"正文确实为空"与"投影建不出来"。解析器本来就知道节点边界。
+      const projection = projectionFrom(authorUnits, html)
+      const projFailed = projection.status === 'failed'
+      const baselineFailed = Boolean(baseline && baseline.status === 'failed')
       let body: ReturnType<typeof bodyIntegrity> | null = null
       let bodyApplicability: BodyApplicability
       if (round === 0) {
@@ -1175,7 +1214,7 @@ export default function App() {
         // 更不是"通过"。注意判据是 `round`（本回合第几个候选），**不再**是 `!baseline`——
         // 后者把"第几个候选"与"基准建没建起来"混成同一件事，实测漏洞见下一个分支。
         bodyApplicability = 'not-applicable'
-      } else if (!baseline || !projection) {
+      } else if (!baseline || baselineFailed || projFailed) {
         // 自动修复轮**必须**比得起来（DS 指南 §4.2）。旧写法是 `if (!baseline) not-applicable`：
         // 首候选的正文投影若为空（解析失败 / 有效空正文），`repairBaseline` 就恒为 null，
         // 于是**后续每一轮自动修复都报"不适用"**；而 `not-applicable` 在 delivery-quality 里
@@ -1183,7 +1222,7 @@ export default function App() {
         // （独立审计 2026-09-30 记为"缺基准不闭锁"）。现在如实记 failed，由门禁补一条阻断。
         bodyApplicability = 'failed'
       } else {
-        body = bodyIntegrity(baseline, projection)
+        body = bodyIntegrity(baseline.text, projection.text)
         bodyApplicability = 'applied'
       }
       const htmlOk = checkHtml(html).ok
@@ -1226,9 +1265,16 @@ export default function App() {
         blockingCount: verdict.blockers.length,
         warningCount: verdict.warnings.length,
         bodyApplicability,
-        before: bodyApplicability === 'applied' ? `事实基准 ${baseline ? baseline.length : 0} 字` : undefined,
-        after: body ? `缺失事实 ${body.factsMissing.length} 项` : undefined,
-        note: `第 ${round + 1} 轮门禁：阻断 ${verdict.blockers.length} / 提示 ${verdict.warnings.length}；正文保留比较=${bodyApplicability}`,
+        // 投影三态与来源通道都要进证据（§4.2）：只写 "applied/failed" 看不出是"投影建不出来"
+        // 还是"没得比"。`legacy-html` 说明这一版走的是旧 ```html 直通、投影被弱化了。
+        before:
+          bodyApplicability === 'applied'
+            ? `事实基准 ${baseline ? baseline.text.length : 0} 字（protobase=${baseline ? baseline.status : 'none'}${baseline && baseline.reason ? '/' + baseline.reason : ''}）`
+            : undefined,
+        after: `投影=${projection.status}${projection.reason ? '(' + projection.reason + ')' : ''}${body ? ` 缺失事实 ${body.factsMissing.length} 项` : ''}`,
+        // reason 必须进 note：`legacy-html`（无作者节点、退回正则投影）这类**弱化**只有写在证据里
+        // 才查得出来——否则"投影=ok"两种通道长得一模一样，App 层的断言就成了恒真。
+        note: `第 ${round + 1} 轮门禁：阻断 ${verdict.blockers.length} / 提示 ${verdict.warnings.length}；正文保留比较=${bodyApplicability}；投影=${projection.status}${projection.reason ? '(' + projection.reason + ')' : ''}`,
       })
       return {
         round,
@@ -1263,7 +1309,7 @@ export default function App() {
      * 上一轮"只在候选零阻断时才建立基准"的写法等于让基准永远是 null（首个候选若零阻断就已退出循环），
      * 实测后果：两轮修复都拿到 `body=null`，事实保护一次都没生效，删掉日期/地点/张老师的修订稿照样成为成品。
      */
-    let repairBaseline: string | null = null
+    let repairBaseline: BodyProjection | null = null
 
     for (let round = 0; round <= MAX_AUTO_REVISES; round++) {
       // 本轮的比较对象 = **上一轮未被否决的候选**（本轮自己的结果还没出来，不能拿它跟自己比）
@@ -1298,7 +1344,7 @@ export default function App() {
       lastCand = cand
       // ① 冻结事实基准：本回合**首个候选**的正文投影，不要求它零阻断
       //    （首稿有 emoji/短篇/素材未落位都很正常，那条规则会让基准永远建不起来）
-      if (round === 0) repairBaseline = cand.projection || null
+      if (round === 0) repairBaseline = cand.projection
 
       // ② 退化比较**必须早于** best 更新与任何提前退出（DS 指南 §4.4 第 4/5 条。
       //    上一轮把 `best = better(best, cand)` 写在退化检查之前，于是"更差但阻断更少"的一版
@@ -1675,7 +1721,6 @@ export default function App() {
     // **先冻结正文与文档身份**（DS 指南 §4.2），再去碰素材。
     // 冻结的是"用户点重试那一刻预览里那一版"——它就是本次的正文保留基准；
     // 处理素材期间 preview 可能被更新，读 state 会拿到已经被换过的那一版，基准就不再是"重试前"。
-    const frozenHtml = html
     const frozenDocId = currentId
     const frozenRunId = ctx.ledger.runId
     busyRef.current = true
@@ -1689,6 +1734,14 @@ export default function App() {
       trace({ kind: 'note', runId: ctx.ledger.runId, phase: 'asset', ok: true, note: '重试前清除上一轮的取消状态' })
     }
     try {
+      // 冻结"重试前那一版"的正文投影（§4.2：先冻结正文与文档身份，再处理素材）。
+      // 用**作者节点**建、与后面那一版同一口径——两边一个走解析树、一个走正则就会产生假差异。
+      let frozenProj: BodyProjection
+      try {
+        frozenProj = projectionOf(composeMarkdown(ctx.v2, {}).authorUnits)
+      } catch (e) {
+        frozenProj = { status: 'failed', text: '', units: [], reason: `重试前正文无法解析：${errSummary(e)}` }
+      }
       const inf = emptyMaterializeInfo()
       const matured = await materializePlaceholders(ctx.v2, ctx.theme, inf, {
         onProgress: setTask,
@@ -1728,13 +1781,15 @@ export default function App() {
       // 做法是拿"重试前预览里的正文投影"当基准比一次——素材重渲染只该换素材，不该动一个字。
       // 这里刻意用**调用前就冻结好的** `frozenHtml`，而不是 `html`：重试中途可能已经发生过
       // `setHtml`，读 state 会拿到"本轮已经换过的那一版"，基准就跟着变了。
-      const beforeText = frozenHtml ? bodyText(frozenHtml) : ''
-      const afterText = bodyText(html2)
-      // 单项重试**必须**比得起来：拿不到任一侧投影就是"该比却比不了"，如实记 failed
+      const afterProj = projectionOf(r.authorUnits)
+      // 单项重试**必须**比得起来：任一侧**投影失败**就是"该比却比不了"，如实记 failed
       // （门禁会补一条 `body.unverified` 阻断）。旧写法退回 `not-applicable`，
       // 而 not-applicable 在 delivery-quality 里 `bodyIntegrityOk` 仍为 true——那是条不阻断的放行通道。
-      const body = beforeText && afterText ? bodyIntegrity(beforeText, afterText) : null
-      const bodyApplicability: BodyApplicability = beforeText && afterText ? 'applied' : 'failed'
+      // 注意"有效空内容"（status=empty）**不算失败**：素材重渲染本来就不该改动任何文字，
+      // 没有受保护事实的正文照样该放行（§4.2）。
+      const comparable = frozenProj.status !== 'failed' && afterProj.status !== 'failed'
+      const body = comparable ? bodyIntegrity(frozenProj.text, afterProj.text) : null
+      const bodyApplicability: BodyApplicability = comparable ? 'applied' : 'failed'
       const issues = collectDeliveryIssues({
         source: matured,
         html: html2,
@@ -1778,7 +1833,9 @@ export default function App() {
         issueCodes: verdict.blockers.map((b) => b.code),
         blockingCount: verdict.blockers.length,
         bodyApplicability,
-        note: `单项重试后门禁：阻断 ${verdict.blockers.length}；正文保留比较=${bodyApplicability}`,
+        before: `重试前投影=${frozenProj.status}${frozenProj.reason ? '(' + frozenProj.reason + ')' : ''}`,
+        after: `重试后投影=${afterProj.status}${body ? ' 缺失事实 ' + body.factsMissing.length + ' 项' : ''}`,
+        note: `单项重试后门禁：阻断 ${verdict.blockers.length}；正文保留比较=${bodyApplicability}；投影=${frozenProj.status}→${afterProj.status}`,
       })
       // 用户在重试过程中按了停止：**不再落库**，预览也不提升。
       // 素材位被取消时走的是 `drop`（该行从 matured 里消失），照常 persist 会留下一份

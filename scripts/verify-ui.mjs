@@ -17,7 +17,7 @@ import { createRequire } from 'module'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { createJudge, guardCrashes, resolveOutDir, tapCheckLines } from './lib/run-result.mjs'
+import { createJudge, guardCrashes, parseRunnerArgs, tapCheckLines } from './lib/run-result.mjs'
 const require = createRequire(import.meta.url)
 // 本脚本所在目录（scripts/）：S19 的结构断言要读 src/ 下的源码文本
 const here = dirname(fileURLToPath(import.meta.url))
@@ -30,10 +30,14 @@ const here = dirname(fileURLToPath(import.meta.url))
 // 注意：**必须在解析 playwright 之前**建好判定器与输出目录——缺依赖那条早退路径（die）也要落盘 ERROR/BLOCKED。
 const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-const outDir = process.argv[2] || `docs/artifacts/${localDate()}-e2e`
-const url = process.argv[3] || 'http://127.0.0.1:1420'
+// 统一解析：位置参数与 `--out <dir>` 都认，且**判定目录、截图目录、报告目录是同一个值**。
+// 之前这里原样吃 `process.argv[2]`：传 `--out <dir>` 时判定结果去了对的地方，
+// 而 `mkdirSync(outDir)` 与所有 `page.screenshot({path: outDir + ...})` 会写进一个叫 `--out/` 的目录。
+const { outDir: argOutDir, base: argBase } = parseRunnerArgs()
+const outDir = argOutDir || `docs/artifacts/${localDate()}-e2e`
+const url = argBase
 const errors = []
-const judge = createJudge({ script: 'verify-ui', outDir: resolveOutDir('verify-ui', outDir) })
+const judge = createJudge({ script: 'verify-ui', outDir })
 guardCrashes(judge)
 tapCheckLines(judge)
 // 计划场景（指南 §3.1「计划场景执行完整」）：每个场景都必须在 stdout 里留下至少一条结论行。

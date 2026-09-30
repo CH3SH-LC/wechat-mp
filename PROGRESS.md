@@ -5,6 +5,28 @@
 ---
 ## 2026-10-01
 
+### [Change][Verify] §4.2 正文投影改由 compose 的作者节点产出（关闭上一节留下的那条未完成项）
+
+**问题**：上一节交付时如实标了"§4.2 要求的'利用 compose 的作者节点与 emit 元信息形成带来源范围的正文单元'只做了一半"——`FactToken` 有了来源区间，但**投影本身**仍是 `bodyText(html)`：拿渲染后的 HTML 做正则去标签。它猜不出节点边界，另外缺三样东西：**来源范围**（出问题只知道"某段文字少了"，不知道在源文第几行）、**三态**（分不开"解析成功但正文确实为空"与"根本建不出投影"）、**精确分类**（系统占位/报错句只能靠匹配文案形状排除）。
+
+**改动**：
+- `src/lib/compose.ts`：`emit()` 已经是"每个作者节点 + 源文行号"的唯一出口（`outMeta` 一直在记），这一版把它**接出来**：
+  - `emit` 的元信息补 `system` 标记，并在 6 处**系统自己写**的节点上打标（素材被质检拒收的占位说明、以及 `timeline 需至少 1 个节点` 这类容器报错句）。**排除的只是投影**——这两类各自的 `issues` 照常进交付门禁，不会被藏起来。
+  - 新增 `AuthorUnit`（作者可见文本 + 源文行号 + 是否代码节点）、`buildAuthorUnits()`、`authorTextOf()`、`projectionOf()`（返回 `BodyProjection{status:'ok'|'empty'|'failed', text, units, reason}`）；`ComposeResult` 新增 `authorUnits`。
+  - 口径：`<svg>` 整块剔除（**包括它内部的 `<text>`/`<title>`**——那是画面文字不是作者正文）；其余标签只当分隔，**作者写的代码文本照收**（`联系电话：`010-55556666`` 的号码必须留在投影里）。
+- `src/App.tsx`：`projectionFrom(units, htmlFallback)` 优先用作者节点；只有旧 ```html 直通通道（没有解析树）才退回 `bodyText`，且 `reason` 明确写 `legacy-html` 并**进 trace**。`evaluate` 与 `retryAsset` 两条路径都改用它；单项重试改为**先冻结"重试前那一版"的作者节点投影**再碰素材，两边同口径，避免"一个走解析树、一个走正则"产生假差异。
+- 适用性口径跟着 §4.2 收紧一次：`empty`（有效空内容）**不算失败**——没有受保护事实的短文本来就该放行；只有 `failed`（建不出投影）或缺基准才阻断。这修掉了我上一版"投影为空即 failed"的过严。
+
+**验证**：
+- `compose-check` 新增 ⑦ 节 11 条断言（**98/98 全绿**）：行内代码作者文本保留、SVG 整块（含 `<text>`/`<title>`）不进投影、只有 SVG 的节点不产出空单元、单元带有效源文行号、系统句按标记排除、三态各自可达、真实样例上 17 个作者节点行号全部落在 1..源文行数且投影无实现细节。
+- `repair-flow-check` 新增 7 条 App 层断言：每个场景的 trace 里 `投影=ok` 且**不含 `legacy-html`**——证明 App 真的走了作者节点通道，而不是悄悄退化成正则。
+- **变异证伪（这一节的价值所在）**：第一次写的两条断言**都是恒真的**，是变异把它们抓出来的，随后都改成了可证伪形态：
+  - "SVG 不进投影"最初用**纯几何 SVG** 做输入——剥完标签本来就不剩字符，去掉剔除逻辑仍然全绿；改用**含 `<text>`/`<title>` 的 SVG** 后，变异立即让 3 条断言变红。
+  - App 层断言最初查 note 里有没有 `投影=ok`——而 reason 当时没进 note，"作者节点"和"legacy 回退"两种通道长得一模一样；把 reason 写进 note 后，强制走 legacy 的变异让 7 条断言全部变红（并打印出 `legacy-html：无作者节点，退回 HTML 文本投影（弱化）`）。
+  - 另一条"投影不含实现细节"的正则自己写错了：`[[\w]+:` 在字符类里等价于"词字符+冒号"，把正文里的 `8:00` 也匹配上——是**断言写错**而不是实现泄漏，已改正则并注明原因。
+- 回归：`delivery-quality-check` / `repair-integrity-check` / `photo-swallow-check` / `asset-*` / `svg-quality-check` / `trace-check` / `progress-check` / `runner-negative-check` 全绿；`verify-ui` 134/134；`prep-contract-check` / `preview-resource-check` PASS；`cargo test --lib` 133 项；`tsc` 与 `pnpm build` 干净。
+- **release 重建**（`pnpm tauri build --bundles nsis` 后）：`wechat-mp-desktop.exe` sha256 `e32e6f5658813d9036d1c5af5848ccc77612282c1e1b15d4c02a3d84273db556`、`智序_0.1.0_x64-setup.exe` sha256 `f5d5e1a5cbcf57814623abcea8c07a7c4b6b46441a432174e1f991a550d16c52`；核对无应用输入文件新于 exe；对该 exe 重跑**隔离启动冒烟 PASS**（窗口标题逐字符相等、隔离工作区自动建立、真实工作区逐文件哈希未变）。
+
 ### [Change][Verify][Blocked] 第二轮指南 A–E 收口；F（真实模型验收）被 WebView2 卡住
 
 **背景**：按 [第二轮修改指南](docs/design/ds-repair-guide-2026-09-30.md) 收口复测点名的六个缺口。开工前先做了**基线核对**：A–D 的产品修复（事实三反例抽取、`preview-safe` 的 DOMParser 重写、`finish_preparation` 契约）在此前已被实现且当时就是绿的——审计（01:28–01:34）早于这些改动（01:50–02:15），所以本轮的工作是**补齐 A/E 的判定器与回归、修 §4.2 剩下的时序与基准语义、以及 §5.4 的快照权威性**，不是重做 B/C/D。
