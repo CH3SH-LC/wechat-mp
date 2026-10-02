@@ -17,10 +17,11 @@ import { createRequire } from 'module'
 import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
+import { createJudge, guardCrashes, parseRunnerArgs, resolveOutDir } from './lib/run-result.mjs'
 
 const require = createRequire(import.meta.url)
-const judge = createJudge({ script: 'raster-check', outDir: resolveOutDir('raster-check') })
+// minChecks：2026-10-01 实测 8 条（固定 6 个样例派生，条数稳定；静默少跑一条就变红）
+const judge = createJudge({ script: 'raster-check', outDir: resolveOutDir('raster-check'), minChecks: 8 })
 guardCrashes(judge)
 
 /** playwright 模块：require('playwright') → VERIFY_PLAYWRIGHT → 作者机器上的历史绝对路径；都不行 → BLOCKED */
@@ -70,7 +71,10 @@ function resolveChromiumExe() {
 const { chromium } = resolvePlaywright()
 const chromiumExe = resolveChromiumExe()
 
-const url = process.argv[2] || 'http://127.0.0.1:1420'
+// URL 不能直接取 `process.argv[2]`：脚本同时认 `--out <dir>`，两种写法混用会让位置参数整体前移，
+// `--out` 自己变成 URL → `page.goto('--out')` → "Cannot navigate to invalid URL"（实测：整脚本 0 条检查、
+// 报 ERROR，看起来像"栅格检查坏了"）。改由共享的"长得像不像 URL"解析，两种写法都写对。
+const { base: url } = parseRunnerArgs()
 const here = dirname(fileURLToPath(import.meta.url))
 const fixtureDir = join(here, 'fixtures', 'deco-calibration')
 

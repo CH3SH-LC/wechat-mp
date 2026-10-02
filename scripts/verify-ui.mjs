@@ -37,7 +37,9 @@ const { outDir: argOutDir, base: argBase } = parseRunnerArgs()
 const outDir = argOutDir || `docs/artifacts/${localDate()}-e2e`
 const url = argBase
 const errors = []
-const judge = createJudge({ script: 'verify-ui', outDir })
+// minChecks：2026-10-01 实测 134 条。plannedCases 管"场景有没有出现"，条数下界管"断言有没有被
+// 整段删掉"——两者互补，缺一个都留得下静默损失。
+const judge = createJudge({ script: 'verify-ui', outDir, minChecks: 134 })
 guardCrashes(judge)
 tapCheckLines(judge)
 // 计划场景（指南 §3.1「计划场景执行完整」）：每个场景都必须在 stdout 里留下至少一条结论行。

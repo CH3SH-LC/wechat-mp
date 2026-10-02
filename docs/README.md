@@ -1,6 +1,6 @@
 # 文档导航
 
-更新：2026-09-30。先读当前文档；历史轮次可通过 Git 或本次清理备份查询。
+更新：2026-10-02。先读当前文档；历史轮次可通过 Git 或本次清理备份查询。
 
 | 读者 / 问题 | 唯一入口 |
 | --- | --- |
@@ -11,8 +11,12 @@
 | 开发环境、验证与打包 | [开发指南](DEVELOPMENT.md) |
 | 文件在哪、模块做什么 | [项目结构](../STRUCTURE.md) |
 | 最近状态 / 变更原因与验证 | [精简进度](../PROGRESS-LITE.md) / [详细进度](../PROGRESS.md) |
-| 第二轮修改任务：复测缺口、回归、发布与真实模型验收（**A–E 已实施并验证；F 因本机 WebView2 不开放 CDP 而 BLOCKED，未验收**） | [第二轮修改指南](design/ds-repair-guide-2026-09-30.md)、[最新审计与回归输入](artifacts/2026-09-30-ds-audit/README.md) |
-| 真机验收为何跑不了：WebView2 无 CDP 端点的排查结论与已排除项（换环境前先看这条） | [WebView2 与真机验收](design/webview2-cdp-and-live-acceptance-2026-10-01.md) |
+| 当前能力与继续任务：短通知可用样本、发布版重开/导出已证；两类执行缺口已修并附反证（待独立复核），再补用户交付 | [最新独立复核](artifacts/2026-10-02-readiness-review/README.md)、[DS当前指南§0.0](design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务) |
+| 真实模型验收（默认发布版 L1–L6 同一 exe）的结果、两次真实失败与修复 | [真实模型验收记录](artifacts/2026-10-02-r8-real-acceptance/README.md) |
+| 用户交付面：多页导出、安装交付与后台核对清单、长文代表稿、证据口径修订 | [P1/P2 交付面记录](artifacts/2026-10-02-p2-delivery/README.md) |
+| 第二轮 P0 收口（P0-A 特殊 IPC 响应 / P0-C 终结顺序）执行记录与反证 | [第二轮 P0 收口](artifacts/2026-10-02-p0-closeout/README.md) |
+| 上一轮执行与反例（历史，以最新复核的勘误为准） | [DS收口记录](artifacts/2026-10-02-closeout/README.md)、[晚间复核证据](artifacts/2026-10-02-evening-review/README.md)、[午间历史反例](artifacts/2026-10-02-continuation-review/README.md) |
+| CDP 历史连接失败及 preflight 身份、收尾、归档缺口 | [WebView2 与真机验收](design/webview2-cdp-and-live-acceptance-2026-10-01.md) |
 | 第一轮任务及原始失败输入（历史关闭状态已被复测更新） | [第一轮指南](design/ds-repair-guide-2026-09-29.md)、[原始失败夹具](artifacts/2026-09-29-capability-review/README.md) |
 | AI 提示词与知识注入入口 | [上下文索引](ai-context/README.md) |
 | 体验与素材问题调查与修改方案（P0/P1/P2 已实施；残留项见需求基线） | [代码调查建议](design/improvement-review-2026-09-24.md) |

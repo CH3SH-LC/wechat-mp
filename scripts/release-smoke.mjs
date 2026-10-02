@@ -25,6 +25,7 @@ import {
   hashInventory,
   launchDesktop,
   prepareIsolation,
+  procIdentity,
   realWorkspaceDir,
   waitForCdp,
 } from './lib/desktop-harness.mjs'
@@ -81,7 +82,14 @@ try {
     run.exeHash = ctx.exeHash
     run.pid = ctx.pid
     run.cdpPort = cdpPort
-    console.log(`[release-smoke] 启动 PID=${ctx.pid} exe=${exe}\n  sha256=${ctx.exeHash}\n  CDP=127.0.0.1:${cdpPort}`)
+    // 启动后**立刻**固定本轮启动身份（映像名 + 完整路径 + 创建时刻），关闭时原样交回。
+    // 为什么必须现在取：关闭时只能用"启动时记下的"身份比对；只凭数字 PID 无法排除 PID 被回收后
+    // 复用，而 closeOwnPid 在身份不齐备时会**拒绝关闭**（零关闭操作），不会去赌那个数字。
+    run.identity = procIdentity(ctx.pid, exe)
+    console.log(
+      `[release-smoke] 启动 PID=${ctx.pid} exe=${exe}\n  sha256=${ctx.exeHash}\n  CDP=127.0.0.1:${cdpPort}\n` +
+        `  启动身份：完整=${run.identity.identityComplete} image=${run.identity.actualImage} path=${run.identity.actualPath} startTime=${run.identity.actualStartTime}`,
+    )
 
     // 窗口标题改由**操作系统**读取，不再依赖 CDP。
     //
@@ -135,9 +143,25 @@ try {
   fail('smoke', String(e && e.message ? e.message : e))
 } finally {
   if (ctx) {
-    const r = await closeOwnPid(ctx.pid)
+    // 传 exe + **本轮启动身份**：closeOwnPid 会用后者做齐备门槛与关闭前复核；
+    // 只传 exe（旧调用）已在 10-02 晚复核中定性为"不足以确认身份"，会被拒绝关闭。
+    // `forced` 单独报出来（强杀不等于"正常退出"）；refused 时如实打印原因。
+    const r = await closeOwnPid(ctx.pid, { exe, expectedIdentity: run.identity })
     run.closed = { ...r, pid: ctx.pid }
-    console.log(`[release-smoke] 关闭本轮 PID=${ctx.pid}：closed=${r.closed} forced=${r.forced}`)
+    console.log(`[release-smoke] 关闭本轮 PID=${ctx.pid}：closed=${r.closed} forced=${r.forced} refused=${r.refused} via=${r.via}${r.reason ? ` reason=${r.reason}` : ''}`)
+    // 关闭结果必须进最终判定（2026-10-02 复核 §0.0 末段）：原来 `run.closed` 只写进证据、不参与
+    // `run.checks`/`status`，于是"身份不符被拒绝关闭""等不到正常退出只好强杀"这两种异常
+    // 照样能报 PASS——而它们各自都是真实症状（前者会留下一个没关掉的进程，后者说明应用没走退出路径）。
+    check(
+      '本轮自有 PID 已按启动身份核验关闭（closed=true，且不是"身份不符被拒绝关闭"）',
+      r.closed === true && r.refused !== true,
+      `closed=${r.closed} refused=${r.refused} via=${r.via}${r.reason ? ` reason=${r.reason}` : ''}`,
+    )
+    check(
+      '关闭走的是应用自身的退出路径（forced 单独记，不再"异常关闭也算通过"）',
+      r.forced !== true && r.exitedBeforeRequest !== true,
+      `forced=${r.forced} exitedBeforeRequest=${r.exitedBeforeRequest} via=${r.via}`,
+    )
   }
 }
 

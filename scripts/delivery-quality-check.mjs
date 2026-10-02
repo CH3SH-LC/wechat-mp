@@ -42,10 +42,24 @@ import {
 // 对抗式审计（2026-09-29）发现的两条**假通过/真截断**，断言直接打在生产函数上。
 import { splitAssistant } from '../src/lib/extract.ts'
 import { composeMarkdown } from '../src/lib/compose.ts'
+import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 
+// 统一判定器（指南 §3.1 / §0.2）：本脚本原先自己维护 `failed` 计数、**不产出 run-result.json**——
+// 于是"零条断言被执行"与"全部通过"在归档里完全一样（把断言全删掉也照样打印 DELIVERY-QUALITY OK、
+// exit 0）。改为走共享模块：计划场景齐全（①…⑫）+ 异常/零检查都落成 ERROR 且退出非 0。
+// `MIN_CHECKS` 取 2026-10-01 实测条数：静默删掉一条断言会立刻变红，这是**故意**的。
+const MIN_CHECKS = 123
+const judge = createJudge({
+  script: 'delivery-quality-check',
+  outDir: resolveOutDir('delivery-quality-check'),
+  plannedCases: ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩', '⑪', '⑫'],
+  minChecks: MIN_CHECKS,
+})
+guardCrashes(judge)
 let failed = 0
 const check = (name, ok, extra = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'} - ${name}${extra ? ' (' + extra + ')' : ''}`)
+  judge.check(name, ok, extra)
   if (!ok) failed++
 }
 const codes = (list) => list.map((i) => i.code)
@@ -564,9 +578,5 @@ console.log('\n[⑫ 正文边界不确定必须可见（不得静默提交截断
 }
 
 console.log('')
-if (failed) {
-  console.log(`DELIVERY-QUALITY FAILED (${failed} 条断言未通过)`)
-  process.exit(1)
-}
-console.log('DELIVERY-QUALITY OK')
-process.exit(0)
+if (failed) console.log(`（其中 ${failed} 条断言未通过，最终判定见下方统一结果行）`)
+judge.finish({ label: 'DELIVERY-QUALITY' })

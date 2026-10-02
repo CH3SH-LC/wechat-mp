@@ -55,7 +55,7 @@
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
 import {
@@ -65,9 +65,27 @@ import {
   hashInventory,
   launchDesktop,
   prepareIsolation,
+  procIdentity,
   realWorkspaceDir,
   waitForCdp,
 } from './lib/desktop-harness.mjs'
+// 判定与落盘口径复用共享模块：本脚本自己写的 `finalizeAndExit` 曾经在**证据写入之前**就把
+// 状态定死，写盘失败照样 PASS——修共享模块不会自动修到这个独立实现，所以它也改成调同一套。
+import { persistRunResult } from './lib/run-result.mjs'
+// 派发**之前**的付费预算（指南 §0.3 R2）。与 `scripts/budget-check.mjs` 测的是同一个模块：
+// 那边用假传输逐条验收，这边只做接线。
+import {
+  DEFAULT_MAX_DISPATCHES,
+  DEFAULT_MAX_GEN_SVG,
+  GLOBAL_LEDGER,
+  createBudget,
+  parseBudgetParam,
+  readLedgerFile,
+} from './lib/dispatch-budget.mjs'
+import { gateCoverageProven, installProbeSource } from './lib/ipc-gate.mjs'
+import { finalizePhase, preflightLedgerGate, runFinalizeSequence } from './lib/ledger-finalize.mjs'
+import { factChecks, norm } from './lib/fact-assert.mjs'
+import { canReopenAfterClose, compareDispatchEvidence, readTraceRecords, summarizeRequests } from './lib/trace-read.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..')
@@ -77,7 +95,7 @@ const repoRoot = resolve(here, '..')
 // =====================================================================================
 
 const argv = process.argv.slice(2)
-const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6']
+const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8']
 const phase = String(argv.find((a) => PHASES.includes(a.toUpperCase())) || '').toUpperCase()
 const opt = (name, def = null) => {
   const i = argv.indexOf('--' + name)
@@ -90,8 +108,18 @@ const root = resolve(rootArg || join(process.env.TEMP || process.env.TMP || tmpd
 const exeArg = opt('exe', null)
 const exe = resolve(exeArg || join(repoRoot, 'src-tauri', 'target', 'release', 'wechat-mp-desktop.exe'))
 const TURN_TIMEOUT_MS = Number(opt('turn-timeout', '600000'))
-const MAX_DISPATCHES = Number(opt('max-dispatches', '20'))
-const MAX_GEN_SVG = Number(opt('max-gen-svg', '4'))
+// 额度参数必须是**有限非负整数**（指南 §0.3）：非法值一律 BLOCKED，不能被当成默认值悄悄放过去，
+// 更不能靠 `--max-dispatches 1e9` 之类把授权额度放大。
+// 注意 `def` 传的是 `null` 而不是默认额度：**没给参数**与"给了个值"必须可区分——
+// 没给就是"没意见"（沿用盘上账本已存的上限），给了值才表达"只能调小"（见 dispatch-budget 的 clampBudget）。
+// 2026-10-02 踩到：用户放宽授权后，一次没带参数的普通运行会把上限悄悄压回默认 20。
+const MAX_DISPATCHES_ARG = parseBudgetParam(opt('max-dispatches', null), null)
+const MAX_GEN_SVG_ARG = parseBudgetParam(opt('max-gen-svg', null), null)
+// 上次业务失败必须**显式解除**才能继续付费 phase（指南 §0.4 末段）。理由要写下来，留痕。
+const RESUME_REASON = opt('resume-after-fix', null)
+// 没给参数 → `undefined`（= 没意见）；非法 → `NaN`（下面会 BLOCKED）
+const MAX_DISPATCHES = MAX_DISPATCHES_ARG.ok ? (MAX_DISPATCHES_ARG.value == null ? undefined : MAX_DISPATCHES_ARG.value) : NaN
+const MAX_GEN_SVG = MAX_GEN_SVG_ARG.ok ? (MAX_GEN_SVG_ARG.value == null ? undefined : MAX_GEN_SVG_ARG.value) : NaN
 
 const CONFIG_HINT = `用法：node scripts/live-acceptance.mjs <L1|L2|L3|L4|L5|L6> [--root <dir>] [--exe <path>]
   · L1..L4 必须共用同一个 --root（同一 profile / workspace / 会话），L5/L6 也用同一个；
@@ -291,6 +319,17 @@ const PROMPTS = {
   L4:
     '将现有开篇横图重新绘制为：晴天里图书馆窗边的一株绿色盆栽和合上的红色书，画面无文字。明确新画，只换这张图；' +
     '标题和全部正文保持原样，不增加其他素材。',
+  // L7 长文代表稿（§0.0 P2.3）：**同一组固定事实**，但要求写成 800–1200 字长文 + 一张开篇横图。
+  // 复用同一组事实是有意的：事实断言 `factChecks()` 就是按这组事实写的，长文才能用同一套已验证的口径核对，
+  // 不需要另造一套断言（另造一套就等于换题面）
+  L7:
+    '请直接写一篇校园图书馆的介绍长文，采用默认校园风格，不再询问。固定测试情境：2026年10月10日周六 9:00–17:00 开放；' +
+    '2026年10月11日周日全天闭馆；自习区在一楼；咨询电话010-55556666。标题“校园图书馆开放通知”，正文不少于800字、不超过1200字。' +
+    '只配一张开篇横图：暖色台灯照亮蓝色书本，不要照片位、角饰或额外图片。',
+  // L8 只改文字保留图片（§0.0 P2.3 的续改）
+  L8:
+    '把标题改为“冬季开馆时间调整”，正文压缩到 300–500 字；完整保留开放日期时段、周日全天闭馆、一楼自习区和电话。' +
+    '只改文字，现有配图和所有素材保持原样。',
 }
 
 /** 每个 phase 的额度与写不写稿。maxDispatches 是本回合的**中止线**（超了就停手并 BLOCKED），不是目标值。 */
@@ -301,42 +340,22 @@ const PHASE_PLAN = {
   L4: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 2, title: '周末到馆提醒' },
   L5: { writes: false, minDispatches: 0, maxDispatches: 0, maxGenSvg: 0, title: null },
   L6: { writes: false, minDispatches: 0, maxDispatches: 0, maxGenSvg: 0, title: null },
+  // L7 长文：长稿比短通知更容易触发多轮，但仍按同一套有界预算（首篇 5 次、绘图 3 次）
+  L7: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: '校园图书馆开放通知' },
+  // L8 只改文字：不绘图
+  L8: { writes: true, minDispatches: 2, maxDispatches: 4, maxGenSvg: 0, title: '冬季开馆时间调整' },
 }
 
 // =====================================================================================
 // 第 5 节：账本（跨 phase 累加，派发**之前**检查额度）
 // =====================================================================================
 
-const ledgerPath = join(root, 'ledger.json')
+// 权限账本在**固定路径**（与 `--root` 无关）：换 `--root` 不能成为重置授权额度的方法（指南 §0.3）。
+// `root/ledger.json` 只作本次证据的镜像。
+const ledgerPath = GLOBAL_LEDGER
+const mirrorLedgerPath = join(root, 'ledger.json')
 const lockPath = join(root, '.live-acceptance.lock')
 
-function loadLedger() {
-  const j = readJson(ledgerPath)
-  if (!j || j.schema !== 1) {
-    return {
-      schema: 1,
-      createdAt: new Date().toISOString(),
-      root,
-      budget: { maxDispatches: MAX_DISPATCHES, maxGenSvg: MAX_GEN_SVG },
-      totals: { dispatches: 0, genSvg: 0 },
-      phases: [],
-      note: '所有 prep/write/revise/补描述/绘图调用合并计数；新批次不清零（指南 §8.1）',
-    }
-  }
-  // 额度参数可以被调小（例如只想花更少的钱），但**不会**被调大超过本次命令行给出的上限
-  j.budget = { maxDispatches: Math.min(j.budget?.maxDispatches ?? MAX_DISPATCHES, MAX_DISPATCHES), maxGenSvg: Math.min(j.budget?.maxGenSvg ?? MAX_GEN_SVG, MAX_GEN_SVG) }
-  j.totals = j.totals || { dispatches: 0, genSvg: 0 }
-  j.phases = j.phases || []
-  return j
-}
-const remaining = (led) => ({
-  dispatches: led.budget.maxDispatches - led.totals.dispatches,
-  genSvg: led.budget.maxGenSvg - led.totals.genSvg,
-})
-function saveLedger(led) {
-  led.updatedAt = new Date().toISOString()
-  writeJsonEvidence(ledgerPath, led, 'ledger.json')
-}
 function isPidAlive(pid) {
   try {
     process.kill(pid, 0)
@@ -345,15 +364,42 @@ function isPidAlive(pid) {
     return false
   }
 }
+
+/**
+ * 同 profile 锁：用 `wx` **原子创建**，不"先读后写"。
+ *
+ * 原来的读-判断-写不是原子的：两个 phase 同时启动时都能读到"没有 holder"，然后都把自己写进去，
+ * 于是同一个隔离 profile 上真的跑起两个实例。`wx` 让"检查"与"占用"合成一次系统调用，
+ * 只有一个能成功。
+ */
 function acquireLock() {
   ensureDir(root)
+  const payload = JSON.stringify({ pid: process.pid, phase, at: new Date().toISOString() })
+  const tryCreate = () => {
+    try {
+      writeFileSync(lockPath, payload, { encoding: 'utf8', flag: 'wx' })
+      return true
+    } catch (e) {
+      if (e && e.code === 'EEXIST') return false
+      block('lock', `无法创建锁文件 ${lockPath}：${String((e && e.message) || e)}`)
+      return false
+    }
+  }
+  if (tryCreate()) return true
+  // 已存在：只有"占用者确实还活着"才算冲突；占用者已死则回收（同一 profile 的上一轮崩了）
   const holder = readJson(lockPath)
-  if (holder && holder.pid && holder.pid !== process.pid && isPidAlive(holder.pid)) {
+  if (holder && holder.pid === process.pid) return true
+  if (holder && holder.pid && isPidAlive(holder.pid)) {
     block('lock', `另一个 phase 正在运行（pid=${holder.pid}，phase=${holder.phase}，起于 ${holder.at}）。同一 profile 不得同时跑两个实例。`)
     return false
   }
-  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, phase, at: new Date().toISOString() }), 'utf8')
-  return true
+  try {
+    writeFileSync(lockPath, payload, 'utf8') // 持有者已退出：覆盖它
+    return true
+  } catch (e) {
+    block('lock', `回收死锁失败：${String((e && e.message) || e)}`)
+    return false
+  }
 }
 function releaseLock() {
   const holder = readJson(lockPath)
@@ -366,94 +412,13 @@ function releaseLock() {
   }
 }
 
-function recordLedger(led, { dispatches, genSvg, note }) {
-  const prev = { ...led.totals }
-  led.totals.dispatches += dispatches
-  led.totals.genSvg += genSvg
-  led.phases.push({
-    phase,
-    at: new Date().toISOString(),
-    dispatches,
-    genSvg,
-    prev,
-    after: { ...led.totals },
-    remaining: remaining(led),
-    note,
-  })
-  saveLedger(led)
-}
-
 // =====================================================================================
 // 第 6 节：trace 读取（派发计数的权威来源之一）
 // =====================================================================================
 
-/** 读 `<workspace>/traces/*.jsonl`，只取 `sinceMs` 之后写入的回合日志 */
-function traceRecordsSince(workspace, sinceMs) {
-  const dir = join(workspace, 'traces')
-  const out = []
-  const files = []
-  let names = []
-  try {
-    names = readdirSync(dir)
-  } catch {
-    return { records: [], files: [], note: 'traces 目录不存在（本轮可能没有任何模型请求）' }
-  }
-  for (const n of names) {
-    if (!n.endsWith('.jsonl')) continue
-    const p = join(dir, n)
-    let st
-    try {
-      st = statSync(p)
-    } catch {
-      continue
-    }
-    if (st.mtimeMs < sinceMs - 5000) continue
-    files.push({ file: n, mtime: st.mtimeMs, bytes: st.size })
-    let lines = []
-    try {
-      lines = readFileSync(p, 'utf8').split('\n')
-    } catch {
-      continue
-    }
-    for (const line of lines) {
-      const t = line.trim()
-      if (!t) continue
-      let r
-      try {
-        r = JSON.parse(t)
-      } catch {
-        continue
-      }
-      r.__file = n
-      out.push(r)
-    }
-  }
-  const requests = out.filter((r) => r.kind === 'request' && typeof r.startedAt === 'number' && r.startedAt >= sinceMs - 3000)
-  requests.sort((a, b) => a.startedAt - b.startedAt)
-  return { records: out, requests, files }
-}
-/** 请求证据摘要（脱敏：只有结构字段，没有请求正文、没有密钥） */
-function summarizeRequests(requests) {
-  return requests.map((r, i) => ({
-    localRequestId: `${phase}-r${i + 1}`,
-    runId: String(r.__file || '').replace(/\.jsonl$/, ''),
-    phase: r.phase || '',
-    model: r.model || '',
-    attempt: typeof r.attempt === 'number' ? r.attempt : null,
-    slotId: r.slotId || null,
-    startedAt: r.startedAt,
-    ms: typeof r.ms === 'number' ? r.ms : null,
-    ok: r.ok === true,
-    failure: r.failure || null,
-    error: r.error || null,
-    responseLength: typeof r.responseLength === 'number' ? r.responseLength : null,
-    finishReason: r.finishReason || null,
-    usage: r.usage || null,
-    toolCalls: Array.isArray(r.toolCalls) ? r.toolCalls : undefined,
-    modelReturned: r.modelReturned || undefined,
-  }))
-}
-
+// trace 读取与派发核对已抽到 `scripts/lib/trace-read.mjs`：那套逻辑原来长在这个**要连真机**的脚本里，
+// 离线回归够不着，于是"traces 目录不存在时漏 `requests` 字段 → 调用方 TypeError"一直没被发现。
+// 现在由 `scripts/live-driver-check.mjs` 用替身目录逐条钉住。
 // =====================================================================================
 // 第 7 节：页面侧探针与读取（CDP 直连真实 WebView2）
 // =====================================================================================
@@ -481,6 +446,9 @@ const SRC_COMMON = [
   '      if (el.children.length === 0 && (el.textContent || "").trim() === titleText) { titleEl = el; break; }',
   '    }',
   '  }',
+  // 本产品的排版引擎**不输出 h1..h6**（公众号正文用 section/span + 内联样式，语义标题会被平台吃掉），
+  // 所以没有 h1..h6 时要把"文本恰等于标题的那个节点"当作标题节点，否则标题断言永远红。
+  '  if (!firstHeading && titleEl) firstHeadingText = (titleEl.textContent || "").trim();',
   '  var skip = { SCRIPT: 1, STYLE: 1, SVG: 1, IMG: 1, DEFS: 1, NOSCRIPT: 1, TITLE: 1 };',
   '  var parts = [];',
   '  var view = doc.defaultView;',
@@ -511,30 +479,24 @@ const SRC_COMMON = [
  * 全部只用单引号，避免与外层模板字面量打架。
  */
 const PAGE_SRC = {
-  /** 安装 invoke 探针：把模型命令的调用次数独立记在页面里（与 traces 交叉核对） */
-  installProbe: [
-    'var T = window.__TAURI_INTERNALS__;',
-    'if (!T || typeof T.invoke !== "function") return { ok: false, reason: "没有 __TAURI_INTERNALS__.invoke" };',
-    'if (T.__liveAcceptanceProbe) { window.__acceptanceProbe = window.__acceptanceProbe || T.__liveAcceptanceProbe; return { ok: true, reused: true, probe: window.__acceptanceProbe }; }',
-    'var model = ["chat_stream", "gen_svg", "prep_turn", "refine_brief", "review_assets"];',
-    'var probe = { installedAt: Date.now(), calls: [], model: [] };',
-    'window.__acceptanceProbe = probe;',
-    'var orig = T.invoke.bind(T);',
-    'T.invoke = function (cmd, args, opts) {',
-    '  var rec = { t: Date.now(), cmd: String(cmd) };',
-    '  if (model.indexOf(rec.cmd) >= 0) {',
-    '    if (args && args.slotId) rec.slotId = String(args.slotId);',
-    '    if (args && args.kind) rec.kind = String(args.kind);',
-    '    if (args && args.turn) rec.turn = String(args.turn);',
-    '    if (args && typeof args.attempt === "number") rec.attempt = args.attempt;',
-    '    probe.model.push(rec);',
-    '  }',
-    '  probe.calls.push(rec);',
-    '  return orig(cmd, args, opts);',
-    '};',
-    'T.__liveAcceptanceProbe = probe;',
-    'return { ok: true, reused: false, probe: probe };',
-  ].join('\n'),
+  /**
+   * 安装 invoke 探针（指南 §0.3 R2）。
+   *
+   * **关键差别：付费命令先预留、后派发。**
+   * 原来是「记录 → 直接 `orig()`」，预算只在脚本侧事后轮询，所以额度只剩 1 次时同时来的两个
+   * 请求**两个都真的发出去了**。现在付费命令一律：先 `await window.__acceptanceReserve(cmd)`
+   * （宿主侧原子预留并落盘），**只有** `ok===true` 才 `orig()`；预留失败就地抛错、一次都不发。
+   *
+   * `probe.transport` 因此就是"真的打到端点的次数"——它不是断言里的常量，而是门禁放行的产物。
+   * 宿主没暴露 `__acceptanceReserve` 时**拒绝安装**：宁可不测，也不在无门禁状态下花钱。
+   *
+   * **源码已移到 `scripts/lib/ipc-gate.mjs`**：那段逻辑原来只挂在 `window.fetch` 上，
+   * 而 tauri 2.11.5 在任意一次 IPC fetch/解码失败后会把此后所有命令切到
+   * `window.ipc.postMessage`（wry 冻死的对象，拦不住）。现在它守的是"永不切通道 + 一旦故障就停发
+   * + 覆盖率自证"三条防线，由一个纯 Node 的回归脚本（`scripts/ipc-gate-check.mjs`，
+   * 用本机真实的 tauri 协议源码 + 假传输）逐条钉住，所以它必须能被单独 import。
+   */
+  installProbe: installProbeSource,
 
   /** 轻量运行状态（等待回合结束时高频轮询用） */
   readRun: [
@@ -548,12 +510,26 @@ const PAGE_SRC = {
     '  busy: !!wb || !!q(".btn-stop"),',
     '  workPhase: wb ? (wb.getAttribute("data-phase") || null) : null,',
     '  dispatch: probe.model.length,',
+    // 探针**在不在**必须能被读到：原来只有"计数为 0"，而"探针丢了"与"确实没派发"长得一模一样
+    '  probeInstalled: !!window.__acceptanceProbe,',
+    // 门禁还**在链路上**吗？"探针对象在"与"拦截函数还挂着"是两件事：
+    // 2026-10-02 晚间的反例就是把 window.fetch 还原之后，旧标记还在、门禁却已经不生效了。
+    '  gateLive: !!(window.__acceptanceProbe && window.__acceptanceProbe.gate && window.__acceptanceProbe.gate.wrappedFetch === window.fetch),',
+    '  fallbackLatched: !!(window.__acceptanceProbe && window.__acceptanceProbe.fallbackLatched),',
+    '  coverageViaFetch: !!(window.__acceptanceProbe && window.__acceptanceProbe.coverage && window.__acceptanceProbe.coverage.viaFetch),',
     '  genSvg: probe.model.filter(function (m) { return m.cmd === "gen_svg"; }).length,',
+    '  transport: probe.transport || 0,',
+    '  transportDraw: probe.transportDraw || 0,',
+    '  refused: (probe.refused || []).length,',
     '  msgs: document.querySelectorAll(".msg").length,',
     '  lastAssistantLen: lastText.trim().length,',
     '  docState: q("[data-doc-state]") ? q("[data-doc-state]").getAttribute("data-doc-state") : null,',
     '  errorText: q(".msg-error") ? (q(".msg-error").textContent || "").trim() : "",',
     '  saveError: q(".save-error") ? (q(".save-error").textContent || "").trim() : "",',
+    // ⚠️ 导出回执必须由**这里**返回：`waitForExportMsg()` 读的就是 `readRun()` 的 `exportMsg`，
+    // 而它一直只长在 `readState` 里——于是 L6 永远等不到回执（2026-10-02 真机：
+    // 文件确实导出了、回执也显示了 8s，但驱动读的字段不存在，只能报"超时未出现导出回执"）。
+    '  exportMsg: q(".export-msg") ? (q(".export-msg").textContent || "").trim() : "",',
     '  notice: q("[data-notice]") ? (q("[data-notice]").textContent || "").trim() : ""',
     '};',
   ].join('\n'),
@@ -589,7 +565,17 @@ const PAGE_SRC = {
     '  saveError: q(".save-error") ? (q(".save-error").textContent || "").trim() : "",',
     '  notice: q("[data-notice]") ? (q("[data-notice]").textContent || "").trim() : "",',
     '  probeModel: probe.model.map(function (m) { return { t: m.t, cmd: m.cmd, slotId: m.slotId || null, kind: m.kind || null, attempt: m.attempt == null ? null : m.attempt }; }),',
+    '  probeRefused: (probe.refused || []).map(function (m) { return { t: m.t, cmd: m.cmd, slotId: m.slotId || null, reason: m.reason }; }),',
+    '  probeTransport: probe.transport || 0,',
+    '  probeInstalled: !!window.__acceptanceProbe,',
     '  probeCallCount: probe.calls.length,',
+    // 门禁健康度进证据：切通道、解码失败、拦截函数脱落都必须留痕，不能只体现在"传输 0 次"上
+    '  probeGateLive: !!(probe.gate && probe.gate.wrappedFetch === window.fetch),',
+    '  probeFallbackLatched: !!probe.fallbackLatched,',
+    '  probeFallbackReason: probe.fallbackReason || null,',
+    '  probeCustomProtocolFailures: (probe.customProtocolFailures || []).slice(0, 5),',
+    '  probeDecodeFailures: (probe.decodeFailures || []).slice(0, 5),',
+    '  probeGateIdentityFailures: probe.gateIdentityFailures || 0,',
     '  previewHasFrame: !!fdoc,',
     '  article: art,',
     '  images: imgs.map(function (im) { var s = im.getAttribute("src") || ""; return { len: s.length, fnv: fnv(s), w: im.naturalWidth || 0, h: im.naturalHeight || 0 }; }),',
@@ -627,6 +613,11 @@ async function pageFn(page, name, arg = null) {
 
 const HANDLES = [] // 本轮启动过的所有自有进程（每个都有自己的 closed 标记，绝不互相误关）
 let ACTIVE = null
+// 本轮的上下文（隔离目录 / 密钥 / 预算 / playwright）。提到模块级是为了让 `finalizeAndExit()`
+// 也能收尾账本——**所有退出路径**都要落一条账本结论，包括"启动阶段就 BLOCKED"这种早退
+// （实测踩过：after openApp 返回 null 时直接 `return`，连 finally 都没进，证据里 `ledgerAfter` 是 null）。
+let CTX = null
+let LEDGER_FINALIZED = false
 
 function drain(child, sink) {
   if (!child || !child.stdout) return
@@ -638,7 +629,19 @@ function drain(child, sink) {
   })
 }
 
-async function openApp(chromium, ctx) {
+/**
+ * 预热隔离 profile（2026-10-02 实测得到的**必需**步骤）。
+ *
+ * 现象（可复现，非偶发）：WebView2 在**首次**初始化一个全新的 user-data-dir 时，即使
+ * `--remote-debugging-port` 确实出现在它的子进程命令行上，端口也不会被监听；用**同一个**目录
+ * 再启动一次，约 1 秒就可达。实测：全新目录连跑 25s 无监听；同一目录的第 2、3 次启动各 1s 可达。
+ *
+ * 这解释了为什么历史上的每一次真机验收都卡在"CDP 无页面"——每一轮都用全新的隔离 profile。
+ * 所以真正测量之前先做一次**预热启动**：不驱动界面、不派发任何请求、只等 profile 落盘后按身份关掉。
+ */
+async function warmUpProfile(ctx) {
+  const marker = join(ctx.iso.webview, 'EBWebView', 'Local State')
+  if (existsSync(marker)) return { skipped: true, marker }
   const cdpPort = await freePort()
   const launch = launchDesktop(exe, {
     profile: ctx.iso.profile,
@@ -651,6 +654,83 @@ async function openApp(chromium, ctx) {
   launch.child.on('exit', (code, signal) => {
     sink.exit = { code, signal, at: Date.now() }
   })
+  const identity = procIdentity(launch.pid, exe)
+  const mine = { pid: launch.pid, closed: false, sink, rec: null, identity }
+  HANDLES.push(mine)
+  const t0 = Date.now()
+  while (Date.now() - t0 < 45000 && !existsSync(marker)) await new Promise((r) => setTimeout(r, 500))
+  const markerMs = Date.now() - t0
+  // ⚠️ 光等 `Local State` 出现还不够：实测（4 次里 1 次）标记 1.8s 就出现、随后真正那一轮仍然
+  // 90s 连不上。等到 25s 再关的对照里，后一次启动 1s 就可达。所以再给一段固定沉降，别一出现就关。
+  if (existsSync(marker)) await new Promise((r) => setTimeout(r, 15000))
+  const ready = existsSync(marker)
+  const closeResult = await closeOwnPid(launch.pid, { exe, expectedIdentity: identity })
+  mine.closed = closeResult.closed === true
+  const rec = {
+    phase,
+    at: new Date().toISOString(),
+    warmUp: true,
+    pid: launch.pid,
+    exe,
+    exeHash: launch.exeHash,
+    cdpPort,
+    profile: ctx.iso.profile,
+    webview: ctx.iso.webview,
+    workspace: ctx.iso.workspace,
+    identity,
+    profileReady: ready,
+    closed: { ...closeResult, at: new Date().toISOString() },
+    childOutput: { ...sink },
+  }
+  mine.rec = rec
+  evidence.launches.push(rec)
+  log(
+    `  [预热] pid=${launch.pid} 首次初始化隔离 profile：${ready ? `已完成（标记 ${markerMs}ms + 沉降 15s，共 ${Date.now() - t0}ms）` : `45s 内未见 ${marker}`}`,
+  )
+  if (!ready) fail('launch', `隔离 profile 预热 45s 仍未见 ${marker}——后续 CDP 大概率不可用`)
+  if (!mine.closed) fail('cleanup', `预热实例未能关闭（${JSON.stringify(closeResult)}）`)
+  return { skipped: false, ready, ms: Date.now() - t0, closeResult }
+}
+
+/**
+ * 启动应用并连上 CDP。**全新隔离 profile 的首次启动**有概率在 90s 内不开放调试端口
+ * （2026-10-02 实测：4 次里 1 次，即使预热已完成标记）——这是 WebView2 首轮初始化的行为，不是脚本错。
+ * 所以做**一次有界重试**：关掉、重开、再等一次。重试发生在任何派发之前（零成本），
+ * 且只重试一次——真正的启动故障不会被它掩盖。
+ */
+async function openApp(chromium, ctx) {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const app = await openAppOnce(chromium, ctx)
+    if (app) return app
+    const cdpBlocked = typeof run.blockedReason === 'string' && run.blockedReason.includes('CDP 在')
+    if (attempt === 1 && cdpBlocked) {
+      observe('启动重试', '第 1 次启动 90s 内没有可用 CDP 页面（全新隔离 profile 的首轮初始化尚未真正完成）——关闭后按有界策略重开一次')
+      log('  [重试] 第 1 次 CDP 等待超时，关闭后重开一次')
+      run.blockedReason = null
+      run.errors = run.errors.filter((e) => !String(e.message).includes('CDP 在'))
+      continue
+    }
+    return null
+  }
+  return null
+}
+
+async function openAppOnce(chromium, ctx) {
+  const cdpPort = await freePort()
+  const launch = launchDesktop(exe, {
+    profile: ctx.iso.profile,
+    webview: ctx.iso.webview,
+    cdpPort,
+    extraEnv: { DEEPSEEK_API_KEY: ctx.key },
+  })
+  const sink = { stdoutBytes: 0, stderrBytes: 0, exit: null }
+  drain(launch.child, sink)
+  launch.child.on('exit', (code, signal) => {
+    sink.exit = { code, signal, at: Date.now() }
+  })
+  // 启动时把**预期身份**固定下来（PID + 映像名 + 完整路径 + 创建时刻），关闭前要用它复核。
+  // 少了创建时刻，PID 被回收后"那个数字还活着"就能骗过检查。
+  const launchIdentity = procIdentity(launch.pid, exe)
   const rec = {
     phase,
     at: new Date().toISOString(),
@@ -661,17 +741,24 @@ async function openApp(chromium, ctx) {
     profile: ctx.iso.profile,
     webview: ctx.iso.webview,
     workspace: ctx.iso.workspace,
+    identity: launchIdentity,
   }
   evidence.launches.push(rec)
-  const mine = { pid: launch.pid, closed: false, sink, rec }
+  const mine = { pid: launch.pid, closed: false, sink, rec, identity: launchIdentity }
   HANDLES.push(mine)
   ACTIVE = mine
   const close = async () => {
     if (mine.closed) return { closed: true, forced: false, alreadyClosed: true }
-    const r = await closeOwnPid(mine.pid) // 只关**这一个** PID；不用 ACTIVE，避免误伤后开的实例
-    mine.closed = true
+    // 只关**这一个** PID，且用该进程**自己的** exe 与启动时记下的身份复核；不用 ACTIVE，避免误伤后开的实例。
+    // 身份不匹配/查不出来时 closeOwnPid 会**零关闭操作**并回 refused（指南 §0.4 第 4 条）。
+    const r = await closeOwnPid(mine.pid, { exe, expectedIdentity: mine.identity })
+    // 只有**观测到进程确实消失**才算已关闭（`closed:false` 不能标成关好了）。
+    // 原来这里无条件 `mine.closed = true`：关闭失败也会让后续 finally 的 `if (h.closed) continue`
+    // 跳过清理，于是同一个隔离 profile 上可能留下一个还活着的实例。
+    mine.closed = r.closed === true
     rec.closed = { ...r, at: new Date().toISOString() }
     rec.childOutput = { ...sink }
+    if (!mine.closed) fail('cleanup', `自有 PID ${mine.pid} 未能关闭（${JSON.stringify(r)}）——同一 profile 不得再开第二个实例`)
     return r
   }
   log(`  [启动] pid=${launch.pid} cdpPort=${cdpPort} exeHash=${launch.exeHash.slice(0, 12)}…`)
@@ -692,6 +779,17 @@ async function openApp(chromium, ctx) {
         `    且不存在 Edge/WebView2 组策略拦截）。这种情况下只能换一台机器/换运行时版本，本脚本无法自行绕过。`,
     )
     return null
+  }
+  // ⚠️ CDP 端点会**先于页面导航**就绪：目标可能还是 `about:blank`，此时启动核对会因为
+  // "页面归属不是 tauri.localhost" 直接 BLOCKED（2026-10-02 真机踩到）。等它导航完成再判。
+  const navDeadline = Date.now() + 30000
+  while (Date.now() < navDeadline && !pages.some((p) => String(p.url).includes('tauri.localhost'))) {
+    await new Promise((r) => setTimeout(r, 500))
+    try {
+      pages = await waitForCdp(cdpPort, 5000)
+    } catch {
+      /* 列表暂时读不到：保留上一次结果，继续等 */
+    }
   }
   rec.cdpPages = pages.map((p) => ({ type: p.type, url: p.url, hasDebugger: !!p.webSocketDebuggerUrl }))
   // 进程在 CDP 就绪前就退出，说明应用起不来（例如 exe 与 dist 不匹配）——如实报 BLOCKED，不硬测
@@ -717,12 +815,44 @@ async function openApp(chromium, ctx) {
     block('launch', `连接 WebView2 失败：${e.message}`)
     return null
   }
+  // 预算门禁先于探针：探针在装不上门禁时会**拒绝安装**（指南 §0.3）。
+  // 这条通道是"宿主函数"，不经过应用的 invoke，所以门禁自己不会触发门禁。
+  try {
+    await page.exposeFunction('__acceptanceReserve', (cmd, info) => {
+      const r = ctx.budget.reserve(cmd)
+      if (!r.ok) {
+        observe(
+          `预算拒绝派发：${cmd}`,
+          `${r.reason}${info && info.slotId ? `（slotId=${info.slotId}）` : ''}——该请求**没有**发出`,
+        )
+      }
+      return r
+    })
+  } catch (e) {
+    await close()
+    block('budget', `无法把预算门禁暴露给页面（${String((e && e.message) || e)}）——没有门禁就不开测，避免"先发再数"`)
+    return null
+  }
   const probeInstalled = await pageFn(page, 'installProbe')
   if (!probeInstalled || !probeInstalled.ok) {
     await close()
     block('probe', `无法安装 invoke 探针（交叉核对是硬要求）：${JSON.stringify(probeInstalled)}`)
     return null
   }
+  // **覆盖率自证**（指南 §0.0 A）：装好后那条非付费命令必须确实经过我们的 fetch。
+  // 没经过 = 协议已经不走自定义协议通道（回退在安装之前就激活了），此后付费命令根本不经过门禁，
+  // 页面侧再怎么补也够不着——此时唯一的正确动作是零派发地放弃这一轮。
+  if (!gateCoverageProven(probeInstalled)) {
+    await close()
+    block(
+      'probe',
+      `IPC 门禁覆盖率未获证明：安装后那条 list_documents 没有经过受控的 window.fetch（coverage=${JSON.stringify(probeInstalled.coverage)}）。` +
+        `这通常意味着 tauri 协议已经回退到 window.ipc.postMessage 通道（wry 把它冻成 Object.freeze，拦不住），` +
+        `此时付费命令不会经过预算门禁——拒绝开测，本 phase 模型派发为 0。`,
+    )
+    return null
+  }
+  evidence.gate = { coverage: probeInstalled.coverage, reused: probeInstalled.reused === true }
   ACTIVE.page = page
   ACTIVE.browser = browser
   return { launch, page, browser, cdpPort, close, sink, rec }
@@ -832,6 +962,16 @@ function versionFingerprint(disk, appDocValue) {
   const meta = disk.meta || {}
   const snaps = Object.keys(meta.snapshots || {}).sort().map((k) => `${k}@${meta.snapshots[k].ver}:${sha256Text(meta.snapshots[k].svg || '')}`)
   const binds = (meta.bindings || []).map((b) => `${b.slotId || ''}|${b.slot || ''}|${b.id || ''}|${b.source || ''}`).sort()
+  // **素材身份**的稳定指纹（L2 "素材保持原样"要比的是这个，不是上面那条会随写法变化的 bindings 指纹）：
+  // 按槽位顺序取 素材 id + 该 id 的快照版本与内容哈希。刻意**不含**
+  //   · `slotId`（每轮 runId 不同，天然会变）；
+  //   · 槽位描述文本与引用写法（模型把 `[[img:wide|描述]]` 改写成等价的 `[[asset:art-wide|id|描述]]`
+  //     是**正确**行为——2026-10-02 真机实测：素材 id 与快照都没变，只有引用写法变了，
+  //     旧的整条 bindings 比对会把它误判成"素材变了"）。
+  const assetIdentity = (meta.bindings || []).map((b) => {
+    const s = (meta.snapshots || {})[b.id] || {}
+    return `${b.id || ''}@${s.ver != null ? s.ver : ''}:${sha256Text(s.svg || '')}`
+  })
   return {
     docId: disk.docId,
     generation: disk.generation,
@@ -845,12 +985,17 @@ function versionFingerprint(disk, appDocValue) {
     sourceHash: disk.sourceHash,
     htmlHash: disk.htmlHash,
     bindingsHash: sha256Text(binds.join('\n')),
+    assetIdentity,
+    assetIdentityHash: sha256Text(assetIdentity.join('\n')),
     snapshotsHash: sha256Text(snaps.join('\n')),
     bindingCount: (meta.bindings || []).length,
     snapshotCount: snaps.length,
     appHtmlHash: appDocValue && appDocValue.html ? sha256Text(appDocValue.html) : null,
     appSourceHash: appDocValue && appDocValue.source ? sha256Text(appDocValue.source) : null,
-    appRevisionId: appDocValue ? appDocValue.revisionId || null : null,
+    // ⚠️ 应用命令回的是 **snake_case**（Rust `DocContent.revision_id`）；前端 TS 层自己做了映射，
+    // 本脚本直接调 invoke，必须自己认两种写法——否则 appRevisionId 恒为 null，
+    // "应用读回的成品与磁盘当前版本一致"这条会**永远判红**（2026-10-02 真机踩到）。
+    appRevisionId: appDocValue ? (appDocValue.revisionId ?? appDocValue.revision_id ?? null) : null,
     appGeneration: appDocValue && typeof appDocValue.generation === 'number' ? appDocValue.generation : null,
   }
 }
@@ -893,6 +1038,8 @@ function recordBaseline(state, view, ok) {
     qualityOk: view.qualityOk,
     qualityBlockers: view.qualityBlockers,
     bindingsHash: view.bindingsHash,
+    assetIdentity: view.assetIdentity,
+    assetIdentityHash: view.assetIdentityHash,
     snapshotsHash: view.snapshotsHash,
     bindingCount: view.bindingCount,
     snapshotCount: view.snapshotCount,
@@ -921,13 +1068,26 @@ function recordBaseline(state, view, ok) {
   saveBaselines(b)
   return entry
 }
+/**
+ * "最后成功版本"——**按实际提交顺序**取，不按 L4/L2/L1 的固定优先级猜。
+ *
+ * 原来写死了 `['L4','L2','L1']`：于是 L4 失败、L2 成功时仍会拿 L4 那一版当基准，
+ * 与"保存关停前**最后成功**的那个版本"（指南 §8.4）正好相反。现在看 `latest`
+ * （每次成功的写稿 phase 都会更新它）与各条记录的 `at` 时间。
+ */
 function latestBaseline() {
   const b = loadBaselines()
-  for (const p of ['L4', 'L2', 'L1']) {
-    if (b.byPhase[p] && b.byPhase[p].ok) return b.byPhase[p]
-  }
-  // 没有"ok"的也返回（L5 会自己判定并如实报失败）
-  for (const p of ['L4', 'L2', 'L1']) if (b.byPhase[p]) return b.byPhase[p]
+  const entries = Object.entries(b.byPhase || {}).filter(([, e]) => e)
+  if (!entries.length) return null
+  const latest = b.latest && b.byPhase[b.latest] ? b.byPhase[b.latest] : null
+  if (latest && latest.ok) return latest
+  // `latest` 不可用时退回"按时间排在最后的那条 ok 记录"
+  const oks = entries.filter(([, e]) => e.ok).sort((x, y) => String(x[1].at || '').localeCompare(String(y[1].at || '')))
+  if (oks.length) return oks[oks.length - 1][1]
+  // 一条 ok 都没有 → **没有**"最后成功版本"。
+  // 原来这里会返回时间上最后一条（哪怕它 ok=false），于是 L5/L6 拿着一个失败版当基准去比对，
+  // 只要字段齐备就"通过"——等于导出/重开一个从未验收的失败稿还宣称验收成功（指南 §0.4 第 5 条）。
+  // 如实返回 null，由调用方 BLOCKED。
   return null
 }
 
@@ -955,15 +1115,51 @@ async function clickStop(page) {
  */
 async function sendTurn(page, text, plan) {
   const t0 = Date.now()
+  // 每一回合开始前**重新确认探针在位**（installProbe 幂等）。
+  // 踩过的坑（2026-10-02 真机）：`T.invoke` 原来用普通赋值替换，而它是不可写属性 → 静默失败，
+  // 回合里读到 0 次派发、账本漏记 4 次真实请求。现在 installProbe 会当场核对替换是否生效；
+  // 这里再兜一层：装不上就不发消息（不花钱），也不能把"探针不在"读成"没有派发"。
+  const ensured = await pageFn(page, 'installProbe')
+  if (!ensured || !ensured.ok || !gateCoverageProven(ensured)) {
+    fail(
+      'probe',
+      `回合开始前探针/门禁不可用：${JSON.stringify(ensured)}——拒绝在无预算门禁的状态下发送消息`,
+    )
+    const abortedTurn = {
+      phase,
+      prompt: text,
+      started: false,
+      ended: 'no-probe',
+      probeInstalled: false,
+      probeError: ensured && ensured.reason,
+      stages: [],
+      refusals: [],
+      seconds: 0,
+      dispatchAfter: 0,
+      genSvgAfter: 0,
+      transportAfter: 0,
+      transportDrawAfter: 0,
+      uiErrors: [],
+      saveErrors: [],
+      notices: [],
+    }
+    evidence.turns.push(abortedTurn)
+    return abortedTurn
+  }
   const before = await pageFn(page, 'readRun')
   const turn = {
     phase,
     prompt: text,
     startedAt: new Date().toISOString(),
     t0,
+    /** 回合开始/结束时探针都在位，计数才可信（缺了就把"看不见"当成"零派发"了） */
+    probeInstalled: before.probeInstalled !== false,
     msgsBefore: before.msgs,
     dispatchBefore: before.dispatch,
     genSvgBefore: before.genSvg,
+    transportBefore: before.transport || 0,
+    transportDrawBefore: before.transportDraw || 0,
+    refusalsBefore: before.refused || 0,
     stages: [],
     ended: null,
     aborted: null,
@@ -1007,8 +1203,25 @@ async function sendTurn(page, text, plan) {
     if (s.errorText && !(turn.uiErrors || []).includes(s.errorText)) turn.uiErrors = [...(turn.uiErrors || []), s.errorText]
     if (s.saveError && !(turn.saveErrors || []).includes(s.saveError)) turn.saveErrors = [...(turn.saveErrors || []), s.saveError]
     if (s.notice && !(turn.notices || []).includes(s.notice)) turn.notices = [...(turn.notices || []), s.notice]
+    // 门禁**在回合中途**掉链子：拦截函数被换掉，或协议已经切到 postMessage 通道。
+    // 这两种情况下"页面探针传输计数"已经不再是真实传输——继续跑下去只会拿到一份假的预算核对。
+    if (s.gateLive === false || s.fallbackLatched === true) {
+      turn.aborted =
+        s.gateLive === false
+          ? '门禁身份在回合中途失效：window.fetch 已不是受控函数——本回合之后的传输不可信'
+          : `协议回退已激活（${String(s.fallbackReason || '未知')}）——付费请求已改走未受门禁覆盖的通道`
+      turn.gateBroken = { gateLive: s.gateLive, fallbackLatched: s.fallbackLatched }
+      fail('probe', `回合中途门禁失效：${turn.aborted}——停止本回合，本轮结果不可按"预算已受控"签收`)
+      await clickStop(page)
+      await page.waitForTimeout(2500)
+      break
+    }
+    // 预算已经在**派发前**扣过了（`budget.reserve`），所以这里不该再看到"超了"。
+    // 真看到就说明门禁被绕过——不是"按预算规则中止"这种温和处置，而是硬失败：
+    // 钱已经花出去了，不能只记一句"已中止"。
     if (s.dispatch - before.dispatch > plan.maxDispatches || s.genSvg - before.genSvg > plan.maxGenSvg) {
-      turn.aborted = `本回合派发超出额度（派发 ${s.dispatch - before.dispatch}/${plan.maxDispatches}，绘图 ${s.genSvg - before.genSvg}/${plan.maxGenSvg}）——按预算规则中止本回合`
+      turn.aborted = `派发前预算门禁被绕过：本回合放行 ${s.dispatch - before.dispatch} 次（中止线 ${plan.maxDispatches}）、绘图 ${s.genSvg - before.genSvg} 次（中止线 ${plan.maxGenSvg}）`
+      fail('budget', turn.aborted)
       await clickStop(page)
       await page.waitForTimeout(2500)
       break
@@ -1028,11 +1241,33 @@ async function sendTurn(page, text, plan) {
   const after = await pageFn(page, 'readRun')
   turn.dispatchAfter = after.dispatch - before.dispatch
   turn.genSvgAfter = after.genSvg - before.genSvg
+  turn.transportAfter = (after.transport || 0) - (before.transport || 0)
+  // 绘图**单独**计一份：原来把总传输量当绘图传输量传进核对，于是"2 次普通请求、0 次绘图"
+  // 的 L2 回合会报绘图口径不一致（假红），而 L1/L4 混合请求又可能被掩盖（指南 §0.0 R3）。
+  turn.transportDrawAfter = (after.transportDraw || 0) - (before.transportDraw || 0)
+  turn.probeInstalled = turn.probeInstalled && after.probeInstalled === true
+  // 被门禁拒掉的派发明细（它们**没有**发出去）：不只看条数，还要能说清是哪条命令、什么理由
+  turn.refusals = await page.evaluate((n) => {
+    const p = window.__acceptanceProbe || { refused: [] }
+    return (p.refused || []).slice(n).map((x) => ({ cmd: x.cmd, slotId: x.slotId || null, reason: x.reason }))
+  }, before.refused || 0)
   turn.seconds = Math.round((Date.now() - t0) / 1000)
   turn.uiErrors = turn.uiErrors || []
   turn.saveErrors = turn.saveErrors || []
   turn.notices = turn.notices || []
   return turn
+}
+
+/**
+ * 回合结束后**稍等一拍**再读 trace。
+ *
+ * 为什么要等：Rust 侧 JSONL 的落盘时刻与"界面回到空闲"不是同一个时刻，立刻读有概率少读最后几条，
+ * 而"trace 比预留少"在本轮是**硬判据**（少记 = 费用无法核对）。所以给一个固定的一拍；
+ * 它**不是**"轮询到变绿"——等完就读一次，少记仍然判失败（只是不再被落盘延迟误伤）。
+ */
+async function tracesAfterTurn(page, ws, t0) {
+  await page.waitForTimeout(800)
+  return readTraceRecords(ws, t0)
 }
 
 /** 发消息前的准备：切到对话视图 + 确认输入框可用 */
@@ -1132,83 +1367,9 @@ async function snapshot(page, ws, docId, titleText) {
 // 第 13 节：事实断言（把题面里的事实**真的**断言，不是只打印）
 // =====================================================================================
 
-const norm = (s) =>
-  String(s || '')
-    .replace(/\s+/g, '')
-    .replace(/[—–―−~～]/g, '-')
-    .replace(/[：]/g, ':')
-
-/** 取 token 前后 radius 个字符的窗口（用于"不颠倒"这类邻近性断言） */
-function windowAround(text, token, radius = 26) {
-  const i = text.indexOf(token)
-  if (i < 0) return null
-  return text.slice(Math.max(0, i - radius), Math.min(text.length, i + token.length + radius))
-}
-const hasAny = (s, list) => list.some((re) => re.test(s))
-
-/**
- * 题面事实断言（L1/L2 共用）。返回 [{id, pass, evidence}]
- * 说明：正文一律取**预览里的可见文字**（去空白后），标题另取预览标题节点 + 源文标题行。
- */
-function factChecks(article, sourceTitle, { expectTitle, limit180 }) {
-  const t = norm(article ? article.bodyText : '')
-  const full = norm(`${sourceTitle || ''} ${article ? article.bodyText : ''}`)
-  const out = []
-  const add = (id, pass, ev) => out.push({ id, pass: Boolean(pass), evidence: ev })
-
-  if (expectTitle) {
-    const node = article ? article.firstHeadingText : ''
-    add(
-      `${idTag()}标题节点与源文都含「${expectTitle}」`,
-      norm(node).includes(norm(expectTitle)) && norm(sourceTitle).includes(norm(expectTitle)),
-      `预览首个标题节点=「${clip(node, 60)}」；源文标题行=「${clip(sourceTitle, 60)}」`,
-    )
-  }
-
-  // ── 日期 · 时段 · 地点：按**分句**归属断言，而不是"某词是否在全文里出现过" ──
-  // 为什么按分句：正文常常把两天写在同一句的左右两段里，只看"全文是否出现 9:00"会漏掉
-  // "把闭馆那天写成开放时段"这种颠倒。这里把正文切成短句（；。，！？、换行都算边界），
-  // 再要求"承载开放时段的那个短句里必须出现 10月10日"、"承载闭馆的那个短句里必须出现 10月11日"。
-  const clauses = t.split(/[；;。！!？?，,\n、]/).map((x) => x.trim()).filter(Boolean)
-  const openClause = clauses.find((c) => hasAny(c, [/9:0{0,2}/, /9点/, /上午9/, /9时/]) && !c.includes('闭馆')) || null
-  add(
-    '事实-周六 10月10日 9:00–17:00 开放（同一短句里既有日期又有时段，且该句不是"闭馆"）',
-    Boolean(openClause) && openClause.includes('10月10日') && hasAny(openClause, [/17:0{0,2}/, /17点/, /下午5/]) && hasAny(openClause, [/开放/, /开馆/, /到馆/, /9:0{0,2}/]),
-    `承载开放时段的短句=「${clip(openClause || '(未找到)', 90)}」`,
-  )
-  const closedClause = clauses.find((c) => c.includes('闭馆')) || null
-  add(
-    '事实-周日 10月11日全天闭馆（"闭馆"这个短句里必须出现 10月11日 与"全天"）',
-    Boolean(closedClause) && closedClause.includes('10月11日') && closedClause.includes('全天'),
-    `承载"闭馆"的短句=「${clip(closedClause || '(未找到)', 90)}」`,
-  )
-  // 自习区在一楼（同一个短句里同时出现；退一步允许紧邻）
-  const floorClause = clauses.find((c) => c.includes('自习') && c.includes('一楼')) || null
-  const wStudy = windowAround(t, '自习', 14)
-  const wFloor = windowAround(t, '一楼', 14)
-  add(
-    '事实-自习区在一楼',
-    Boolean(floorClause) || Boolean(wStudy && wStudy.includes('一楼')) || Boolean(wFloor && wFloor.includes('自习')),
-    `同一短句=${floorClause ? '「' + clip(floorClause, 60) + '」' : '无'}；自习窗口=「${clip(wStudy || '(未出现)', 50)}」；一楼窗口=「${clip(wFloor || '(未出现)', 50)}」`,
-  )
-  // 电话：先按原文找，再按去非数字找（允许 010 5555 6666 之类的间隔写法）
-  const digits = t.replace(/\D/g, '')
-  add(
-    '事实-咨询电话 010-55556666',
-    t.includes('010-55556666') || digits.includes('01055556666'),
-    `原文命中=${t.includes('010-55556666')}；数字串命中=${digits.includes('01055556666')}`,
-  )
-  if (limit180) {
-    const n = article ? article.bodyChars : -1
-    add(
-      `字数-正文可见文字去空白 ≤ ${limit180} 字`,
-      n >= 0 && n <= limit180,
-      `实际 ${n} 字；计数字符串=「${clip(article ? article.counted : '', 400)}」`,
-    )
-  }
-  add('事实-全文同时含开放与闭馆（不是只写了其中一种）', full.includes('闭馆') && hasAny(full, [/9:0{0,2}/, /9点/, /17:0{0,2}/]), `闭馆=${full.includes('闭馆')}`)
-  return out
-}
+// 事实判定已抽到 `scripts/lib/fact-assert.mjs`：那套逻辑原来长在这个**要连真机、要花真钱**的脚本里，
+// 离线回归根本够不着它，所以它自己的四个缺陷（无数字边界、错误年份/星期、逗号假红、无否定检查）
+// 一直没被发现。抽出去之后由 `scripts/fact-assert-check.mjs` 用固定反例钉住。
 const idTag = () => `${phase}：`
 
 // =====================================================================================
@@ -1221,19 +1382,76 @@ function phaseContext() {
   return iso
 }
 
-/** 启动核对（指南 §8.2 第 3 条）：PID / exe 哈希 / CDP 端口 / workspace 位置；不是 sleep 完就开测 */
+/**
+ * 启动核对（指南 §8.2 第 3 条 / §0.4 第 1 条）。
+ *
+ * **这里是门禁，不是体检报告。** 原来它把每条检查都写成 `check(...)` 之后照样返回对象，
+ * 于是"隔离目录、PID、页面归属、空数据"四项全红，`runL1()` 也只会看一眼返回值就开始发消息——
+ * 用真钱测一个本来就不该开跑的实例。
+ *
+ * 现在的口径：所有前置项先收集，**任何一条不过就地 `block()` 并返回 null**；
+ * 调用方拿到 null 必须直接返回，本 phase 的发送/导出次数为 0。
+ *
+ * 另外，"隔离生效"不再靠**比字符串**：`workspace` 变量不等于真实路径，只说明"我传了一个别的字符串"。
+ * 这里改为查**应用实际写出来的东西**——隔离 workspace 下真的建出了 `sessions/`、WebView2 数据目录
+ * 里真的有内容，再加上应用自己的读路径（list_sessions / list_documents）回读一致。
+ */
 async function verifyLaunch(app, ctx, { expectEmpty }) {
-  const pidAlive = isPidAlive(app.launch.pid)
-  check(`${idTag()}启动核对：本轮自有 PID 存活`, pidAlive, `pid=${app.launch.pid}`)
-  check(`${idTag()}启动核对：exe 哈希已记录`, /^[0-9a-f]{64}$/.test(app.launch.exeHash), `exeHash=${app.launch.exeHash.slice(0, 16)}…`)
-  check(
+  const gates = []
+  const gate = (id, ok, ev) => {
+    gates.push({ id, ok: Boolean(ok), ev })
+    return Boolean(ok)
+  }
+
+  const ident = procIdentity(app.launch.pid, exe)
+  gate(`${idTag()}启动核对：本轮自有 PID 存活`, ident.alive, `pid=${app.launch.pid}`)
+  gate(
+    `${idTag()}启动核对：进程身份与本轮 exe 一致（不是被回收后复用的 PID）`,
+    ident.matchesExpected === true,
+    JSON.stringify(ident),
+  )
+  gate(`${idTag()}启动核对：exe 哈希已记录`, /^[0-9a-f]{64}$/.test(app.launch.exeHash), `exeHash=${app.launch.exeHash.slice(0, 16)}…`)
+  // 身份字段齐备才**关得干净**（指南 §0.0 B）：路径或创建时刻读不到时，关闭前的核验只能是
+  // "只知道映像名"，那种情况下 closeOwnPid 会按零关闭操作拒绝——于是本轮会留下一个活着的实例。
+  // 所以在派发之前就拦下：宁可这一轮不跑，也不留下一个既花了钱又收不掉的进程。
+  gate(
+    `${idTag()}启动核对：进程身份字段齐备（PID/完整路径/创建时刻都读得到，否则无法安全关闭）`,
+    ident.identityComplete === true,
+    `complete=${ident.identityComplete} missing=${JSON.stringify(ident.missingFields || [])} probe=${JSON.stringify(ident.probe)}`,
+  )
+
+  const pages = app.rec.cdpPages || []
+  gate(
     `${idTag()}启动核对：CDP 端口为本轮新分配且有我们自己的页面`,
-    app.rec.cdpPages.some((p) => p.hasDebugger) && app.rec.cdpPages.some((p) => String(p.url).includes('tauri.localhost')),
-    `port=${app.cdpPort}；pages=${JSON.stringify(app.rec.cdpPages).slice(0, 240)}`,
+    pages.some((p) => p.hasDebugger) && pages.some((p) => String(p.url).includes('tauri.localhost')),
+    `port=${app.cdpPort}；pages=${JSON.stringify(pages).slice(0, 240)}`,
+  )
+  let pageUrl = ''
+  try {
+    pageUrl = app.page.url()
+  } catch {
+    pageUrl = '(读不到)'
+  }
+  gate(`${idTag()}启动核对：CDP 目标页面的归属是本应用（tauri.localhost）`, pageUrl.includes('tauri.localhost'), `pageUrl=${pageUrl}`)
+
+  // 隔离的**实证**：应用到我们指定的目录里真的写东西了
+  const wsExists = existsSync(ctx.iso.workspace)
+  const wsEntries = wsExists ? readdirSync(ctx.iso.workspace) : []
+  gate(
+    `${idTag()}隔离：应用确实在隔离目录下建出了工作区（不是只换了个字符串）`,
+    wsExists && wsEntries.length > 0,
+    `workspace=${ctx.iso.workspace}；条目=${JSON.stringify(wsEntries.slice(0, 8))}`,
+  )
+  const wvExists = existsSync(ctx.iso.webview)
+  const wvEntries = wvExists ? readdirSync(ctx.iso.webview) : []
+  gate(
+    `${idTag()}隔离：WebView2 数据目录被本实例实际使用（有落盘内容）`,
+    wvExists && wvEntries.length > 0,
+    `webview=${ctx.iso.webview}；条目数=${wvEntries.length}`,
   )
   const wsResolved = resolve(ctx.iso.workspace).toLowerCase()
   const realResolved = resolve(realWorkspaceDir()).toLowerCase()
-  check(
+  gate(
     `${idTag()}隔离：子进程 workspace 指向隔离目录、与真实工作区不同`,
     wsResolved !== realResolved && !wsResolved.startsWith(realResolved) && !realResolved.startsWith(wsResolved),
     `workspace=${ctx.iso.workspace}`,
@@ -1241,27 +1459,48 @@ async function verifyLaunch(app, ctx, { expectEmpty }) {
 
   const sessions = await appSessions(app.page)
   const docs = await appDocs(app.page)
-  if (!sessions.ok || !docs.ok) {
-    block('launch', `启动后读取会话/文稿失败：sessions=${JSON.stringify(sessions).slice(0, 200)} docs=${JSON.stringify(docs).slice(0, 200)}`)
-    return null
-  }
-  const cur = sessions.value.current
-  const docCount = (docs.value.items || []).length
+  gate(
+    `${idTag()}启动核对：生产读路径可用（会话/文稿都读得出来）`,
+    sessions.ok && docs.ok,
+    `sessions=${JSON.stringify(sessions).slice(0, 160)} docs=${JSON.stringify(docs).slice(0, 160)}`,
+  )
+
+  const cur = sessions.ok ? sessions.value.current : null
+  const docCount = docs.ok ? (docs.value.items || []).length : -1
   evidence.launchReadbacks = evidence.launchReadbacks || []
-  evidence.launchReadbacks.push({ at: new Date().toISOString(), pid: app.launch.pid, sessions: sessions.value, docs: docs.value })
+  evidence.launchReadbacks.push({
+    at: new Date().toISOString(),
+    pid: app.launch.pid,
+    pageUrl,
+    identity: ident,
+    sessions: sessions.ok ? sessions.value : null,
+    docs: docs.ok ? docs.value : null,
+  })
   if (expectEmpty) {
-    const msgs = cur ? (await appSession(app.page, cur)).value?.messages?.length ?? -1 : -1
-    check(
+    const msgs = cur && sessions.ok ? ((await appSession(app.page, cur)).value?.messages?.length ?? -1) : -1
+    gate(
       `${idTag()}启动核对：全新隔离工作区（空会话 / 空文稿）`,
-      docCount === 0 && msgs === 0 && (sessions.value.items || []).length <= 1,
-      `会话数=${(sessions.value.items || []).length} 当前会话消息数=${msgs} 文稿数=${docCount}`,
+      docCount === 0 && msgs === 0 && (sessions.ok ? (sessions.value.items || []).length : 99) <= 1,
+      `会话数=${sessions.ok ? (sessions.value.items || []).length : '?'} 当前会话消息数=${msgs} 文稿数=${docCount}`,
     )
+    if (cur) evidence.launchReadbacks[evidence.launchReadbacks.length - 1].currentSessionMessages = msgs
   } else {
-    check(
+    gate(
       `${idTag()}启动核对：接着隔离目录里已有的会话与文稿`,
-      (sessions.value.items || []).length >= 1 && docCount >= 1,
-      `会话数=${(sessions.value.items || []).length} 当前会话=${cur} 文稿数=${docCount}`,
+      (sessions.ok ? (sessions.value.items || []).length : 0) >= 1 && docCount >= 1,
+      `会话数=${sessions.ok ? (sessions.value.items || []).length : '?'} 当前会话=${cur} 文稿数=${docCount}`,
     )
+  }
+
+  for (const g of gates) check(g.id, g.ok, g.ev)
+  const bad = gates.filter((g) => !g.ok)
+  if (bad.length) {
+    block(
+      'launch',
+      `启动核对未通过 ${bad.length} 项：${bad.map((b) => b.id.replace(idTag(), '')).join('；')}` +
+        `——**拒绝继续**，本 phase 的模型派发与导出次数均为 0`,
+    )
+    return null
   }
   return { cur, docCount, sessions: sessions.value, docs: docs.value }
 }
@@ -1296,75 +1535,162 @@ function realWorkspaceObserve(before, label) {
   return rec
 }
 
-/** 派发后的账本与交叉核对 */
-function reconcile(led, turn, traceInfo, plan) {
-  const requests = traceInfo.requests
+/**
+ * 派发后的交叉核对。
+ *
+ * 口径变了（指南 §0.3）：预算在**派发前**就已经扣掉并落盘了（`budget.reserve`），
+ * 这里不再"事后累加"，而是做三件事的**核对**：
+ *   ① 预留了几次 ↔ WebView 侧放行了几次（探针只在预留成功后才算数，二者应当相等）；
+ *   ② 预留了几次 ↔ trace 里真实请求了几条（应当相等；trace 更多 = 有派发绕过了门禁）；
+ *   ③ trace 本身可不可观测（`note`/`observable`）——不可观测就如实 UNKNOWN，不按 0 请求记账。
+ */
+function reconcile(budget, turn, traceInfo, plan) {
+  const requests = traceInfo.observable ? traceInfo.requests : []
   const dispatched = requests.length
   const genSvgDispatched = requests.filter((r) => r.phase === 'gen_svg').length
-  const attempts = turn.dispatchAfter
-  const genSvgAttempts = turn.genSvgAfter
-  // 记账取两侧的较大值（宁可高估花费，不可低估）——指南 §8.1 要求派发前约束、事后也要留痕
-  const countedDispatches = Math.max(dispatched, attempts)
-  const countedGenSvg = Math.max(genSvgDispatched, genSvgAttempts)
+  const reserved = turn.dispatchAfter
+  const reservedGenSvg = turn.genSvgAfter
+  const refusals = (turn.refusals || []).length
 
-  const explainable = dispatched === attempts && genSvgDispatched === genSvgAttempts
-  const hasErrorSurface = turn.uiErrors.length > 0 || turn.saveErrors.length > 0 || requests.some((r) => r.ok === false)
+  const traceObservable = traceInfo.observable === true
+  // 判定走抽出去的纯函数（`scripts/live-driver-check.mjs` 测的就是它，不是这里的副本）
+  const cmp = compareDispatchEvidence({
+    reserved,
+    reservedGenSvg,
+    transport: turn.transportAfter,
+    // ⚠️ 这里**必须**是绘图专属的传输计数：原来传的是总 `turn.transportAfter`，
+    // 于是 L2（2 次普通请求、0 次绘图）会被判成"绘图传输不一致"（假红），
+    // L1/L4 的混合请求则可能被总数掩盖。`transportDraw` 由页面探针按预留返回的 kind 单独计数。
+    genSvgTransport: turn.transportDrawAfter,
+    traceRequests: dispatched,
+    traceGenSvg: genSvgDispatched,
+    traceObservable,
+  })
+  const byCode = (c) => cmp.problems.find((p) => p.code === c) || null
+  // 探针不在位时，"页面实际传输 0 次"是**没看见**而不是**没发生**——不能拿它去核对预算
+  const probeMissing = turn.probeInstalled !== true
   check(
-    `${idTag()}交叉核对：trace 派发数与 WebView 侧观测一致`,
-    dispatched <= attempts && (explainable || hasErrorSurface),
-    `traces 派发=${dispatched}（绘图 ${genSvgDispatched}）；WebView 命令调用=${attempts}（绘图 ${genSvgAttempts}）；` +
-      (explainable ? '一致' : '不一致，但存在可见错误面（' + clip(turn.uiErrors.concat(turn.saveErrors).join(' | '), 200) + '），按"失败在派发前"归因'),
+    `${idTag()}页面探针在回合期间在位（"实际传输 0 次"必须是观测结果，不是探针丢了的假象）`,
+    !probeMissing,
+    `probeInstalled=${turn.probeInstalled}`,
   )
-  if (dispatched > attempts) {
-    fail('reconcile', `trace 记到 ${dispatched} 次派发，但 WebView 侧只观测到 ${attempts} 次命令调用——证据互相矛盾，本轮结果不可信`)
+  if (probeMissing) {
+    fail('probe', `本回合页面探针不在位：预算无法与本回合的事件核对（trace 记到 ${dispatched} 次真实请求）——不按"零派发"记账`)
+  }
+  const unobservable = byCode('unobservable')
+  check(
+    `${idTag()}证据可观测性：trace 目录可读且本轮请求证据完整`,
+    !unobservable,
+    traceObservable
+      ? `${traceInfo.files.length} 个 trace 文件可读`
+      : traceInfo.dirExists
+        ? `无法观察：${traceInfo.note}`
+        : `traces 目录不存在（本轮门禁放行 ${reserved} 次）`,
+  )
+  if (unobservable) {
+    // 不能把"看不见"当成"没有请求"：账本与请求证据缺失时如实 UNKNOWN，不报 0 费用（指南 §0.3 末条）
+    fail('trace', `${unobservable.message}`)
   }
   check(
-    `${idTag()}预算：本回合派发在额度内（≤${plan.maxDispatches} 次、绘图 ≤${plan.maxGenSvg} 次）`,
-    countedDispatches <= plan.maxDispatches && countedGenSvg <= plan.maxGenSvg,
-    `派发 ${countedDispatches}/${plan.maxDispatches}，绘图 ${countedGenSvg}/${plan.maxGenSvg}`,
+    `${idTag()}交叉核对：门禁放行次数与 WebView 侧实际传输一致（总数与绘分数分开核）`,
+    !byCode('transportMismatch'),
+    `门禁放行 ${reserved}（绘图 ${reservedGenSvg}）；页面探针实际传输 ${turn.transportAfter} 次（其中绘图 ${turn.transportDrawAfter} 次）`,
   )
-  recordLedger(led, {
-    dispatches: countedDispatches,
-    genSvg: countedGenSvg,
+  const bypass = byCode('bypass')
+  check(
+    `${idTag()}交叉核对：trace 真实请求数不多于门禁放行数（没有绕过预算的派发）`,
+    !bypass,
+    `traces 请求=${traceObservable ? dispatched : 'UNKNOWN'}（绘图 ${traceObservable ? genSvgDispatched : 'UNKNOWN'}）；门禁放行=${reserved}（绘图 ${reservedGenSvg}）`,
+  )
+  if (bypass) fail('reconcile', `${bypass.message}（本模块的付费命令覆盖清单需要补）`)
+  // 少记与类别不符同样是缺口：trace 比门禁**少**说明有派发没留下请求证据（费用只能记 UNKNOWN），
+  // 绘图类别的 trace 与预留不一致说明"绘图预算绕过"的证据没被核对（指南 §0.0 R3）。
+  const missing = byCode('missing')
+  check(
+    `${idTag()}交叉核对：trace 请求证据没有少记（可观察时 trace 条数 = 门禁放行数）`,
+    !missing,
+    traceObservable ? `trace=${dispatched}，门禁放行=${reserved}` : 'trace 不可观察：本轮记 UNKNOWN，不按"恰好相等"通过',
+  )
+  if (missing) fail('trace', `${missing.message}——本轮费用只能记 UNKNOWN`)
+  const genGap = byCode('genSvgMismatch')
+  check(
+    `${idTag()}交叉核对：绘图类别的 trace 与绘图预留一致（绘图预算绕不过去）`,
+    !genGap,
+    traceObservable ? `trace 绘图=${genSvgDispatched}，门禁放行绘图=${reservedGenSvg}` : 'trace 不可观察：绘图计数记 UNKNOWN',
+  )
+  if (genGap) fail('reconcile', `${genGap.message}`)
+  if (refusals > 0) {
+    observe(
+      `${idTag()}预算拒绝`,
+      `本回合有 ${refusals} 次派发被门禁拒绝（额度用尽或落盘失败）：${clip(JSON.stringify(turn.refusals).slice(0, 400), 400)}`,
+    )
+  }
+  // 记账：额度已在 reserve 时扣过，这里**只记一条 phase 记录**，不再加减。
+  // 返回值必须检查：记录没落盘 = 证据里没有这一回合，必须让本次运行明确失败（指南 §0.0 R2）。
+  const rec = budget.recordPhase({
+    dispatches: reserved,
+    genSvg: reservedGenSvg,
     note: `${phase} 回合：${turn.ended}${turn.aborted ? '（' + turn.aborted + '）' : ''}`,
+    extra: {
+      phase,
+      traceRequests: traceObservable ? dispatched : null,
+      traceObservable,
+      refusals,
+    },
   })
+  if (!rec.ok) fail('budget', `回合账本记录没有落盘（${rec.reason}）——证据链缺这一回合，本次运行不能算通过`)
   return {
-    dispatched,
-    genSvgDispatched,
-    attempts,
-    genSvgAttempts,
-    countedDispatches,
-    countedGenSvg,
+    dispatched: traceObservable ? dispatched : null,
+    genSvgDispatched: traceObservable ? genSvgDispatched : null,
+    attempts: reserved,
+    genSvgAttempts: reservedGenSvg,
+    transport: turn.transportAfter,
+    countedDispatches: cmp.countedDispatches,
+    countedGenSvg: cmp.countedGenSvg,
+    traceObservable,
+    dispatchProblems: cmp.problems,
+    refusals,
     phases: requests.map((r) => r.phase),
     requests: summarizeRequests(requests),
     traceFiles: traceInfo.files,
-    remainingAfter: remaining(led),
+    remainingAfter: budget.remaining(),
   }
 }
 
 // ---------- L1 ----------
 
-async function runL1(ctx, app, plan) {
+/**
+ * 「本回合是第一篇」的共通流程：L1（短通知，≤180 字）与 L7（长文，800–1200 字）走同一段代码，
+ * 差别只有**题面键**与**字数口径**。共用是有意的——两条路若各写一份，"长文"那条就绕过了
+ * 素材位/事实/质量条/哈希自洽这些已经在 L1 上验过的断言，等于开了个更弱的口子。
+ *
+ * @param promptKey PROMPTS 的键（同时也是证据文件名前缀）
+ * @param opts.wordLimit 字数上限（factChecks 的同一口径：正文可见文字去空白）
+ * @param opts.minWords  字数下限（短通知不设；长文设 800）
+ */
+async function runFirstPhase(ctx, app, plan, promptKey, opts = {}) {
+  const wordLimit = opts.wordLimit || 180
+  const minWords = opts.minWords || null
   const launchRead = await verifyLaunch(app, ctx, { expectEmpty: true })
   if (!launchRead) return
 
   const realBefore = hashInventory(realWorkspaceDir())
   await gotoChat(app.page)
   const t0 = Date.now()
-  const turn = await sendTurn(app.page, PROMPTS.L1, plan)
-  const traceInfo = traceRecordsSince(ctx.iso.workspace, t0)
-  const recon = reconcile(ctx.ledger, turn, traceInfo, plan)
+  const turn = await sendTurn(app.page, PROMPTS[promptKey], plan)
+  const traceInfo = await tracesAfterTurn(app.page, ctx.iso.workspace, t0)
+  const recon = reconcile(ctx.budget, turn, traceInfo, plan)
   log(`  [回合] ${turn.ended}，用时 ${turn.seconds}s，阶段=${turn.stages.join('→')}，派发=${recon.countedDispatches}（绘图 ${recon.countedGenSvg}）`)
 
   const docId = launchRead.cur
   await waitDocReady(app.page)
-  const state = await snapshot(app.page, ctx.iso.workspace, docId, '')
+  const state = await snapshot(app.page, ctx.iso.workspace, docId, plan.title || '')
   const srcTitle = firstSourceTitle(state.disk.ok ? state.disk.source : '')
   state.srcTitle = srcTitle
   evidence.turns[evidence.turns.length - 1].snapshot = slimState(state)
-  writeJsonEvidence(join(evidenceDir, 'L1-state.json'), { turn, recon, state: slimState(state) }, 'L1-state.json')
-  writeCommittedArtifacts('L1-committed', state.disk)
-  realWorkspaceObserve(realBefore, 'L1 前后')
+  writeJsonEvidence(join(evidenceDir, `${promptKey}-state.json`), { turn, recon, state: slimState(state) }, `${promptKey}-state.json`)
+  writeCommittedArtifacts(`${promptKey}-committed`, state.disk)
+  realWorkspaceObserve(realBefore, `${promptKey} 前后`)
 
   if (turn.aborted) {
     block('budget', turn.aborted)
@@ -1394,7 +1720,11 @@ async function runL1(ctx, app, plan) {
     state.disk.ok && !/src\s*=\s*["']https?:|url\(\s*["']?https?:/i.test(state.disk.html),
     `html 长度=${state.disk.ok ? state.disk.html.length : -1}`,
   )
-  for (const c of factChecks(state.ui.article, srcTitle, { expectTitle: plan.title, limit180: 180 })) check(c.id, c.pass, c.evidence)
+  for (const c of factChecks(state.ui.article, srcTitle, { expectTitle: plan.title, limit180: wordLimit, tag: idTag() })) check(c.id, c.pass, c.evidence)
+  if (minWords) {
+    const chars = norm(state.ui.article ? state.ui.article.bodyText : '').length
+    check(`${idTag()}正文不少于 ${minWords} 字（长文口径）`, chars >= minWords, `实际 ${chars} 字`)
+  }
   check(
     `${idTag()}quality 与回执一致（版本内 quality.ok=true、界面质量条为"通过"、阻断 0 条）`,
     state.disk.ok && state.disk.meta.quality && state.disk.meta.quality.ok === true && /通过/.test(state.ui.qualityStrip) && state.ui.blockersAttr === '0',
@@ -1421,10 +1751,14 @@ async function runL1(ctx, app, plan) {
 
 // ---------- L2 / L4 ----------
 
-async function runWritePhase(ctx, app, kind, plan) {
+async function runWritePhase(ctx, app, kind, plan, opts = {}) {
+  // 字数口径随题面走：L2 是"≤180 字"的短通知，L8 是"300–500 字"的收缩稿。
+  // 写死 180 会把一条**按题面完全正确**的收缩稿判红（2026-10-02 实测踩到：L8 交 399 字被判超限，
+  // 模型是照题面写的，红的是驱动这边的口径）。
+  const wordLimit = opts.wordLimit || 180
   const prev = latestBaseline()
   if (!prev) {
-    block('baseline', `找不到可比较的上一版基准（baselines.json 里没有 L1）——请先用同一个 --root 跑 L1`)
+    block('baseline', `找不到可比较的上一版基准（baselines.json 里没有任何"检查全过"的成功版本）——请先用同一个 --root 跑 L1`)
     return
   }
   const launchRead = await verifyLaunch(app, ctx, { expectEmpty: false })
@@ -1444,8 +1778,8 @@ async function runWritePhase(ctx, app, kind, plan) {
 
   const t0 = Date.now()
   const turn = await sendTurn(app.page, PROMPTS[kind], plan)
-  const traceInfo = traceRecordsSince(ctx.iso.workspace, t0)
-  const recon = reconcile(ctx.ledger, turn, traceInfo, plan)
+  const traceInfo = await tracesAfterTurn(app.page, ctx.iso.workspace, t0)
+  const recon = reconcile(ctx.budget, turn, traceInfo, plan)
   log(`  [回合] ${turn.ended}，用时 ${turn.seconds}s，阶段=${turn.stages.join('→')}，派发=${recon.countedDispatches}（绘图 ${recon.countedGenSvg}）`)
 
   await waitDocReady(app.page)
@@ -1470,38 +1804,48 @@ async function runWritePhase(ctx, app, kind, plan) {
     `doc-state=${after.ui.docState}；validation=${after.disk.ok ? after.disk.meta.validation : '(不可读)'}`,
   )
   check(`${idTag()}同一文档（docId 与基准一致）`, after.disk.ok && after.disk.docId === prev.docId, `docId=${after.disk.docId}`)
+  // 「本轮提交了新版本」要跟**本回合开始前**的状态比，而不是跟"最后一个全过相位"的基准比：
+  // 一次失败的重试也会提交版本，拿旧基准比会得出 "generation +2" 这种假红（2026-10-02 真机踩到）。
   check(
-    `${idTag()}真实新 revision / runId（revisionId 新、generation 增加、runId 新）`,
+    `${idTag()}本轮提交了新 revision（revisionId / generation / runId 相对**本回合开始前**都前进）`,
     after.disk.ok &&
-      after.disk.revisionId !== prev.revisionId &&
-      after.disk.generation > prev.generation &&
+      before.disk.ok &&
+      after.disk.revisionId !== before.disk.revisionId &&
+      after.disk.generation > before.disk.generation &&
       !!after.disk.meta.run_id &&
-      after.disk.meta.run_id !== prev.runId,
-    `revisionId ${prev.revisionId} → ${after.disk.ok ? after.disk.revisionId : '-'}；generation ${prev.generation} → ${after.disk.ok ? after.disk.generation : '-'}；runId ${prev.runId} → ${after.disk.ok ? after.disk.meta.run_id : '-'}`,
+      after.disk.meta.run_id !== (before.disk.meta && before.disk.meta.run_id),
+    `revisionId ${before.disk.ok ? before.disk.revisionId : '-'} → ${after.disk.ok ? after.disk.revisionId : '-'}；generation ${before.disk.ok ? before.disk.generation : '-'} → ${after.disk.ok ? after.disk.generation : '-'}；runId ${before.disk.ok && before.disk.meta ? before.disk.meta.run_id : '-'} → ${after.disk.ok ? after.disk.meta.run_id : '-'}`,
   )
   check(
-    `${idTag()}新版本 generation 恰好 +1（没有偷偷多提交一版）`,
-    after.disk.ok && after.disk.generation === prev.generation + 1,
-    `${prev.generation} → ${after.disk.ok ? after.disk.generation : '-'}`,
+    `${idTag()}本轮 generation 恰好 +1（没有偷偷多提交一版）`,
+    after.disk.ok && before.disk.ok && after.disk.generation === before.disk.generation + 1,
+    `${before.disk.ok ? before.disk.generation : '-'} → ${after.disk.ok ? after.disk.generation : '-'}`,
   )
-  check(
-    `${idTag()}预览标题节点确实变化且等于新标题`,
-    norm(after.ui.article ? after.ui.article.firstHeadingText : '').includes(norm(plan.title)) &&
-      after.ui.article &&
-      after.ui.article.titleNodeMatched &&
-      norm(after.ui.article.firstHeadingText) !== norm(prev.previewTitle),
-    `标题节点「${clip(before.ui.article ? before.ui.article.firstHeadingText : '', 40)}」→「${clip(after.ui.article ? after.ui.article.firstHeadingText : '', 40)}」`,
-  )
-  check(
-    `${idTag()}正文确实变化（可见文字与基准不同）`,
-    after.ui.article && before.ui.article && after.ui.article.counted !== prev.counted,
-    `基准 ${prev.bodyChars} 字 → 现在 ${after.ui.article ? after.ui.article.bodyChars : -1} 字`,
-  )
-  check(
-    `${idTag()}源文标题行也变了（不是只改了预览）`,
-    norm(srcTitle).includes(norm(plan.title)) && norm(srcTitle) !== norm(prev.previewTitle),
-    `源文标题行=「${clip(srcTitle, 60)}」`,
-  )
+
+  // ⚠️ 下面三条是 **L2 专属**语义（"只改文字"才要求标题/正文/源文都变）。
+  // L4 的要求正好相反（"标题和全部正文保持原样"），套在 L4 上必然假红——
+  // 2026-10-02 真机链路上 L4 明明红着这几条、产品却完全正确（新画已派发、素材内容确实不同、文本逐字未变）。
+  if (kind === 'L2' || kind === 'L8') {
+    check(
+      `${idTag()}预览标题节点确实变化且等于新标题`,
+      norm(after.ui.article ? after.ui.article.firstHeadingText : '').includes(norm(plan.title)) &&
+        after.ui.article &&
+        after.ui.article.titleNodeMatched &&
+        norm(after.ui.article.firstHeadingText) !== norm(before.ui.article ? before.ui.article.firstHeadingText : ''),
+      `标题节点「${clip(before.ui.article ? before.ui.article.firstHeadingText : '', 40)}」→「${clip(after.ui.article ? after.ui.article.firstHeadingText : '', 40)}」`,
+    )
+    check(
+      `${idTag()}正文确实变化（可见文字与本回合开始前不同）`,
+      after.ui.article && before.ui.article && after.ui.article.counted !== before.ui.article.counted,
+      `本回合前 ${before.ui.article ? before.ui.article.bodyChars : -1} 字 → 现在 ${after.ui.article ? after.ui.article.bodyChars : -1} 字`,
+    )
+    check(
+      `${idTag()}源文标题行也变了（不是只改了预览）`,
+      norm(srcTitle).includes(norm(plan.title)) &&
+        norm(srcTitle) !== norm(before.disk.ok ? firstSourceTitle(before.disk.source) : ''),
+      `源文标题行=「${clip(srcTitle, 60)}」`,
+    )
+  }
   observe(
     `${kind} 长度观测`,
     `基准正文 ${prev.bodyChars} 字 → 现在 ${after.ui.article ? after.ui.article.bodyChars : -1} 字（题面要求"更简洁"，此处只观测，不判定）`,
@@ -1518,27 +1862,37 @@ async function runWritePhase(ctx, app, kind, plan) {
       '图片是 SVG 经 canvas 光栅化后的结果，光栅化不保证逐字节稳定，因此"素材没变"一律以版本 meta 的 bindings/snapshots 哈希为准。',
   )
 
-  if (kind === 'L2') {
+  if (kind === 'L2' || kind === 'L8') {
     check(
       `${idTag()}gen_svg=0（只改文字，没有重新画图）`,
       recon.countedGenSvg === 0 && recon.phases.every((p) => p !== 'gen_svg'),
       `派发阶段=${JSON.stringify(recon.phases)}；绘图=${recon.countedGenSvg}`,
     )
     check(
-      `${idTag()}素材 ID / 版本 / 快照哈希不变`,
+      `${idTag()}素材身份不变（同一槽位的素材 id + 快照版本/内容哈希逐项一致）`,
       after.view &&
-        JSON.stringify(after.view.bindings) === JSON.stringify(prev.bindings) &&
-        after.view.bindingsHash === prev.bindingsHash &&
+        after.view.assetIdentityHash === prev.assetIdentityHash &&
+        JSON.stringify(after.view.assetIdentity) === JSON.stringify(prev.assetIdentity) &&
         after.view.snapshotsHash === prev.snapshotsHash &&
         after.view.snapshotCount === prev.snapshotCount,
-      `bindingsHash ${prev.bindingsHash.slice(0, 12)} → ${after.view ? after.view.bindingsHash.slice(0, 12) : '-'}；snapshotsHash ${prev.snapshotsHash.slice(0, 12)} → ${after.view ? after.view.snapshotsHash.slice(0, 12) : '-'}`,
+      `assetIdentity ${JSON.stringify(prev.assetIdentity)} → ${JSON.stringify(after.view ? after.view.assetIdentity : null)}；snapshotsHash ${String(prev.snapshotsHash).slice(0, 12)} → ${after.view ? String(after.view.snapshotsHash).slice(0, 12) : '-'}`,
     )
+    // 引用写法/slotId 变了不算"素材变了"（模型把 [[img:wide|描述]] 规范成 [[asset:…]] 是正确的），
+    // 但变化本身要如实留痕，别让"看起来没变"掩盖了实际发生的改写。
+    if (after.view && after.view.bindingsHash !== prev.bindingsHash) {
+      observe(
+        `${kind} 引用写法变化（非素材变化）`,
+        `bindingsHash ${String(prev.bindingsHash).slice(0, 12)} → ${String(after.view.bindingsHash).slice(0, 12)}；` +
+          `素材身份 ${JSON.stringify(prev.assetIdentity)} → ${JSON.stringify(after.view.assetIdentity)}。` +
+          'slotId 每轮不同、引用可被规范化，这两者变化都不等于换素材。',
+      )
+    }
     check(
       `${idTag()}素材位数不变（预览 1 张图、bindings 1 条）`,
       after.ui.images.length === prev.images.length && after.ui.images.length === 1 && after.view?.bindingCount === prev.bindingCount,
       `图片 ${prev.images.length} → ${after.ui.images.length}；bindings ${prev.bindingCount} → ${after.view ? after.view.bindingCount : '-'}`,
     )
-    for (const c of factChecks(after.ui.article, srcTitle, { expectTitle: plan.title, limit180: 180 })) check(c.id, c.pass, c.evidence)
+    for (const c of factChecks(after.ui.article, srcTitle, { expectTitle: plan.title, limit180: wordLimit, tag: idTag() })) check(c.id, c.pass, c.evidence)
   }
 
   if (kind === 'L4') {
@@ -1604,7 +1958,7 @@ function sessionTitleOf(sessions, id) {
 async function runL3(ctx, app, plan) {
   const prev = latestBaseline()
   if (!prev) {
-    block('baseline', '找不到基准（baselines.json 里没有 L1/L2）——请先用同一个 --root 跑 L1（L2 可选）')
+    block('baseline', '找不到基准（baselines.json 里没有任何"检查全过"的成功版本）——请先用同一个 --root 跑 L1（L2 可选）')
     return
   }
   const launchRead = await verifyLaunch(app, ctx, { expectEmpty: false })
@@ -1621,10 +1975,12 @@ async function runL3(ctx, app, plan) {
 
   const t0 = Date.now()
   const turn = await sendTurn(app.page, PROMPTS.L3, plan)
-  const traceInfo = traceRecordsSince(ctx.iso.workspace, t0)
-  const recon = reconcile(ctx.ledger, turn, traceInfo, plan)
+  const traceInfo = await tracesAfterTurn(app.page, ctx.iso.workspace, t0)
+  const recon = reconcile(ctx.budget, turn, traceInfo, plan)
   const after = await snapshot(app.page, ctx.iso.workspace, docId, prev.titleNodeText || '')
-  const invocationLog = (await page.evaluate(() => {
+  // ⚠️ 这里原来写的是 `page.evaluate`，而 `runL3` 里根本没有 `page` 这个标识符——
+  // 真实流程会在**已经派发过一轮**之后抛 `page is not defined`（钱花了、回合没核对）。
+  const invocationLog = (await app.page.evaluate(() => {
     const p = window.__acceptanceProbe || { calls: [], model: [] }
     return { calls: p.calls.map((c) => c.cmd), model: p.model.map((m) => ({ cmd: m.cmd, turn: m.turn || null, slotId: m.slotId || null })) }
   })) || { calls: [], model: [] }
@@ -1709,10 +2065,18 @@ async function runL3(ctx, app, plan) {
 async function runL5(ctx, app) {
   const prev = latestBaseline()
   if (!prev) {
-    block('baseline', '找不到"关停前最后成功版本"的基准——请先用同一个 --root 跑 L1（L2/L4 可选）')
+    block('baseline', '找不到"关停前最后成功版本"的基准（没有任何检查全过的成功版本）——请先用同一个 --root 跑 L1（L2/L4 可选）')
     return
   }
-  check(`${idTag()}关停前基准齐备（revisionId / generation / 源文/HTML/绑定/快照哈希）`, !!(prev.revisionId && prev.sourceHash && prev.htmlHash && prev.bindingsHash && prev.snapshotsHash), `基准 phase=${prev.phase} revision=${prev.revisionId} generation=${prev.generation}`)
+  check(
+    `${idTag()}关停前基准齐备且是**成功版本**（ok=true；revisionId / generation / 源文/HTML/绑定/快照哈希）`,
+    prev.ok === true && !!(prev.revisionId && prev.sourceHash && prev.htmlHash && prev.bindingsHash && prev.snapshotsHash),
+    `基准 phase=${prev.phase} ok=${prev.ok} revision=${prev.revisionId} generation=${prev.generation}`,
+  )
+  if (prev.ok !== true) {
+    block('baseline', `最后一条基准 ok=${prev.ok}（不是成功版本）——拒绝拿失败稿当"关停前最后成功版本"`)
+    return
+  }
   writeJsonEvidence(join(evidenceDir, 'L5-baseline.json'), prev, 'L5-baseline.json')
 
   // ① PID-A：读回"关停前"状态，然后正常关掉
@@ -1727,22 +2091,37 @@ async function runL5(ctx, app) {
   check(`${idTag()}PID-A 读回的版本与关停前基准完全一致`, cmpA.equal, cmpA.diff.join('；') || '全部字段一致')
   writeJsonEvidence(join(evidenceDir, 'L5-before-shutdown.json'), { stateA: slimState(stateA), cmpA, pid: app.launch.pid }, 'L5-before-shutdown.json')
   const closeA = await app.close()
-  check(`${idTag()}PID-A 已由 closeOwnPid 正常关闭（只关自有 PID）`, closeA.closed === true, JSON.stringify(closeA))
-  observe(`${idTag()}关停`, `PID-A=${app.launch.pid} 已关闭；应用输出 ${JSON.stringify(app.sink)}`)
+  // "正常退出"只认**走应用自己的关闭路径**（Windows 上即 WM_CLOSE）退出的那一次。
+  // 强杀也回 `closed:true`，但它证明不了"重开能读回"——应用根本没机会收尾。
+  const reopenGate = canReopenAfterClose(closeA)
+  check(`${idTag()}PID-A 走应用自身退出路径正常关闭（未被强杀）`, reopenGate.ok, `${JSON.stringify(closeA)}${reopenGate.ok ? '' : '——' + reopenGate.reason}`)
+  observe(`${idTag()}关停`, `PID-A=${app.launch.pid}；关闭方式=${closeA.via}；应用输出 ${JSON.stringify(app.sink)}`)
   realWorkspaceObserve(realBefore, 'L5 PID-A 运行前后')
+  if (!reopenGate.ok) {
+    // 关闭没成功就**不能**在同一个 profile 上开第二个实例：两个实例会争同一个工作区/WebView 数据目录
+    block('close', `PID-A 未达到"可重开"条件：${reopenGate.reason}——拒绝在同一隔离 profile 上再开第二个实例`)
+    return
+  }
 
   // ② PID-B：新 PID 打开**同一**隔离 profile
   const appB = await openApp(ctx.chromium, ctx)
   if (!appB) return // block 已在 openApp 里置好
   try {
     check(`${idTag()}PID-B 与 PID-A 是不同进程`, appB.launch.pid !== app.launch.pid, `A=${app.launch.pid} B=${appB.launch.pid}`)
+    check(
+      `${idTag()}PID-B 进程身份与本轮 exe 一致`,
+      procIdentity(appB.launch.pid, exe).matchesExpected === true,
+      JSON.stringify(procIdentity(appB.launch.pid, exe)),
+    )
     check(`${idTag()}PID-B 用的是同一隔离 profile / workspace`, appB.rec.profile === ctx.iso.profile && appB.rec.workspace === ctx.iso.workspace, `profile=${appB.rec.profile}`)
     const launchReadB = await verifyLaunch(appB, ctx, { expectEmpty: false })
     if (!launchReadB) return
     // 等重开后的界面把文稿恢复出来（不是 sleep 完就断言）
     await appB.page.waitForFunction(() => !!document.querySelector('[data-doc-state]'), null, { timeout: 60000 }).catch(() => {})
     await waitDocReady(appB.page)
-    const t0 = Date.now()
+    // 零请求观察窗口从 **PID-B 启动那一刻**开始，而不是"读回完成之后"。
+    // 原来 `t0` 取在读回之后，启动早期的派发（如果有）落在窗口外，等于把"没看见"当成"零请求"。
+    const t0 = appB.rec.startedAt || appB.launch.startedAt || Date.now()
     const stateB = await snapshot(appB.page, ctx.iso.workspace, docId, prev.titleNodeText || prev.previewTitle || '')
     const cmpB = stateB.view ? fpEqual(stateB.view, prev, ['docId', 'generation', 'revisionId', 'runId', 'validation', 'sourceHash', 'htmlHash', 'qualityHash', 'bindingsHash', 'snapshotsHash', 'appSourceHash', 'appHtmlHash', 'appRevisionId', 'appGeneration']) : { equal: false, diff: ['磁盘不可读'] }
     check(`${idTag()}PID-B 完整读回同一版本（与关停前基准逐字段一致）`, cmpB.equal, cmpB.diff.join('；') || '全部字段一致')
@@ -1753,21 +2132,26 @@ async function runL5(ctx, app) {
         stateB.ui.revisionBadge.includes(String(prev.revisionId)),
       `doc-state=${stateB.ui.docState}；标题=「${clip(stateB.ui.article ? stateB.ui.article.titleNodeText : '', 40)}」；徽标=「${clip(stateB.ui.revisionBadge, 60)}」`,
     )
-    const traceAfter = traceRecordsSince(ctx.iso.workspace, t0)
+    const traceAfter = readTraceRecords(ctx.iso.workspace, t0)
     const probeB = await appB.page.evaluate(() => {
       const p = window.__acceptanceProbe || { model: [], calls: [] }
       return { model: p.model.map((m) => m.cmd), calls: p.calls.map((c) => c.cmd) }
     })
+    // 零请求是**必须可观察**才算成立：trace 读不出来时"没看到请求"证明不了零请求（指南 §0.0 R3 末条）。
     check(
-      `${idTag()}重开期间没有新的模型请求（探针无模型命令、trace 无新 request）`,
-      probeB.model.length === 0 && traceAfter.requests.length === 0,
-      `探针模型命令=${JSON.stringify(probeB.model)}；新 trace 请求=${traceAfter.requests.length}；重开本轮命令=${JSON.stringify([...new Set(probeB.calls)])}`,
+      `${idTag()}重开期间没有新的模型请求（探针无模型命令、trace 可观察且无新 request）`,
+      probeB.model.length === 0 && traceAfter.observable === true && traceAfter.requests.length === 0,
+      `探针模型命令=${JSON.stringify(probeB.model)}；新 trace 请求=${traceAfter.observable ? traceAfter.requests.length : 'UNKNOWN'}；可观察=${traceAfter.observable}；窗口自 ${new Date(t0).toISOString()}（PID-B 启动）起；重开本轮命令=${JSON.stringify([...new Set(probeB.calls)])}`,
     )
-    recordLedger(ctx.ledger, { dispatches: 0, genSvg: 0, note: 'L5 关停重开：不新增模型调用' })
+    if (traceAfter.observable !== true) {
+      fail('trace', `重开期间的 trace 不可观察（${traceAfter.note || '未知原因'}）——无法证明"零新增模型请求"，只能记 UNKNOWN`)
+    }
+    const recL5 = ctx.budget.recordPhase({ dispatches: 0, genSvg: 0, note: 'L5 关停重开：不新增模型调用', extra: { phase, noDispatchExpected: true } })
+    if (!recL5.ok) fail('budget', `L5 账本记录没有落盘（${recL5.reason}）`)
     writeJsonEvidence(join(evidenceDir, 'L5-after-reopen.json'), { stateB: slimState(stateB), cmpB, probeB, traceRequests: traceAfter.requests.length, pidB: appB.launch.pid }, 'L5-after-reopen.json')
   } finally {
     const closeB = await appB.close()
-    check(`${idTag()}PID-B 已由 closeOwnPid 正常关闭`, closeB.closed === true, JSON.stringify(closeB))
+    check(`${idTag()}PID-B 走应用自身退出路径正常关闭（未被强杀）`, closeB.closed === true && closeB.forced === false, JSON.stringify(closeB))
   }
 }
 
@@ -1782,12 +2166,40 @@ async function runL6(ctx, app) {
   const inventoryBefore = existsSync(exportsDir) ? hashInventory(exportsDir) : {}
   evidence.exportInventory = { before: Object.keys(inventoryBefore), dir: exportsDir }
 
-  await waitDocReady(app.page)
-  const state = await snapshot(app.page, ctx.iso.workspace, docId, '')
+  // 导出对象必须是**最后成功版本**（指南 §8.4）：与 L5 用同一份基准，而不是"当前界面上随便哪一版"。
+  // 这样 L4 失败而 L2 成功时，基准就是 L2——不会固定拿 L1 去比，也不会用失败稿冒充成品。
+  const prev = latestBaseline()
+  if (!prev) {
+    block('baseline', '找不到"最后成功版本"的基准（没有任何检查全过的成功版本）——请先用同一个 --root 跑 L1（L2/L4 可选）')
+    return
+  }
   check(
-    `${idTag()}导出对象是当前已验收成品（doc-state=accepted 且磁盘成品可读）`,
+    `${idTag()}导出基准齐备且是**成功版本**（最后成功版本 = ${prev.phase}，ok=true）`,
+    prev.ok === true && !!(prev.revisionId && prev.htmlHash && prev.sourceHash),
+    `基准 phase=${prev.phase} ok=${prev.ok} revision=${prev.revisionId} generation=${prev.generation}`,
+  )
+  if (prev.ok !== true) {
+    block('baseline', `最后一条基准 ok=${prev.ok}（不是成功版本）——拒绝导出失败稿冒充验收成品`)
+    return
+  }
+  if (prev.docId !== docId) {
+    check(`${idTag()}当前会话与导出基准是同一篇文档`, false, `基准=${prev.docId}，当前=${docId}`)
+    block('baseline', `当前会话 ${docId} 与最后成功版本所在的文档 ${prev.docId} 不是同一篇`)
+    return
+  }
+  writeJsonEvidence(join(evidenceDir, 'L6-baseline.json'), prev, 'L6-baseline.json')
+
+  await waitDocReady(app.page)
+  const state = await snapshot(app.page, ctx.iso.workspace, docId, prev.titleNodeText || prev.previewTitle || '')
+  check(
+    `${idTag()}导出对象是已验收成品（doc-state=accepted 且磁盘成品可读）`,
     state.ui.docState === 'accepted' && state.disk.ok && state.disk.meta.validation === 'verified',
     `doc-state=${state.ui.docState}；revision=${state.disk.ok ? state.disk.revisionId : '-'}`,
+  )
+  check(
+    `${idTag()}当前成品就是那份"最后成功版本"（revision / HTML 哈希逐项一致）`,
+    state.disk.ok && state.disk.revisionId === prev.revisionId && state.disk.htmlHash === prev.htmlHash,
+    `revision ${prev.revisionId} vs ${state.disk.ok ? state.disk.revisionId : '-'}；htmlHash 一致=${state.disk.ok && state.disk.htmlHash === prev.htmlHash}`,
   )
   const t0 = Date.now()
   const currentHtml = state.disk.ok ? state.disk.html : ''
@@ -1797,11 +2209,27 @@ async function runL6(ctx, app) {
   const htmlMsg = await waitForExportMsg(app.page, /已导出|导出失败/)
   log(`  [导出-HTML] ${htmlMsg}`)
   const htmlPath = (htmlMsg.match(/已导出：(.+)$/) || [])[1] || ''
-  const htmlFileOk = htmlPath && existsSync(htmlPath) && readFileSync(htmlPath, 'utf8') === currentHtml
+  const htmlExists = Boolean(htmlPath) && existsSync(htmlPath)
+  const htmlFileOk = htmlExists && readFileSync(htmlPath, 'utf8') === currentHtml
   check(
-    `${idTag()}HTML 导出有 UI 回执且实际新文件内容与当前成品逐字节一致`,
+    `${idTag()}HTML 导出有 UI 回执，且实际文件内容与"最后成功版本"逐字节一致`,
     /已导出/.test(htmlMsg) && htmlFileOk,
-    `回执=「${clip(htmlMsg, 200)}」；文件存在=${htmlPath ? existsSync(htmlPath) : false}；逐字节一致=${htmlFileOk}`,
+    `回执=「${clip(htmlMsg, 200)}」；文件存在=${htmlExists}；与基准逐字节一致=${htmlFileOk}；基准 htmlHash=${String(prev.htmlHash).slice(0, 12)}`,
+  )
+  // 新文件必须**出现在本轮目录差分里**（不是"目录里本来就有个同名文件"），
+  // 而且必须就是 UI 回执里写的**那一个**路径——只断言"目录里多了任意一个文件"太弱：
+  // 回执指向 A、实际新增的是 B，也能过（指南 §0.0 R3 第 6 条）。
+  const addedAfterHtml = diffInventory(inventoryBefore, existsSync(exportsDir) ? hashInventory(exportsDir) : {})
+  const htmlRel = htmlPath ? relUnder(exportsDir, htmlPath) : ''
+  check(
+    `${idTag()}HTML 导出产生了本轮新增文件`,
+    addedAfterHtml.added.length > 0,
+    `新增=${JSON.stringify(addedAfterHtml.added.slice(0, 8))}`,
+  )
+  check(
+    `${idTag()}HTML 回执里的路径就是本轮新增的那个文件（绑定同一成功版本）`,
+    !!htmlRel && addedAfterHtml.added.includes(htmlRel) && htmlFileOk,
+    `回执路径=「${clip(htmlPath, 200)}」→ 相对=${htmlRel || '(不在导出目录内或回执不可解析)'}；本轮新增=${JSON.stringify(addedAfterHtml.added.slice(0, 8))}；与基准逐字节一致=${htmlFileOk}`,
   )
 
   // ② 图片导出（长图 + 分页）
@@ -1822,6 +2250,33 @@ async function runL6(ctx, app) {
     `${idTag()}长图与分页 PNG 实际存在`,
     !!longName && pageNames.length >= 1,
     `长图=${longName || '(缺)'}；分页=${JSON.stringify(pageNames)}`,
+  )
+  // 长图与每个分页都要能绑定到"本轮新写出来的文件"（回执张数 ÷ 差分条目各管一半）
+  const diffAfterImages = diffInventory(inventoryBefore, existsSync(exportsDir) ? hashInventory(exportsDir) : {})
+  const newFiles = new Set(diffAfterImages.added)
+  const exportedRel = [longName, ...pageNames].filter(Boolean).map((n) => {
+    const abs = join(imgDir, n)
+    const rel = abs.slice(exportsDir.length + 1).split('\\').join('/')
+    return { name: n, rel, isNew: newFiles.has(rel) }
+  })
+  check(
+    `${idTag()}长图与分页的每一个文件都能绑定到本轮新增（不是"目录里有同名旧文件"）`,
+    exportedRel.length > 0 && exportedRel.every((x) => x.isNew),
+    `导出对照：${JSON.stringify(exportedRel)}；本轮新增=${JSON.stringify(diffAfterImages.added.slice(0, 20))}`,
+  )
+  // 保留 375px 预览与 750px 输出供人工查看（指南 §8.4 末条）。
+  // 光比正文快照证明不了"预览真的按 375px 渲染"——所以这里抓**真实截图**并核对像素。
+  const previewState = await snapshot(app.page, ctx.iso.workspace, docId, prev.titleNodeText || '')
+  check(
+    `${idTag()}375px 预览仍显示该版本（供人工查看）`,
+    previewState.ui.docState === 'accepted' && !!previewState.ui.article && previewState.ui.article.counted === prev.counted,
+    `doc-state=${previewState.ui.docState}；正文 ${previewState.ui.article ? previewState.ui.article.bodyChars : -1} 字（基准 ${prev.bodyChars}）`,
+  )
+  const shot = await capturePreviewShot(app.page)
+  check(
+    `${idTag()}375px 预览有**真实像素证据**（手机壳宽 375px + 截图落盘且可解码）`,
+    Boolean(shot.box) && Math.round(shot.box.width) === 375 && Boolean(shot.info && shot.info.ok && shot.info.height > 0) && !shot.err,
+    `手机壳=${shot.box ? `${Math.round(shot.box.width)}x${Math.round(shot.box.height)} CSS px` : '(取不到)'}；截图=${shot.info ? `${shot.info.width}x${shot.info.height} 像素` : '(无)'}；文件=${shot.path || '(未落盘)'}${shot.err ? `；错误=${shot.err}` : ''}`,
   )
 
   // ③ PNG 可解码 + 宽 750px + 分页无缺漏
@@ -1877,14 +2332,19 @@ async function runL6(ctx, app) {
     const p = window.__acceptanceProbe || { model: [], calls: [] }
     return { model: p.model.map((m) => m.cmd), calls: p.calls.map((c) => c.cmd) }
   })
-  const traceAfter = traceRecordsSince(ctx.iso.workspace, 0)
-  const newReqs = traceRecordsSince(ctx.iso.workspace, t0).requests
+  const traceAfter = readTraceRecords(ctx.iso.workspace, 0)
+  const traceThisExport = readTraceRecords(ctx.iso.workspace, t0)
+  const newReqs = traceThisExport.requests
   check(
-    `${idTag()}本轮导出没有新增模型调用`,
-    probe.model.length === 0 && newReqs.length === 0,
-    `探针模型命令=${JSON.stringify(probe.model)}；本轮新 trace 请求=${newReqs.length}；全部 trace 请求数=${traceAfter.requests.length}`,
+    `${idTag()}本轮导出没有新增模型调用（trace 必须可观察，否则只能记 UNKNOWN）`,
+    probe.model.length === 0 && traceThisExport.observable === true && newReqs.length === 0,
+    `探针模型命令=${JSON.stringify(probe.model)}；本轮新 trace 请求=${traceThisExport.observable ? newReqs.length : 'UNKNOWN'}；可观察=${traceThisExport.observable}；全部 trace 请求数=${traceAfter.requests.length}`,
   )
-  recordLedger(ctx.ledger, { dispatches: 0, genSvg: 0, note: 'L6 导出：不新增模型调用' })
+  if (traceThisExport.observable !== true) {
+    fail('trace', `导出期间的 trace 不可观察（${traceThisExport.note || '未知原因'}）——无法证明"导出零模型请求"，只能记 UNKNOWN`)
+  }
+  const recL6 = ctx.budget.recordPhase({ dispatches: 0, genSvg: 0, note: 'L6 导出：不新增模型调用', extra: { phase, noDispatchExpected: true } })
+  if (!recL6.ok) fail('budget', `L6 账本记录没有落盘（${recL6.reason}）`)
   evidence.exportInventory.after = Object.keys(inventoryAfter)
   evidence.exportInventory.diff = exportDiff
   evidence.exportInventory.pngs = infos
@@ -1907,6 +2367,60 @@ async function waitForExportMsg(page, re, timeoutMs = 60000) {
   return s.exportMsg || '(超时未出现导出回执)'
 }
 
+/** `abs` 相对 `base` 的路径（不在 base 之下则空串）——用于把 UI 回执路径绑定到目录差分条目上 */
+function relUnder(base, abs) {
+  try {
+    const b = resolve(base)
+    const a = resolve(abs)
+    const bl = b.toLowerCase()
+    const al = a.toLowerCase()
+    if (al === bl) return ''
+    if (!al.startsWith(bl + sep.toLowerCase())) return ''
+    return a.slice(b.length + 1).split(sep).join('/')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 抓预览 iframe 的**真实截图**（指南 §8.4：375px 预览要留实际成品证据，不能只留正文快照）。
+ * 返回 `{ box, info, err, path }`；`box` 是元素的 CSS 像素尺寸，`info` 是 PNG 头解析结果。
+ */
+async function capturePreviewShot(page) {
+  // "375px 预览"量的是**手机壳**（`.phone`，CSS 里就是 `width: 375px`），不是里面的 iframe：
+  // 外壳有 12px/8px 内边距与 1px 边框，iframe 内容区实测 358px。原来量 iframe 元素宽度，
+  // 于是这条永远差 17px 判红——量错了对象（2026-10-02 真机踩到）。
+  const el = page.locator('.phone').first()
+  let box = null
+  try {
+    box = await el.boundingBox()
+  } catch {
+    box = null
+  }
+  let bytes = null
+  let err = null
+  try {
+    bytes = await el.screenshot()
+  } catch (e) {
+    err = String((e && e.message) || e).split('\n')[0]
+  }
+  let info = null
+  let path = ''
+  if (bytes && bytes.length) {
+    info = pngInfo(bytes)
+    path = join(evidenceDir, 'L6-preview-375.png')
+    try {
+      writeFileSync(path, bytes)
+    } catch (e) {
+      err = `截图落盘失败：${String((e && e.message) || e)}`
+      path = ''
+    }
+  } else if (!err) {
+    err = '截图返回空'
+  }
+  return { box, info, err, path }
+}
+
 /** 解析 PNG 头（签名 / IHDR / IEND） */
 function pngInfo(buf) {
   if (buf.length < 33) return { ok: false, reason: '文件过小' }
@@ -1924,34 +2438,39 @@ function pngInfo(buf) {
 // 第 15 节：报告与收尾
 // =====================================================================================
 
-function reportMarkdown() {
+/**
+ * 报告正文。**状态从一个显式传入的 run 派生**，不再读模块级的 `run.status`——
+ * 否则它会用到"附件错误还没产生时"算出来的那份状态，同一份归档里三份文件互相打脸
+ * （2026-10-02 复核 R1 实测：判 PASS、报告 BLOCKED、evidence 没有 status）。
+ */
+function reportMarkdown(r) {
   const led = evidence.ledgerAfter || {}
   const lines = []
   lines.push(`# 真机 + 真实模型验收 · ${phase}`)
   lines.push('')
-  lines.push(`状态：**${run.status}**（检查 ${run.checks.filter((c) => c.pass).length}/${run.checks.length} 通过；计划 ${run.plannedCases.length} / 执行 ${run.executedCases.length}）`)
+  lines.push(`状态：**${r.status}**（检查 ${r.checks.filter((c) => c.pass).length}/${r.checks.length} 通过；计划 ${r.plannedCases.length} / 执行 ${r.executedCases.length}）`)
   lines.push('')
-  lines.push(`- 时间：${run.startedAt} → ${run.finishedAt || ''}`)
+  lines.push(`- 时间：${r.startedAt} → ${r.finishedAt || ''}`)
   lines.push(`- 隔离 root：\`${root}\``)
   lines.push(`- 隔离 workspace：\`${evidence.isolation ? evidence.isolation.workspace : '(未建立)'}\``)
   lines.push(`- 证据目录：\`${evidenceDir}\``)
   lines.push(`- 复现命令：\`node scripts/live-acceptance.mjs ${phase} --root ${root}\``)
-  if (run.blockedReason) lines.push(`- **阻塞原因**：${run.blockedReason}`)
+  if (r.blockedReason) lines.push(`- **阻塞原因**：${r.blockedReason}`)
   lines.push('')
   lines.push('## 检查清单')
   lines.push('')
-  for (const c of run.checks) lines.push(`- ${c.pass ? 'PASS' : 'FAIL'} — ${c.id}${c.evidence.length ? `\n  - 证据：${c.evidence.join(' / ')}` : ''}`)
-  if (!run.checks.length) lines.push('- （零条检查 = 错误，不是通过）')
+  for (const c of r.checks) lines.push(`- ${c.pass ? 'PASS' : 'FAIL'} — ${c.id}${c.evidence.length ? `\n  - 证据：${c.evidence.join(' / ')}` : ''}`)
+  if (!r.checks.length) lines.push('- （零条检查 = 错误，不是通过）')
   lines.push('')
-  if (run.errors.length) {
+  if (r.errors.length) {
     lines.push('## 错误')
     lines.push('')
-    for (const e of run.errors) lines.push(`- \`${e.stage}\`：${e.message}`)
+    for (const e of r.errors) lines.push(`- \`${e.stage}\`：${e.message}`)
     lines.push('')
   }
   lines.push('## 观测与归因限制')
   lines.push('')
-  for (const o of run.observations) lines.push(`- ${o.id}：${o.detail}`)
+  for (const o of r.observations) lines.push(`- ${o.id}：${o.detail}`)
   lines.push('')
   lines.push('## 账本（跨 phase 累加）')
   lines.push('')
@@ -1979,11 +2498,21 @@ function reportMarkdown() {
   return lines.join('\n') + '\n'
 }
 
+/**
+ * 收尾落盘 + 定退出码（指南 §0.2 R1）。
+ *
+ * 顺序是**先落盘、后定状态**：原来先算 `run.status` 再写文件，写失败只表现为
+ * `writeFileEvidence` 里一句 `fail('io', …)`——而 `run.status` 早就定好了，于是
+ * "证据没写出去"和"全部通过"在归档里长得一模一样。现在任何必需附件或判定文件写失败
+ * 都会进入 `statusOf()`，把本次运行钉成 ERROR、退出非 0、且不打印"证据留档"。
+ *
+ * 写两遍是有意的，而且两遍之间夹着**账本闭合**（指南 §0.0 C）：第一遍确认必需证据真的落盘了，
+ * 之后才把 phase 终结写进账本，再按最终判定重写一遍 `report.md` / `run-result.json`——
+ * 账本侧的任何关键写失败都会让本轮非 PASS，两份文件必须说的是同一件事（"尽力更新过时判定"）。
+ * 反过来先闭合账本、再写证据，就是复核反例 B2：账本记成 pass 而这次运行连证据都没写出去。
+ */
 function finalizeAndExit() {
-  run.status = statusOf()
   run.finishedAt = new Date().toISOString()
-  evidence.status = run.status
-  evidence.finishedAt = run.finishedAt
   let dir = evidenceDir
   try {
     ensureDir(dir)
@@ -1992,19 +2521,69 @@ function finalizeAndExit() {
     try {
       ensureDir(dir)
     } catch {
-      /* 连临时目录都写不了：只在 stdout 报告 */
+      /* 连临时目录都写不了：只在 stdout 报告，下面 persist 会如实失败 */
     }
   }
-  writeFileEvidence(join(dir, 'run-result.json'), JSON.stringify(run, null, 2) + '\n', 'run-result.json')
-  writeFileEvidence(join(dir, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', 'evidence.json')
-  writeFileEvidence(join(dir, 'report.md'), reportMarkdown(), 'report.md')
-  writeFileEvidence(join(dir, 'stdout.txt'), LOG.join('\n') + '\n', 'stdout.txt')
+  // 附件内容**全部从传入的 run 派生**（函数形式）：附件错误一旦改变判定，
+  // persistRunResult 会按新判定把这三份重写一遍，保证同一归档里状态是同一件事（指南 §0.2 R1）。
+  const filesFor = (r) => {
+    evidence.status = r.status
+    const out = {
+      'evidence.json': JSON.stringify(evidence, null, 2) + '\n',
+      'report.md': reportMarkdown(r),
+      'stdout.txt': LOG.join('\n') + '\n',
+    }
+    // 落盘前扫密钥：这里绕过了 writeJsonEvidence，扫不到就等于把密钥交给归档
+    for (const [name, text] of Object.entries(out)) assertNoSecret(text, name)
+    return out
+  }
+  // `baseErrors` 让 verdict **可重复计算**：persist 会多次回调（附件重写 + 判定文件重写），
+  // 若用 push 追加就会多出一份重复错误，判定对象也就不可重复计算了。
+  // ⚠️ 这个快照必须**每次调用时当场取**：本函数现在会被调用两遍（见下方的顺序），
+  // 固定成调用前那一份会把第二遍之前新产生的错误（账本侧失败）整个抹掉。
+  const persistOnce = () => {
+    const baseErrors = run.errors.slice()
+    try {
+      return persistRunResult({
+        dir,
+        files: filesFor,
+        verdict: (errors) => {
+          run.errors = baseErrors.concat(errors.map((e) => ({ stage: 'persist', message: `写 ${e.file} 失败：${e.message}` })))
+          run.status = statusOf() // persist 错误已进 run.errors → ERROR（BLOCKED 优先，它本来就不是"通过"）
+          return run
+        },
+      })
+    } catch (e) {
+      const msg = String((e && e.message) || e)
+      fail('persist', `落盘过程异常：${msg}`)
+      run.status = statusOf()
+      evidence.status = run.status
+      return { ok: false, dir, errors: [{ file: '(未知)', message: msg }], verdictWritten: false }
+    }
+  }
+
+  // ── 顺序（指南 §0.0 C，复核反例 B2 的修法）─────────────────────────────────────
+  //   ① **必需证据先落盘**；② 证据确认落盘之后才把 phase 终结（连同业务失败屏障，同一次原子写）
+  //   写进账本；③ 再按最终判定重写一遍证据——账本侧的任何关键写失败都会让本轮非 PASS，
+  //   而 `run-result.json` 必须说的是同一件事。
+  // 顺序本身在 `lib/ledger-finalize.mjs::runFinalizeSequence()`（唯一实现，离线可驱动）：
+  // 反过来（先闭合、后写证据）就是被修掉的那条——账本记成 pass，而这次运行连证据都没写出去。
+  let persist = runFinalizeSequence({ persist: persistOnce, finalize: finalizeLedger }).final
+  // 最终判定以 persist 回来的那一份为准（它才是被写进 run-result.json 的对象）
+  const finalStatus = (persist.run && persist.run.status) || run.status
+  run.status = finalStatus
   log('')
-  log(`  证据留档：${dir}`)
-  log(`  run-result.json：${join(dir, 'run-result.json')}`)
+  if (persist.ok) {
+    log(`  证据留档：${dir}`)
+    log(`  run-result.json：${join(dir, 'run-result.json')}`)
+  } else {
+    // 不打印"证据留档"：这些文件确实没写成功，说了就等于伪造归档
+    log(`  [落盘失败] 目标目录 ${dir} 下这些文件没有写成功，归档里不会有它们：`)
+    for (const e of persist.errors) log(`    · ${e.file}：${e.message}`)
+    log('  ——本次结果不可按"已留档"签收。')
+  }
   log(`LIVE-ACCEPTANCE ${run.status}（${phase}）`)
-  const code = run.status === 'PASS' ? 0 : run.status === 'BLOCKED' ? 2 : 1
-  process.exit(code)
+  process.exit(run.status === 'PASS' && persist.ok ? 0 : run.status === 'BLOCKED' ? 2 : 1)
 }
 
 // =====================================================================================
@@ -2016,10 +2595,20 @@ async function main() {
     console.error(`必须指定 phase（L1..L6）。\n${CONFIG_HINT}`)
     process.exit(2)
   }
+  // 额度参数先验（指南 §0.3）：非法值直接 BLOCKED。
+  // 不拦的后果是具体的——`NaN` 会让"本回合中止线"永远为假（`x >= NaN` 恒 false），
+  // 等于把这一层的额度限制**整个关掉**，而界面上只会看到一行"≤ NaN"。
+  if (!MAX_DISPATCHES_ARG.ok || !MAX_GEN_SVG_ARG.ok) {
+    block('budget', `额度参数非法：${[!MAX_DISPATCHES_ARG.ok && MAX_DISPATCHES_ARG.reason, !MAX_GEN_SVG_ARG.ok && MAX_GEN_SVG_ARG.reason].filter(Boolean).join('；')}`)
+    return
+  }
   log(`=== 真机 + 真实模型验收 · ${phase} ===`)
   log(`  隔离 root：${root}`)
   log(`  被测 exe：${exe}`)
-  log(`  预算：整批派发 ≤ ${MAX_DISPATCHES} 次，其中 gen_svg ≤ ${MAX_GEN_SVG} 次（跨 phase 累加，不清零）`)
+  log(
+    `  预算：整批派发 ≤ ${MAX_DISPATCHES === undefined ? '(沿用账本已存上限)' : MAX_DISPATCHES} 次，` +
+      `其中 gen_svg ≤ ${MAX_GEN_SVG === undefined ? '(沿用账本已存上限)' : MAX_GEN_SVG} 次（跨 phase 累加，不清零）`,
+  )
   log('  题面：' + (PROMPTS[phase] ? PROMPTS[phase] : '(本 phase 不发消息)'))
   if (!PROMPTS[phase]) log('  （L5/L6 不新增模型调用，只做关停重开与导出核对）')
 
@@ -2048,14 +2637,74 @@ async function main() {
   if (run.blockedReason) return
 
   const iso = phaseContext()
-  const ctx = { iso, key: SECRET, ledger: null, chromium: null }
+  const ctx = { iso, key: SECRET, budget: null, chromium: null }
+  CTX = ctx
 
-  const led = loadLedger()
-  evidence.ledgerBefore = { totals: { ...led.totals }, budget: { ...led.budget } }
-  ctx.ledger = led
-  const rem = remaining(led)
+  // ── 付费预算：权限账本在**固定路径**（与 --root 无关），root 下只是镜像 ──
   const plan0 = PHASE_PLAN[phase]
-  log(`  账本（累计）：已派发 ${led.totals.dispatches} 次、绘图 ${led.totals.genSvg} 次；剩余 ${rem.dispatches} / ${rem.genSvg}`)
+  const budget = createBudget({
+    ledgerPath: GLOBAL_LEDGER,
+    mirrorPath: mirrorLedgerPath,
+    maxDispatches: MAX_DISPATCHES,
+    maxGenSvg: MAX_GEN_SVG,
+    phaseMaxDispatches: plan0.maxDispatches,
+    phaseMaxGenSvg: plan0.maxGenSvg,
+    // 显式写出来（也是模块默认值）：付费派发前必须先把"本 phase 已开始"持久写进账本。
+    // 少了这一步，一次"跑了一半、失败记录又没写成"的运行在盘上不留痕迹，下一个进程会直接继续花钱。
+    requirePhaseOpen: true,
+  })
+  const opened = budget.open()
+  if (!opened.ok) {
+    block('budget', `账本不可用：${opened.reason}`)
+    return
+  }
+  ctx.budget = budget
+  evidence.ledgerBefore = budget.summary()
+  if (opened.fresh) observe('账本', `首次创建权限账本（${GLOBAL_LEDGER}）：此前本机没有累计记录`)
+
+  const rem = budget.remaining()
+  log(
+    `  账本（累计，跨 --root 不清零）：上限 ${budget.state.ledger.budget.maxDispatches} / ${budget.state.ledger.budget.maxGenSvg}；` +
+      `已派发 ${budget.state.ledger.totals.dispatches} 次、绘图 ${budget.state.ledger.totals.genSvg} 次；剩余 ${rem.dispatches} / ${rem.genSvg}`,
+  )
+
+  // ── 未闭合的 phase（指南 §0.0 C）──────────────────────────────────────────────
+  // 上一次运行如果**在写下终结证据之前**就结束了（业务失败记录写不成、关键写失败、进程被杀），
+  // 账本里会留下一条 open 记录。读到它就不能自动当成"上一轮没事"，必须先核对。
+  // 两道历史门槛抽在 `lib/ledger-finalize.mjs::preflightLedgerGate()`（唯一实现）：
+  // ① 上一次运行没写下终结证据（未闭合 phase）；② 上一次业务失败标记还没解除。
+  const needsPaid = plan0.minDispatches > 0
+  let gate = preflightLedgerGate({ budget, needsPaid })
+  if (gate.unresolved) {
+    if (!RESUME_REASON) {
+      block('budget', gate.block)
+      return
+    }
+    const resolved = budget.resolveUnresolved(String(RESUME_REASON))
+    if (!resolved.ok) {
+      block('budget', `闭合历史未完成 phase 失败：${resolved.reason}`)
+      return
+    }
+    observe('账本', `按 --resume-after-fix 闭合历史未完成 phase：${RESUME_REASON}（只闭合记录，不返还额度、不清零累计）`)
+    gate = preflightLedgerGate({ budget, needsPaid }) // 闭合之后再看业务失败标记（原来两道检查是顺序执行的）
+  }
+
+  // 上次的业务失败没清掉之前，付费 phase 不许继续（指南 §0.4 末段）
+  if (gate.priorFailure && needsPaid) {
+    if (!RESUME_REASON) {
+      block('budget', gate.block)
+      return
+    }
+    const cleared = budget.clearBusinessFailure(String(RESUME_REASON))
+    if (!cleared.ok) {
+      block('budget', `解除业务失败标记失败：${cleared.reason}`)
+      return
+    }
+    observe('账本', `按 --resume-after-fix 解除业务失败标记：${RESUME_REASON}`)
+  } else if (gate.priorFailure) {
+    observe('账本', `存在未解除的业务失败记录（${gate.priorFailure.at}）：本 phase 不派发模型，继续执行`)
+  }
+
   if (rem.dispatches < plan0.minDispatches) {
     block('budget', `累计额度不足以完成 ${phase}（需要至少 ${plan0.minDispatches} 次派发，剩余 ${rem.dispatches} 次）——拒绝派发，不静默追加回合`)
     return
@@ -2070,20 +2719,48 @@ async function main() {
     maxDispatches: Math.min(plan0.maxDispatches, rem.dispatches),
     maxGenSvg: Math.min(plan0.maxGenSvg, rem.genSvg),
   }
-  log(`  本回合中止线：派发 ≤ ${plan.maxDispatches}、绘图 ≤ ${plan.maxGenSvg}（超出即停手并 BLOCKED）`)
+  // 门禁按**夹紧后**的中止线工作：L5/L6 的 maxDispatches=0 就是"本回合一次都不许发"
+  budget.setPhaseMax({ dispatches: plan.maxDispatches, genSvg: plan.maxGenSvg })
+  log(`  本回合中止线：派发 ≤ ${plan.maxDispatches}、绘图 ≤ ${plan.maxGenSvg}（派发前硬拦，超出即拒发）`)
+
+  // 在途状态先落盘：这一步失败就一次模型都不发（指南 §0.0 C）。
+  // 放在启动应用之前——这样连"启动阶段就崩掉"也会在账本里留下一条可被下一个进程读到的未闭合记录。
+  const began = budget.beginPhase({
+    name: phase,
+    note: `${phase} 开始（派发中止线 ${plan.maxDispatches}，绘图 ${plan.maxGenSvg}）`,
+  })
+  if (!began.ok) {
+    block('budget', `无法持久记录本 phase 的开始状态（${began.reason}）——拒绝在没有在途记录的情况下派发`)
+    return
+  }
+  log(`  在途记录：已把「${phase} 开始」写入账本（${GLOBAL_LEDGER}）`)
 
   const { chromium } = resolvePlaywright()
   if (!chromium) return // 缺 playwright 时**不启动应用**：连不上 WebView2 就别去开一个没人操作的实例
   ctx.chromium = chromium
 
-  const app = await openApp(chromium, ctx)
-  if (!app) return
   run.plannedCases = [phase]
+  let app = null
   try {
-    if (phase === 'L1') await runL1(ctx, app, plan)
+    // `openApp` 自身也要在 try 里：连接 CDP / 暴露预算门禁 / 安装探针任何一步抛异常，
+    // 都必须让 finally 把**已经起来的**自有 PID 收掉（原来它在 try 之外，异常路径没有覆盖）。
+    // 首次使用一个全新的隔离 profile 时，WebView2 不会开放调试端口——先预热一次再测量
+    const warm = await warmUpProfile(ctx)
+    if (!warm.skipped) {
+      observe(
+        '隔离 profile 预热',
+        `首次初始化 ${ctx.iso.webview}：${warm.ready ? '已完成' : '45s 内未完成'}，耗时 ${warm.ms}ms；` +
+          'WebView2 在首启新 user-data-dir 时不监听调试端口，同一目录的后续启动约 1s 即可达（2026-10-02 实测）。',
+      )
+    }
+    app = await openApp(chromium, ctx)
+    if (!app) return // block 已在 openApp 里置好；finally 仍会收尾账本与残留进程
+    if (phase === 'L1') await runFirstPhase(ctx, app, plan, 'L1', { wordLimit: 180 })
+    else if (phase === 'L7') await runFirstPhase(ctx, app, plan, 'L7', { wordLimit: 1200, minWords: 800 })
     else if (phase === 'L2') await runWritePhase(ctx, app, 'L2', plan)
     else if (phase === 'L3') await runL3(ctx, app, plan)
     else if (phase === 'L4') await runWritePhase(ctx, app, 'L4', plan)
+    else if (phase === 'L8') await runWritePhase(ctx, app, 'L8', plan, { wordLimit: 500 })
     else if (phase === 'L5') await runL5(ctx, app)
     else if (phase === 'L6') await runL6(ctx, app)
     run.executedCases = [phase]
@@ -2093,13 +2770,65 @@ async function main() {
     // 收尾：把**本轮启动过的每一个**自有 PID 都关掉（失败路径也一样），一个都不留给用户
     for (const h of HANDLES) {
       if (h.closed) continue
-      const r = await closeOwnPid(h.pid)
-      h.closed = true
+      const r = await closeOwnPid(h.pid, { exe, expectedIdentity: h.identity })
+      // 只有**观测到进程确实消失了**才算已关闭；`closed:false`（含身份不明被拒）不能标成关好了
+      // （否则下一个 phase 会在同一个 profile 上开第二个实例）
+      h.closed = r.closed === true
       h.rec.closed = { ...r, at: new Date().toISOString(), via: 'phase-finally' }
       log(`  [收尾] 关闭自有 PID ${h.pid}：${JSON.stringify(r)}`)
+      if (!h.closed) {
+        fail(
+          'cleanup',
+          `自有 PID ${h.pid} 未能关闭（${r.refused ? '身份核验未通过，零关闭操作' : JSON.stringify(r)}）——同一 profile 不得再开第二个实例`,
+        )
+      }
     }
-    evidence.ledgerAfter = loadLedger()
+    // 账本终结**不在这里**做：它必须发生在"必需证据确认落盘之后"（指南 §0.0 C），
+    // 也就是 `finalizeAndExit()` 里。放在这里就会重复复核反例 B2 的顺序（账本 pass、证据没写出去）。
   }
+}
+
+/**
+ * 账本收尾：**所有退出路径**都要走一次（含启动阶段就 BLOCKED 的早退）。
+ *
+ * 业务失败要写进**持久账本**，后续付费 phase 才不会被直接继续（指南 §0.4 末段）；
+ * 无论成败都要留下 `ledgerAfter` 摘要，否则证据里看不出这一轮到底动没动过额度。
+ */
+function finalizeLedger() {
+  if (LEDGER_FINALIZED) return
+  if (!CTX || !CTX.budget) {
+    evidence.ledgerAfter = null
+    return
+  }
+  LEDGER_FINALIZED = true
+  // 收尾逻辑本身在 `lib/ledger-finalize.mjs`（唯一生产实现，离线可驱动）：
+  // 业务失败标记与 phase 终结合成**同一次原子账本写**，写失败就保持未闭合。
+  // ⚠️ 本函数必须在**必需证据确认落盘之后**被调用（见 finalizeAndExit），否则就是复核反例 B2：
+  // 账本已经记成 pass，而这次运行的 run-result.json 根本没写出去。
+  const failedChecks = run.checks.filter((c) => !c.pass)
+  const res = finalizePhase({
+    budget: CTX.budget,
+    phase,
+    blockedReason: run.blockedReason ? clip(run.blockedReason, 300) : null,
+    failedChecks,
+    errorCount: run.errors.length,
+    checks: { passed: run.checks.length - failedChecks.length, total: run.checks.length },
+  })
+  for (const e of res.errors) fail('budget', e)
+  if (res.mirrorFailures > 0) {
+    observe(
+      '账本镜像写失败',
+      `${res.mirrorFailures} 次：${JSON.stringify(res.mirrorFailureReasons.slice(0, 3))}（镜像只作证据、不影响判定，但如实记录，不再静默吞掉）`,
+    )
+  }
+  if (res.hasFailure && !res.failurePersisted) {
+    observe(
+      '失败屏障未持久',
+      `本轮属于失败运行，但业务失败标记没有落盘（closed=${res.closed}）——盘上应保持**未闭合**，下一个进程会先要求核对`,
+    )
+  }
+  evidence.ledgerAfter = CTX.budget.summary()
+  evidence.ledgerFinalize = { outcome: res.outcome, closed: res.closed, failurePersisted: res.failurePersisted, ok: res.ok }
 }
 
 /** playwright 解析：require('playwright') → VERIFY_PLAYWRIGHT；都拿不到就 BLOCKED（不静默跳过） */

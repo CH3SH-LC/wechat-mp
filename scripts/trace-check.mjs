@@ -70,7 +70,8 @@ const { createLedger, unfinished } = await import('../src/lib/asset-ledger.ts')
 
 const { clearTraceBuffer, traceBuffer, setTraceSink, summarize, isTraceRecord, classifyError, classifyGenError, retryable, retryHintMs, newRunId, newSlotId, FAILURE_CLASSES, trace, clip } = traceMod
 
-const judge = createJudge({ script: 'trace-check', outDir: resolveOutDir('trace-check') })
+// minChecks：2026-10-01 实测 107 条（无分场景前缀，靠条数下界证明执行完整）
+const judge = createJudge({ script: 'trace-check', outDir: resolveOutDir('trace-check'), minChecks: 107 })
 guardCrashes(judge)
 
 let failed = 0

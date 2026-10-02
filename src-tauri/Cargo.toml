@@ -21,6 +21,19 @@ tauri-build = { version = "2", features = [] }
 # net/io-util 供 tests 里的"可控假 HTTP 服务"使用（阶段 6：延迟/超时/错误/取消）
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 
+[features]
+# 仅供**真机验收驱动**使用：打开 WebView2 DevTools（等价于允许 CDP 远程调试端口）。
+#
+# 为什么需要它：Tauri/wry 在 release 构建里把 `devtools` 默认关掉（wry `src/lib.rs` 的
+# `devtools: cfg!(debug_assertions)`），随后 `webview2/mod.rs` 会执行
+# `settings.SetAreDevToolsEnabled(false)`——宿主自己把 DevTools 关了，于是即使
+# `--remote-debugging-port` 确实出现在 WebView2 子进程命令行上，端口也不会被监听
+# （2026-10-02 零调用矩阵实测：应用侧 `tcp-econnrefused`，同机普通 Edge 用同一开关可用）。
+#
+# **默认关闭**：发布产物的行为与体积完全不变，绝不带 DevTools。
+# 用法（只在验收时）：`pnpm tauri build --no-bundle -f acceptance-devtools`
+acceptance-devtools = ["tauri/devtools"]
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"

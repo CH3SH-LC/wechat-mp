@@ -16,7 +16,8 @@ const { createLedger, unfinished } = await import('../src/lib/asset-ledger.ts')
 const { newRunId } = await import('../src/lib/trace.ts')
 const { judgeReuse, hasColorConflict, pairBubbleRefs, planDecoAliases, splitPolicy } = await import('../src/lib/asset-resolve.ts')
 
-const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check') })
+// minChecks：2026-10-01 实测 86 条（无分场景前缀，靠条数下界证明执行完整）
+const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check'), minChecks: 86 })
 guardCrashes(judge)
 
 let failed = 0

@@ -56,12 +56,33 @@ export type PrepOutcome =
 // 模型带一句说明就落空（实测：真实续改连续两次因此提前结束，成品版本一动没动）。
 export const PREP_INSTRUCTION =
   '创作类请求的处理方式：先用知识工具取用点文件——必取 排版引擎/engine-write-protocol（本地渲染引擎协议：v2 语法/美术占位/风格声明/质量底线），' +
-  '再按需取 内容类型(type-*)、风格(style-*)、合规(comp-*)、文案(copy-*) 等本次创作真正用到的点。' +
-  '取完后若仍有影响成稿的关键点没弄清楚，就用自然对话问清楚（可以继续问，不必一次问完）。' +
-  '然后**必须调用 finish_preparation 声明本回合结果**：只是回答/澄清 → outcome=reply 并把答复写进 text；' +
+  '再按需取 内容类型(type-*)、风格(style-*)、合规(comp-*)、文案(copy-*) 等本次创作真正用到的点；' +
+  '**这些点尽量一次性并列取全**（同一条回复里可以同时调用多个知识工具）。' +
+  '**知识工具与 finish_preparation 不能出现在同一条回复里**（混用会被系统按协议错误整条拒绝）：' +
+  '先把资料取完，**取完之后的下一条回复**再调用 finish_preparation 声明结果。' +
+  '**准备阶段能发出的请求次数有限（含本次共 3 次），所以要一次取够、尽快声明**：' +
+  '如果到最后一轮还在取资料、始终没有声明，整个准备阶段就会失败，本轮不会产出任何文稿。' +
+  '取完后若仍有影响成稿的关键点没弄清楚，就在 finish_preparation 里用 outcome=reply 把问题写进 text 交给用户，等用户回答——' +
+  '**不要用"再取一轮资料"代替提问**。' +
+  'finish_preparation 的取值：只是回答/澄清 → outcome=reply 并把答复写进 text；' +
   '需求已明确、由系统撰写 → outcome=compose；你已经写好了完整正文 → outcome=candidate 并把完整 v2 正文放进 source。' +
   '若本回合只是改文字、现有配图与其引用保持不动 → assetPolicy=preserve；本回合要修改或新增素材 → assetPolicy=modify。' +
   '不要只回复 READY 之类的控制词，也不要只给正文而不声明结果。'
+
+// 最后一轮的**预算提醒**：仅当本次是准备阶段最后一次请求时追加。
+//
+// 为什么需要它（2026-10-02 真机实测）：同题面在验收版上跑过 3 个会话，termination 恰好都落在
+// 第 3 次——预算是**零余量**的。当天用默认发布版跑 L1 时，模型三轮全花在 load_knowledge/search_knowledge 上、
+// 一次 finish_preparation 都没调用，整个准备阶段按设计耗尽失败（证据：`%TEMP%/wxmp-live-r6-*/evidence/L1-*/`）。
+//
+// 这不是放宽契约（总额仍是 3 次，也没有第 4 次），而是把**本来就存在的硬上限**如实说明白；
+// 它由"这是第几次请求"这个**执行计数**触发，不读任何对话意图、不做任何路由——
+// 与既有 `PREP_CORRECTION`（旧协议纠偏）是同一类有界提示，不是前端对话状态机（项目铁律 6）。
+export const PREP_LAST_ROUND_REMINDER =
+  '这是准备阶段的**最后一次请求**：不要再调用任何知识工具，现在就调用 finish_preparation 声明本回合结果。' +
+  '按你已经掌握的信息判断：需要用户补充信息 → outcome=reply 并把问题写进 text；' +
+  '信息够了、由系统撰写 → outcome=compose；你自己已经写好完整正文 → outcome=candidate。' +
+  '只回文字不声明结果会被判为准备失败，本轮不会产生任何文稿。'
 
 // 兼容期提示：模型走了旧协议（只回 READY / 只贴一段正文）时，用**同一总额预算内的一次**请求请它规范声明。
 //
@@ -332,7 +353,9 @@ export async function runPrep(
   // MAX_PREP_CALLS（=3）：知识取用、空回复重试、协议纠偏共用这三次，不各自计次。
   for (let callNo = 0; callNo < MAX_PREP_CALLS; callNo++) {
     say({ phase: 'think', text: callNo === 0 ? '分析需求…' : corrected ? '请模型声明本回合结果…' : '继续确认需求…' })
-    const reply = await prepInvoke(convo, opts?.runId)
+    // 最后一轮追加预算提醒（不改 `convo` 本身——否则 MAX_PREP_CALLS 变大时它会残留到后面的回合）。
+    const outgoing = callNo === MAX_PREP_CALLS - 1 ? [...convo, { role: 'user' as const, content: PREP_LAST_ROUND_REMINDER }] : convo
+    const reply = await prepInvoke(outgoing, opts?.runId)
     // 指南 §5.3：实际模型 / finish_reason / usage 接齐（缺字段如实记 null，不补 0）
     trace({
       kind: 'note',

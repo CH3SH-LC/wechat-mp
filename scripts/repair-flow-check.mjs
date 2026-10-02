@@ -266,7 +266,18 @@ for (const rel of ['src/App.tsx', 'src/lib/delivery-quality.ts', 'src/lib/compos
   evidence.sourceHashes[rel] = sha256(join(repoRoot, rel))
 }
 
-const browser = await chromium.launch({ headless: true, ...(chromiumExe ? { executablePath: chromiumExe } : {}) })
+// ⚠️ 启动必须包在 try 里：浏览器可执行文件不存在时 `launch` 会抛，而这里是**模块顶层**——
+// 抛出去就是"裸异常退出、连 run-result.json 都没有"，归档里看起来像"压根没跑过"
+// （2026-10-02 复核实测：只指定 Playwright、不指定 chromium 路径时就是这样）。
+// 现在走 `die()`：写明原因、落 BLOCKED 判定、退出码 2。
+let browser = null
+try {
+  browser = await chromium.launch({ headless: true, ...(chromiumExe ? { executablePath: chromiumExe } : {}) })
+} catch (e) {
+  die(
+    `浏览器启动失败：${String((e && e.message) || e).split('\n')[0]}（executablePath=${chromiumExe || '(未指定，用 Playwright 默认)'}）——无法开始验证`,
+  )
+}
 run.plannedCases = CASES.map((c) => c.name)
 try {
   for (const c of CASES) {

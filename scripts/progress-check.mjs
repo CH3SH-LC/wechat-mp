@@ -7,7 +7,8 @@
 // 零条检查是 ERROR 而不是"通过"；异常由 guardCrashes 落成 ERROR。**不**用 `failed === 0` 推导成功。
 import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 
-const judge = createJudge({ script: 'progress-check', outDir: resolveOutDir('progress-check') })
+// minChecks：2026-10-01 实测 36 条（无分场景前缀，靠条数下界证明执行完整）
+const judge = createJudge({ script: 'progress-check', outDir: resolveOutDir('progress-check'), minChecks: 36 })
 guardCrashes(judge)
 
 let failed = 0

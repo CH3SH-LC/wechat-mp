@@ -3,7 +3,153 @@
 近期变更保留原因、范围与验证；完成轮次合并为里程碑。当前需求和未解决事项见 [REQUIREMENTS.md](REQUIREMENTS.md)。
 
 ---
+## 2026-10-02
+
+### [Fix][Verify] 完成 §0.0 的 P1/P2 交付面：多页导出、安装交付清单、长文代表稿、后台核对清单
+
+用户要求"完成所有待办"后收口 [指南 §0.0](docs/design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务) 剩余的 P1/P2。逐条证据见 [用户交付面记录](docs/artifacts/2026-10-02-p2-delivery/README.md)。
+
+- **P2.1 多页导出（零模型，完成）**：新增 `scripts/export-paging-check.mjs` + 冻结夹具 `scripts/fixtures/2026-10-02-longarticle/source.md`（1778 字符/7 节），在真实浏览器里走**真实链路** `composeMarkdown → exportArticleImages → renderArticleImages → export_images`（只有 Rust 落盘用替身，并抓下真正传给它的文件清单自查）。**PASS 16/16**：5 页、长图与每页均 750px、分页逐张拼回与长图**逐像素一致（diff=0）**、末页 428px、无空白页、PNG 签名/IHDR/IEND 独立核对通过。**页边界切口 3 处**（含一处把一行文字切开 12px）已按位置+原文列清供目视。**未覆盖**：正文含 `<img>` 的多页——本 runner 的 Chromium 无法转图（EncodingError），真实 WebView2 可以（用 L6 成品反查：强饱和像素 12.21%），已如实记为未覆盖。沿途纠掉本 runner 两个假绿：几何探针写在 `host.remove()` 之后导致"0 处切口"是假象（已加"几何测量可用"断言钉住）、切口选择器照搬标准 HTML 而 compose 输出的是 `<section>/<span>` 的微信兼容标记。
+- **P2.2 安装交付（零模型，部分 NOT RUN）**：交付当前中文包 `智序_0.1.0_x64-setup.exe`（`86c41c74…`，4,602,556 字节）、被测 exe（`b3cbb966…`）、数据位置（`Documents/wechat-mp-workspace/` 下 sessions/documents/assets/traces/exports）与 6 步隔离安装清单。**安装本身 NOT RUN**：本机没有可隔离的测试账户/快照，装到本机会写程序目录/开始菜单/注册表且可能撞用户实例，属"不可逆且面向外部"的动作。**手册与实际安装包名不一致**（手册写 `wechat-mp-desktop-x.x.x-setup.exe`，那是已停用的英文命名；当前是 `智序_…_x64-setup.exe`）——按指南"纳入下一次交付校对"处理，**本次不改手册、不重建**（改 `resources/` 会让刚取得的 L1–L6 真实验收失效）。9 月旧英文包保留并标历史身份（`3a32dcd9…`）。
+- **P2.3 长文代表稿 + 只改文字续改（真实调用，完成）**：给驱动器新增 L7/L8 两个 phase（**只改脚本，产品源码未动**，exe 仍 `b3cbb966…`）。L7 沿用 §8 同一组事实与标题、字数口径改 800–1200；L8 改标题并收缩到 300–500 字、素材保持。**L7 PASS**（正文 **930 字**、恰好一张开篇横图、四个事实齐全、accepted+verified）；**L8 PASS**（标题→「冬季开馆时间调整」、正文 930→**424 字**、**gen_svg=0**、素材身份 `as-…@1:6bb0477d…` 逐项不变）。实现上把 L1 流程参数化为 `runFirstPhase(…, {wordLimit, minWords})`，两条路共用同一段断言。**过程中两次红都是驱动自己的错**：L8 首轮把字数上限写死成 L2 的 180（模型按题面交 399 字被判超限），已把口径参数化；那次其实已提交新标题，所以同 root 重跑时"标题确实变化"成了状态假红——最后在全新 root 上重跑取得完整证据。
+- **P2.4 公众号后台（人工核对清单，NOT RUN）**：6 步清单（草稿/预览、不群发、记录后台观感与本地差异）已写入交付记录；**无账号即未验**，本地预览不能替代后台。
+- **P1 证据口径（完成）**：尝试目录分母按纳入发布版后的 **41 个**（PASS10/FAIL14/BLOCKED15/ERROR1/无结果1）口径记录，不再复用旧 38；1/1 差额维持"高度指向未完成 L4 但**不支持** 100% 直接归因"、**计费仍 UNKNOWN、继续占额度**；"90 秒/432 毫秒"完整输出未定位、"profile 首轮初始化"仍是**待验证解释**（本轮一次 L5 仍出现强杀收尾，说明提前量不是保证）；中文包路径与哈希、旧英文包历史身份、手册旧安装名均按"勘误 + 索引"处理，历史证据保持原貌。
+- **本轮（P2/P1）账本增量**：L7+L8 共 **+10 派发 / +2 绘图**；**整个会话累计 56/11 → 89/16（+33/+5）**，未重置、未扩容、未返还额度。
+
+### [Fix][Verify][Build] 真实模型验收：默认发布版 L1–L6 在**同一个 exe** 上通过（含两次真实失败与修复）
+
+用户要求"全部要求真实调用"后执行 §8 原题四回合 + 无新增调用的重开/导出。**真钱真模型**（deepseek-flash，源码锁定），
+隔离 profile，本轮累计 **21 次付费派发（绘图 3 次）**；账本 56/11 → **77/14**（未重置、未扩容）。完整证据见
+[真实模型验收记录](docs/artifacts/2026-10-02-r8-real-acceptance/README.md)。
+
+- 最终被测：exe `b3cbb9669464f43c…`、setup `86c41c746b871ad…`；root `%TEMP%/wxmp-live-r8-1790951270`。
+  **L1 PASS / L2 PASS / L3 PASS / L4 PASS / L5 PASS / L6 PASS**（L1–L4 各含真实派发与成品；L5 两 PID 均 `wm-close` 正常退出并逐字段读回；L6 导出 750×1300 长图与分页且**零模型调用**）。真实工作区每个 phase 前后都是 55 文件、0 增 0 删 0 改；无残留进程。
+- **真实失败 1（exe `64ab2946…`，L1）**：模型把 3 次 prep 预算全花在知识工具上、一次 `finish_preparation` 都没调用 → 应用按设计报「准备阶段没有得到合法的结果声明」，**未写稿、旧成品不变**（如实失败）。根因：`PREP_INSTRUCTION` 里「可以继续问，**不必一次问完**」没约束"每轮必须声明"；预算是零余量（历史 3 个会话 termination 恰好都落在第 3 次）。修：收紧指令 + 新增 `PREP_LAST_ROUND_REMINDER`（**只在最后一次准备请求**追加"别再取资料、现在就声明"；总额仍 3 次、无第 4 次，触发条件是执行计数而非对话意图）。
+- **真实失败 2（exe `a33a0179…`，L4）**：模型在**同一条回复**里混用 `load_knowledge` 与 `finish_preparation` → 按契约判协议错误，没有换图、没有新 revision。根因：**上一处修改的措辞引入了歧义**（"同一次回复里取全"＋"每次回复都要以 finish_preparation 收尾"可读成"同条回复既取又声明"），而指令里**没有**禁止混用。修：写明"知识工具与 `finish_preparation` 不能出现在同一条回复里，取完之后的下一条回复再声明"。
+- **回归（先证红）**：`prep-contract-check` 新增用例 `exhausted-knowledge-only`（三轮全知识 → 必须 exhausted、无第 4 次请求）与两条**按实际发出的消息**断言的检查（预算提醒只出现在最后一次、首次请求就声明禁止混用）；两次变异（提醒条件恒假 / 改掉禁止混用那句）分别红并已还原。`prep-contract-check`、`repair-flow-check` PASS，`verify-ui` 134/134，`tsc` 干净。
+- **重建**：两处均为产品前端改动 → 按铁律 7 各重建一次（中间 `a33a0179…`、最终 `b3cbb966…`），两次隔离冒烟 PASS 7/7；**最终 exe 上重跑完整套 L1–L6**，避免混批。
+- **如实记录的两处不完美**：L5 第一次尝试强杀收尾被驱动**拒绝**开第二个实例（零模型重跑后两 PID 均正常退出，属未解释的偶发，不归因、不撤销后续通过）；模型仍恰好用满第 3 轮才声明，**无法证明提醒是通过的决定因素**。
+- 仍未做：指南 P2.1 多页导出夹具、P2.2 安装交付、P2.3 的长文与续改追加样本、P2.4 公众号后台；P1 与账务 1/1 差额（仍 UNKNOWN、继续占额度）未推进。
+
+### [Fix][Verify] 指南 §0.0 第二轮收口：IPC 特殊响应（P0-A）与终结顺序（P0-C）
+
+按 [指南 §0.0](docs/design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务) 的两条 P0 定向修复。**本轮真实模型调用 0 次**；除一次隔离启动冒烟外全为纯 Node 离线（假传输 / `node:vm` 沙箱 / 真新子进程）。**未重建 release**（改动全在 `scripts/` 验收驱动，产品前端/Rust/语料未动，经用户确认），真实工作区启动冒烟前后逐文件哈希 0 增 0 删 0 改。完整证据见 [第二轮 P0 收口记录](docs/artifacts/2026-10-02-p0-closeout/README.md)。
+
+**P0-A 特殊空响应仍会绕过预算**
+- 问题：复核用生产门禁原文 + 本机真实 Tauri 2.11.5 协议复现——非付费 `list_documents` 返回 `204 + content-type: application/json` 空体时，旧 `guardResponse` 对 204/205/304 **直接重建返回、跳过 JSON 校验**；而真实协议 `tauri-2.11.5/scripts/ipc-protocol.js:42-53` **按 content-type 选 `json()/text()/arrayBuffer()`、不看 status**，空体 `json()` 抛错 → `customProtocolIpcFailed=true` → 此后所有命令走 `window.ipc.postMessage`（wry 在 Windows 上冻死，页面侧拦不住）。额度 0 下 `prep_turn`/`gen_svg` 各到达假后端 1 次（共 2）、预留 0 次；重装仍复用旧覆盖率报 `coverageProven=true`。
+- 根因：**判定维度选错了**——旧代码按 HTTP status 判断"这个响应是不是安全的"，而协议的失败条件按 `content-type` 决定。两个维度在 204+json 这一格正好分开（status 说"无正文、安全"，协议说"我要 `.json()`"）。复用分支的同类错误是**拿上一回合的证据证明这一回合**。
+- 修改：`scripts/lib/ipc-gate.mjs`——① `guardResponse` 去掉状态短路，统一按协议下一步真正会做的解码判定（json 必 `JSON.parse` 成功，空体必失败 → 判解码失败并 `latch` 停发；空体状态仍用 `Response(null,…)` 重建，因为构造函数不接受带 body 的空体状态）；② 复用分支不再提前返回旧 `coverage`，每次都实发一条非付费命令重新自证；③ 派发前的门禁身份比对改为比**已安装的**包装函数（`probe.gate.wrappedFetch`），不再比本次闭包新建的那个（复用下会恒假、把正常派发全拒）。
+- 验证：`ipc-gate-check` **36→67/67 PASS（计划 10/10）**。新 ⑨ 组对 204/205/304 各走"正常 200 → 注入空体 json → 重装 → 再发两条付费"，三例均 `post=0`、额度 0 付费传输 0；**旧形状对照**把旧 status 短路塞回生产源码，同一场景复现 `paid=2 / post=3 / postCmds=[list_documents, prep_turn, gen_svg]`，与复核记录逐项吻合（证明断言非恒真）。新 ⑩ 组按假后端实收的 `list_documents` 次数证明复用确实重发自证，`rewrapCount=0`、额度 1 仍只放行 1 条。
+
+**P0-C 最终证据与 phase 闭合顺序**
+- 问题：B1 业务失败屏障用**一次独立** `recordPhase` 写、phase 关闭再写一次，屏障写失败而关闭成功时盘上留下 `open:false, outcome:error` 却无 `businessFailure`；B2 `finalizeAndExit()` 先 `finalizeLedger()`（账本记 pass）再写必需证据，证据写失败时判定虽为 ERROR，**账本已是 pass**。两种情况下新进程读到的都是"两个 null"，照常 `beginPhase` 并预留。
+- 根因：**把"哪个状态该持久"和"哪个状态已经持久"混在一处**——失败屏障与终结局分两次写，于是中间存在一个"关闭了但没留下失败痕迹"的合法状态；收尾顺序则把"账本闭合"当成了证据之外的事，而它本身就是一条必需写入。
+- 修改：新增 `scripts/lib/ledger-finalize.mjs`（唯一生产实现，做法同 `ipc-gate.mjs`）：① `finalizePhase()` 把业务失败标记与 phase 终结合并成**同一次原子账本写**（`closePhase({…, extra:{businessFailure:true, failedChecks}})`），写失败即保持未闭合，只有"本轮从未 `beginPhase`"才退回单独记屏障；② `runFinalizeSequence()` 把**顺序**变成生产代码（证据先落盘 → 再闭合账本 → 按最终判定重写证据），`live-acceptance.mjs::finalizeAndExit()` 改为调用它，`main()` 的 `finally` 不再调用 `finalizeLedger()`；③ `preflightLedgerGate()` 把启动阶段两道历史门槛抽成同一函数供驱动与回归共用；④ `dispatch-budget.mjs::priorBusinessFailure()` 兜底识别已闭合条目里 `outcome=error/fail`（旧实现可能留下的无标记失败条目）。顺带 `release-smoke.mjs` 的最终判定消费 `closed/refused/forced`（原来只写证据、不参与 PASS/FAIL）。
+- 验证：新 runner `scripts/ledger-finalize-check.mjs` **39/39 PASS（计划 4/4）**，用真实预算写者（真原子落盘 + 真跨进程锁）驱动生产收尾函数，并用**真正的新子进程**（`scripts/fixtures/ledger-gate-child.mjs`，`spawnSync` 另起 node）重读同一隔离账本跑同一套门槛：① B1 注入终结写失败 → 盘上仍未闭合 → 子进程**假传输 0**；`--resume` 后继续且留理由、不返还额度、不清零累计；**旧两写顺序对照**复现"闭着+error+无 businessFailure"的原反例条目。② B2 用生产 `runFinalizeSequence` + 真实写失败的报告路径 → 账本 `outcome=error`+`businessFailure`、子进程**假传输 0**；**旧顺序对照**（先 close 成 pass 再写证据失败）账本为 pass、子进程**照常预留 transported=1**。③ 正常对照全通过。④ 结构断言钉住驱动接线。`live-driver-check` 两条随之指向新模块的断言同步更新，**42/42 PASS**（原 40/40）。
+- 局限（已写入证据）：② 里"落盘错误并回判定对象"那段是驱动逻辑的最小同口径替身，本脚本保证的是**顺序**与**账本落盘结果**；驱动逐行接线由 ④ 组结构断言与 `live-driver-check` ⑥ 组钉住。
+
+**本轮零模型全量回归**：离线 ipc-gate 67/67、budget 91/91、ledger-finalize 39/39（新）、live-driver 42/42、cdp-preflight 30/30、fact-assert 30/30、runner-negative 28/28、compose 98/98、delivery-quality 123/123、asset-completion 58/58、asset-resolve 86/86、photo-swallow 33/33、repair-integrity 75/75、trace 107/107、svg-quality 20/20、progress 36/36；浏览器 verify-ui 134/134、prep-contract / preview-resource / repair-flow PASS、raster 8/8；隔离启动冒烟 **PASS 7/7**（`closed=true forced=false via=wm-close`，exe `64ab2946…`，真实工作区 55 文件未变）。**P1（证据口径与交付入口）与 P2（多页/安装/代表稿）本轮未推进**；账务 1/1 差额仍 UNKNOWN、继续占额度；是否关闭该指南条目以独立复核为准。
+
+### [Review][Docs] 最新成果与产品可交付程度独立复核
+
+- 默认发布exe/setup哈希 `64ab2946…/09cfac19…`、L5 32/32、L6 27/27、正式版本/快照/导出和880文件输入清单核实；实际查看完整短通知长图。支持人工复核下小范围试用，不外推多页长文或微信后台效果。
+- 独立复跑IPC36/36、预算91/91、driver40/40、身份30/30；旧部分身份与强杀前重验反例已闭合。另用真实Tauri协议+假传输确认204空JSON响应仍绕过预算，用生产finalizer+私有账本确认业务标记/最终报告写失败的终结顺序缺口；恢复模拟为同进程新实例，不冒充新OS进程。
+- 原38目录不含发布root，纳入后本次已定位41（10 PASS/14 FAIL/15 BLOCKED/1 ERROR/1无结果）；1/1差额高度指向未完成L4但不支持“100%直接归因”；profile决定因素、预热保证收窄为未证解释。15+4回归与Rust133的历史原件已定位，不是本次全重跑。
+- 更新DS§0.0：保留有效修复，先两类确定性缺口和实际收尾判定，再推进零模型多页、安装交付准备及少量默认版代表稿；未验的微信后台效果保持未验。同步GOAL、需求、结构、导航和产品介绍。
+- 本次零真实模型、零智序启停、未改产品/正式runner、未改全局账本，未提交、未重建；文档维护不触发release重建。[新证据与完整边界](docs/artifacts/2026-10-02-readiness-review/README.md)。以下执行记录保留原时点，当前结论以本条和指南为准。
+
+### [Fix][Verify][Build] 收口 §0.0：IPC 全通道门禁 / 进程身份闭锁 / 失败屏障持久 + 发布版首次零模型签收
+
+DS当时按 [指南历史任务书](docs/design/ds-repair-guide-2026-09-30.md#001-上一轮任务书历史) 报告完成第一优先级 A/B/C 与第二优先级 1/2/3/4；最新独立复核的残余与勘误见上文。**该执行轮真实模型调用 0 次**：全部是纯 Node 离线（假传输/假进程/`node:vm`）或零模型的真实桌面运行。原执行记录与逐条证据见 [2026-10-02 收口文档](docs/artifacts/2026-10-02-closeout/README.md)。
+
+**A. IPC 回退绕过预算（P1，已修）**
+- 根因不在"我们代码写错"，而在协议行为：tauri 2.11.5 在**任意一次** IPC fetch/解码失败后置 `customProtocolIpcFailed`，此后所有命令改走 `window.ipc.postMessage`；而 wry 0.55.1 在 Windows 上把它冻死（`Object.defineProperty(window,'ipc',{value:Object.freeze({postMessage:…})})`，见 `wry-0.55.1/src/webview2/mod.rs:885`），页面侧**拦不住**。所以修法不是再挂一个通道。
+- 新增 `scripts/lib/ipc-gate.mjs`（付费命令表由 `dispatch-budget.mjs` **生成**，不维护第二份），三条防线：①**永不 reject**——门口 `window.fetch` 的任何失败都转成协议合法的错误响应（200 + `Tauri-Response: error`），响应体也先读干再重建，因为协议对 `response.json()` 的**解码失败**同样算 reject；②一旦真出故障就 `fallbackLatched`，本回合付费命令一律停发；③**覆盖率自证**——装好后发一条非付费 `list_documents`，确认它确实经过本门禁，没经过就拒绝开测（回退在安装前已激活时，页面侧任何补丁都够不着付费请求）。装/重装都核对**当前**拦截函数身份（`window.fetch === probe.gate.wrappedFetch`），不再只信旧标记。
+- 新 runner `scripts/ipc-gate-check.mjs`：**用本机真实协议源码**（从 Cargo registry 按 `Cargo.lock` 锁定版本现取，取不到即 BLOCKED，sha256 `68ae6906…` 与晚间复核同一份）在 `node:vm` 沙箱里跑，**36/36 PASS**（8 组计划场景）。变异实测证明可证伪：把非付费那行改回"直接放行"→ **FAIL 29/36**，且复现出原缺陷形状"**额度 0 却经 postMessage 到达假后端 2 次**"；覆盖率判定改成恒真 → FAIL 34/36。
+- `live-acceptance.mjs` 接线：`openAppOnce` 按覆盖率拒绝开测、回合开始前再查一次、等待循环监控 `gateLive`/`fallbackLatched` 中途失效即停手判失败。
+
+**B. 进程身份闭锁（P1，已修）**
+- `procIdentity()` 新增 `identityComplete`/`missingFields`；给了预期路径/创建时刻而实测读不到时记 `matchesExpected=null`（"查不出来"≠真）。
+- `closeOwnPid()`：任何关闭动作**之前**加"启动身份齐备"门槛（映像名+完整路径+创建时刻，缺一即 `incomplete-identity`、`runner` 零调用）；温和等待超时后、发 `/F` **之前**再核验一次（已退→`wm-close-late`；身份变→`identity-changed-before-force`，**绝不发 `/F`**）。
+- `release-smoke.mjs` 启动后记录本轮身份并在关闭时传入；`live-acceptance.mjs` 启动核对新增"身份字段齐备"门禁（缺字段就关不干净，宁可不跑）。
+- `cdp-preflight-check` **30/30**（改前 FAIL 23/30）：只给 exe→`incomplete-identity, calls=0`；只读到同名映像（tasklist 回退形状）→`identity-mismatch, calls=0`；强杀前身份变化→`calls=[["/PID","987654"]]`（**没有 `/F`**）。副作用如实记：探针读不到路径/创建时刻时**拒绝关闭**（fail closed），代价是那一刻留下一个活着的隔离实例。
+
+**C. 失败屏障跨进程持久（P1，已修）**
+- 原实现只在"业务失败那一刻"才写记录，那次写**可能失败**；恢复成可读旧账本后新实例读到 `priorBusinessFailure=null`，照常预留。
+- `dispatch-budget.mjs` 新增 `requirePhaseOpen`（**默认 true**，fail closed）、`beginPhase()`（在途状态**先**落盘，写不成即拒发）、`closePhase()`（终结证据写成功才算闭合）、`unresolvedPhase()`/`resolveUnresolved(reason)`（新进程先读未闭合记录，人工核对后显式闭合，**不返还额度、不清零累计、不删历史**）；`critical()` 不再吞掉 `refused`/`unresolved` 字段。
+- `live-acceptance.mjs`：开局读未闭合 phase，读到就要求 `--resume-after-fix "<理由>"`；启动应用**之前** `beginPhase()`；收尾在业务失败记录**之后** `closePhase()`（顺序反了会把"这轮没跑完"一起抹掉）。修掉自己引入的一处取值错误：`closePhase` 的注释原来读 `run.status`，而它此刻还是初值 `'BLOCKED'`，与 outcome 自相矛盾。
+- `budget-check` **91/91**（新 ⑬ 组 13 个场景）；核心一格是原反例形状：closePhase 写失败 → 丢写者 → 新进程读**同一份旧账本** → `priorBusinessFailure()=null` 但**付费派发仍为 0**（持久在途记录在起作用）。变异：默认值翻成 false → FAIL 85/91。
+
+**账务差额（已定位，仍 UNKNOWN）**：run1 增量 22/5 vs trace 21/4 的 1/1 差额 **100% 来自** `L4-2026-10-02T10-14-12-2927b2d0`。直接证据不是倒推——紧随其后的成功尝试 `L4-…10-15-27-cf29391e` 自己的 `evidence.json` 里 `ledgerBefore.totals={51,10}`，正好等于上一格的 48/9 加 3/1。该目录只有 `L4-before.json`，无 `evidence.json`/`run-result.json`，trace 只有 2 条 prep、无 gen_svg、无任何 `kind:"run"` 终结记录。那 1 次预留但无 trace 的派发**计费状态无法确认**，**继续占额度、未退款、未补造 PASS**，账本 totals 未做任何改动。
+
+**尝试分母（已列清）**：全量枚举 `%TEMP%/wxmp-live-*/evidence/*` → **38 个尝试目录：PASS 8 / FAIL 14 / BLOCKED 14 / ERROR 1 / 无结果 1**；14 个 BLOCKED 几乎全是 `checks=0/0 errors=1`（启动/依赖/预算阶段停住，**零派发**）。分母只能是"实际到达模型的请求"（run1 段 21 条），不是"跑了几次脚本"。
+
+**发布版签收（本轮首次取得业务级零模型证据）**：默认发布 exe `64ab2946…`（**不开** devtools 特性）在**隔离副本**（`%TEMP%/wxmp-pubver-1790940744/`，原作品逐字节未动）上跑 **L5 PASS 32/32**（关停重开逐字段读回、重开零模型请求）与 **L6 PASS 27/27**（HTML 与基准逐字节一致、两 PNG 750×1340、375px 截图落盘）。setup `09cfac19…`。**不**把验收 exe `36b45e25…` 的六场景付费结论自动移给发布版。
+
+**CDP 因果收窄（推翻旧文案）**：默认发布 exe（**不开** devtools 特性）同一隔离 profile 连开两次——第 1 次 90s 无 CDP 页面，第 2 次 **432ms** 连上且页面是 `tauri.localhost/`。所以"根因是 `tauri` devtools 特性没开、宿主自己关了调试端点"**不成立**；实测支持的是 **profile 首轮初始化**这个因素，`devtools` 特性与 TCP 端点之间的因果没有证据。副产物：默认发布版**可以**被驱动（预热一次即可）。
+
+**验证与构建**：离线 15 runner 全绿（compose 98、asset-resolve 86、svg 20、delivery 123、asset-completion 58、photo-swallow 33、repair-integrity 75、trace 107、progress 36、runner-negative 34、fact-assert 30、budget 91、cdp-preflight-check 30、live-driver 40、**ipc-gate 36（新增）**）；浏览器 4 runner（verify-ui 134/134、prep-contract、preview-resource、repair-flow）全绿；`cargo test --lib` 133 passed；`pnpm build` 干净。**铁律 7**：`pnpm tauri build --bundles nsis` 重建 → exe `64ab2946…`、setup `09cfac19…`，隔离启动冒烟 **PASS 5/5**（窗口标题由 OS 读取逐字相等、隔离工作区自动建立且为空、真实工作区 55 文件逐字节未变、`via=wm-close forced=false`），启动身份打印 `完整=true`。输入清单已归档（880 文件 / 49,113,607 B / 清单 sha256 `6e02ae9d…`，工具版本 node v24.13.0 / pnpm 10.33.2 / cargo 1.95.0）。
+- 收尾时清掉一条**我自己造成的**账本记录：第一次 L5 因缺 `VERIFY_PLAYWRIGHT` 而 BLOCKED（应用未启动、零派发、零费用），被记成"业务失败"。用 `clearBusinessFailure` 带理由显式解除，totals 未变（仍 56/11）、历史未删（83→84 条）。
+- 遗留（未处置、仅报出）：`bundle/nsis/` 下还躺着一个 2026-09-08 的陈旧 installer `wechat-mp-desktop_0.1.0_x64-setup.exe`，会误导"哪个是本次发布的 installer"；仓库根有一个 2026-10-01 的游离 `cdp-matrix.json`（未入 `.gitignore`、未入库）。两者都不是本次产物，未擅自删除。
+
+### [Review][Docs] 晚间再次复核 真实成果保留 执行与交付缺口继续
+
+- 仅读取当前代码及已有实件，运行零模型检查和假传输/进程探针；未启动智序、未新增模型调用、未改正式产品/runner、原作品、原结果或全局总账。Git HEAD 仍为 `472fd3d`，保留全部已有未提交修改。
+- 已复核六个 PASS 原件（30/36/24/26/30/26），重算正式 source/HTML/绑定/快照/quality 及导出 SHA；L2 保素材身份/SVG，L3 两次 prep且零写作/保存，L4图变文字保持，L5逐字段重开一致且完整phase trace零请求，L6回执和新增文件一致、750×1340单页导出可读。已实际查看手机视口和完整长图。
+- 先前“L1→L6连续通过”纠正为**同root经修复和重试各场景取得PASS**，成功时间顺序是L1→L2→L4→L5→L6→L3；L3为2次prep。两次L4 FAIL实际提交gen3/gen4，另一L4无最终结果。run1账本增量22/5而trace21/4，差1/1继续UNKNOWN，不把累计56/11直接称已核清实际收费量。17份L1结果包含8份BLOCKED，不能据混合尝试推出“模型合规率约一半”。
+- 已证实旧修复多数有效；本次重跑budget65、driver35、facts30、cdp-preflight-check23、runner-negative34全过。新增故障注入仍证实：Tauri fetch失败/宿主预留reject转postMessage后零额度可到达2次假付费传输；失败屏障写失败、恢复旧账本后新实例仍能预留；进程路径/创建时间缺失仍关闭、强制操作前未重核身份。正常样本通过不覆盖这些异常路径。
+- 默认发布exe/setup为`b45d146c…`/`1171abf7…`，构建日志及5/5启动冒烟原件存在；首次4/5失败也保留。它们与验收exe`36b45e25…`分开记，不能自动继承六场景业务验收。两次冒烟为不同新profile，不能断言与预热故障同源；feature改变devtools属性的源码链成立，TCP因果尚欠受控对照。
+- 已同步[指南§0.0](docs/design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务)、需求、导航、结构和CDP结论；DS先修三个执行缺口，再核清差额和默认发布版读回/导出。无需整体重做午间清单或默认重复全套付费回合。证据：[晚间索引](docs/artifacts/2026-10-02-evening-review/README.md)。
+
+### [Debug][Verify] 真机验收不再阻塞：CDP 根因定位（Tauri devtools 特性 + 新 profile 首启）并跑通真实模型 L1–L5
+
+> 以下为先前执行记录；其中连续通过、合规率、真实用量和根因断言按上方晚间独立复核收窄，不作为当前结论。
+
+用户明确要求直接执行真实测试（授权早已存在）。前一轮把"连不上 CDP"归为环境问题并停在分类上，是不对的——根因在**本仓库的构建配置**，可修。
+
+- **根因一：`tauri` 的 `devtools` 特性从没开过。** 读依赖源码确认链路：wry `src/lib.rs` 的默认 `devtools: cfg!(debug_assertions)` → release 为 `false`；`wry src/webview2/mod.rs:573` 无条件 `SetAreDevToolsEnabled(false)` → **宿主自己关掉了 DevTools**，于是 `--remote-debugging-port` 虽然在 WebView2 子进程命令行上、端点却不被服务。同机普通 Edge 无此宿主调用，所以可用——这正是上一轮"不能排除仓库启动配置"遗留的那一支。修复：`src-tauri/Cargo.toml` 新增**可选特性** `acceptance-devtools = ["tauri/devtools"]`（**默认关闭**，发布产物行为与体积不变；验收时 `pnpm tauri build --no-bundle -f acceptance-devtools`）。
+- **根因二：全新 user-data-dir 的首次启动不开放调试端口。** 单变量实测：全新目录第 1 次启动 25s 内 `ECONNREFUSED`（命令行开关与 `--user-data-dir` 都正确），**同一目录**第 2、3 次启动各约 1s 即可达。历史上每轮都用全新隔离 profile，所以每次都卡在这里。修复：`live-acceptance.mjs` 新增 `warmUpProfile()`（等 `Local State` 落盘 + 沉降 15s + 按身份关闭），并对"CDP 90s 无页面"做**一次**有界重开、对"CDP 已就绪但页面仍是 `about:blank`"等待导航完成。
+- **真实模型验收：同一隔离 root（`%TEMP%/wxmp-live-run1`）上 L1→L6 全部通过**——L1 **30/30**（真实成稿 106 字、事实齐全、恰一张开篇横图、accepted+`validation=verified`、quality 通过；门禁放行 4 / trace 4 / 绘图 1 全部对上）、L2 **36/36**（文本变、新 revision、`gen_svg=0`、素材身份逐项不变）、L3 **24/24**（普通问答零写作派发、无提交、文稿不变）、L4 **26/26**（新画确实派发、素材内容确实不同、文本逐字未变）、L5 **30/30**（正常关闭、新进程同 profile 逐字段读回、**重开零模型请求**）、L6 **26/26**（HTML 回执路径绑定本轮新增且与最后成功版本逐字节一致、长图+分页 PNG 均为 750px、375px 手机壳截图落盘）。
+- **真机链路才暴露、且全部已修的 6 个驱动器缺陷**：①预算门禁挂错层——原来替换 `__TAURI_INTERNALS__.invoke`，而该属性**不可写不可配置**、赋值静默失败，导致**4 次真实派发没被拦截、账本漏记**；改挂 `window.fetch` 的 `ipc.localhost/<命令>` 通道（Tauri v2 的真实 IPC 路径），拒绝时回协议合法的 `Tauri-Response: error` 响应（**不能** reject：fetch 一失败 Tauri 会改用 postMessage 通道再发一次，等于绕过门禁），装不上就拒测；②`open_document` 回的是 snake_case `revision_id`；③本产品排版**不输出 h1..h6**，标题节点改按"文本恰等于标题的那个节点"取；④事实断言的否定判定按**整句**会误杀合法紧凑写法（两例真机正文已成回归用例）；⑤L2 专属的"标题/正文必须变化"被套到 L4（要求正好相反），且"本轮提交新版本"原来跟旧基准比重试时误报 +2；⑥`waitForExportMsg()` 读的 `readRun().exportMsg` 字段不存在（只长在 `readState`），L6 永远等不到回执；"375px"也量错了对象（iframe 内容区 358px vs 产品定义的手机壳 375px）。另修：CDP 早于页面导航就绪的竞态、预热抖动。
+- **账务如实**：把真实发生的用量写回 totals（此前误用"调小上限"记账、会低估已用量）；用户 2026-10-02 明确"派发额度不限"后上限放宽为 999/999，已用量继续累计（本轮含全部重试共 **56 次派发、11 次绘图**），校正与授权变更都写进账本 phase 历史。
+- **模型侧摩擦如实记录**：13 次 L1 尝试里有 5 次是模型侧问题（4 次为 `outcome=candidate` 与 `text` 互斥被判协议错误、1 次 3 次请求内无合法声明），产品均正确拒绝出稿、未污染文稿；按用户选择维持严格契约、靠重试通过，不擅自放宽。
+- 回归：18 个 runner 全绿（`budget` 65、`live-driver` 35、`runner-negative` 34、`fact-assert` 29、`cdp-preflight-check` 23 等）。
+- 发布（铁律 7）：验收 exe（`36b45e25…`，开了 `acceptance-devtools`）**只用于验收、不发布**，已另存；发布产物按默认（不开特性）重建——`wechat-mp-desktop.exe` sha256 `b45d146cbeb26343a31009d7d71b3d1946d64b496ae488b65669a6e13d322626`（15,879,168 B）、`智序_0.1.0_x64-setup.exe` sha256 `1171abf71dd176a077ef38f9efe2ee6a1daa814557f406a07e652a557d99a864`（4,602,913 B），隔离启动冒烟 **PASS**（标题由 OS 读取逐字相等、隔离工作区自动建立且为空、真实工作区 55 文件逐字节未变）。冒烟第一次曾因"全新 profile 首启较慢"读到空标题而 FAIL，重跑通过——**这与 §6.2 的首次启动特性同源**，属已定位行为，不是新缺陷。
+
+### [Fix][Verify][Build] R1–R4 驱动器缺陷收口：全局预算闭锁、判定/附件一致、live 实际入口、CDP 诊断
+
+按 [DS 指南 §0.0](docs/design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务) 收口 10-02 复核点名的驱动器缺陷。**只改验收驱动器与回归脚本，未改产品代码**（`src/`、`src-tauri/` 未动）。
+
+- **R2 跨进程预算闭锁**（`lib/dispatch-budget.mjs`）：账本是全局一份、锁却在各 root 下——两个不同 root 的实例各自 `open()`（都读到 0）后各 `reserve()`，**额度 1 放行 2 次、盘上只记 1 次**。现在"读盘 → 查额度 → 扣减 → 落盘"整段放进同一把跨进程锁（`<ledger>.lock`，`open(...,'wx')` 独占创建 + 死亡持有者回收），每次在临界区内**重新读盘**，拿不到锁一律拒发。损坏账本判据收紧：负数计数、`genSvg > dispatches` 不自洽、`phases` 非数组（旧实现静默改成 `[]`，会**把历史业务失败标记一起抹掉**）一律 BLOCKED，不"修成 0"；镜像落盘失败不再被 `catch {}` 吞掉（`mirrorFailures` 可观察）；`persistFailures`/`lockFailures` 在 `open`/`reserve`/`recordPhase` 全程累计并上抛。
+- **R1 判定与附件一致**（`lib/run-result.mjs`）：附件原来只写一次，`report.md`/`evidence.json` 里的状态是"附件错误还没产生时"算出来的——独立探针实测到主判定 PASS、报告 BLOCKED、`evidence.json` 连 `status` 都没有。现在 `files` 支持 `(run) => ({...})`，附件按**最终判定**重写后才写判定文件。修这个改动时自己踩了一个坑并当场修掉：`verdict` 是"就地改 run 并返回同一对象"，拿两个引用比 `next.status !== run.status` 恒等，重写会静默失效（由新增的 `runner-negative-check` 用例证红抓到）。
+- **R3 live 实际入口**（`live-acceptance.mjs`、`lib/trace-read.mjs`）：①绘图传输量原来接的是**总** `turn.transportAfter`，L2（2 次普通请求、0 次绘图）会假红——改为页面探针按预留返回的 `kind` 单独计数 `transportDraw`；②`runL3` 用了不存在的 `page.evaluate`（真实流程会在**已经派发一轮之后**才抛错），改 `app.page.evaluate`；③close 闭包无条件 `mine.closed = true`，关闭失败也会被 finally 跳过清理——改 `r.closed === true`；④`openApp` 从 try 之外移进 try/finally，启动/探针异常也统一收尾；⑤`latestBaseline()` 在没有任何"检查全过"的成功版时原来仍返回**失败版**（L5/L6 拿失败稿当"最后成功版本"），改为返回 null → BLOCKED，并加 `prev.ok === true` 硬门禁；⑥trace 三方核对补"少记"与"绘图类别不符"，`canReopenAfterClose` 拒绝 `already-exited` 与身份不一致；⑦关闭前用**启动时记下的身份**（含创建时刻/完整路径）复核，身份不匹配或 UNKNOWN 时**零关闭操作**（`closeOwnPid` 回 `refused`）；⑧三个回合的 trace 改经 `tracesAfterTurn()` 读——回合结束后等固定的一拍再读，避免 Rust 侧 JSONL 落盘延迟被"少记"判据误伤（等完只读一次，少记仍判失败，**不是**轮询到变绿）。
+- **R4 CDP 诊断**（`cdp-preflight.mjs`、`lib/desktop-harness.mjs`，本轮派子智能体完成）：矩阵改为写进**真正的 outDir** 并作为必需附件归档（原 `judge.run.outDir` 不存在 → 落到 cwd，污染仓库根）；收尾不再无条件清空 `startedPids`、不再固定 `true` 宣称全部关闭；`DevToolsActivePort` 按**实际进程命令行上的 `--user-data-dir`** 递归检查（原只查外层，实际数据目录在下一层）；A 对照显式清掉继承的 CDP/runtime 环境变量并探测一个未传给应用的端口；TCP 错误/HTTP 状态/JSON/target 结构四类分开归类，空 target 后出现有效 target 以**最新采样**为准；`desktop-harness` 里与已修正 API 语义冲突的注释改掉。
+- **事实断言**（`lib/fact-assert.mjs`，派子智能体）：ISO 日期 `2025-10-10` 被当成"无年份日期"放行；开放时段只要求 17:00 在全文出现过（改成 9:00–17:00 并另写"咨询 17:00 结束"照样通过）；"全天不闭馆""自习区不在一楼"没有否定语义；合法的紧凑写法反而假红（±22 字窗口跨句吃到了下一天的"闭馆"）。改为按句读切分（逗号不是切分点）+ 起止成对 + 否定语义 + 年份/星期核对。
+- **回归**（全部新输出目录，未覆盖历史证据）：`budget-check` 65/65（新增 ⑩ 两个**真实子进程**用同一账本抢额度 1 → 实际传输恰 1、⑪ 结构损坏、⑫ 只读账本注入写失败）、`live-driver-check` 34/34（新增少记/绘图类别/非正常退出路径 + live-acceptance 关键接线的结构断言）、`runner-negative-check` 34/34（新增"附件写失败后报告必须按最终判定重写"与"缺浏览器可执行文件也必须留下判定文件"两变体）、`fact-assert-check` 26/26、`cdp-preflight-check` 23/23（新，纯 mock 故障注入）；另 compose 98、delivery 123、trace 107、verify-ui 134、asset-resolve 86、photo-swallow 33、asset-completion 58、progress 36、svg-quality 20、prep-contract、preview-resource、repair-flow、raster 8 全部通过。**18 个 runner 全绿。**
+- 顺带修掉一个真实缺口：`repair-flow-check` 的 `chromium.launch()` 在**模块顶层**且不在 try 内，浏览器可执行文件缺失时裸异常退出、**不产判定文件**（归档里像"压根没跑过"）；现走 `die()` 落 BLOCKED。该场景已作为负向用例钉住（含"不给 `VERIFY_CHROMIUM`"这条审计复现路径）。
+- **构建与真机（零模型、零费用）**：`pnpm tauri build --bundles nsis` 重建 release；`wechat-mp-desktop.exe` sha256 `301d301f36613cc8871c162afd5e5cf035f0f746389779d118b14227ea6236d5`（15,879,168 B），`智序_0.1.0_x64-setup.exe` sha256 `fe6e0aec18578e5e23e8c2f01791bc305ed21e7b41f749db51b0437f8a532ae4`（4,601,207 B）。隔离启动冒烟 PASS（窗口标题由操作系统读取为「智序 · 公众号推文助手」、隔离工作区自动建立且为空、**真实工作区 55 文件逐字节未变**、按 PID 正常关闭）。零调用 CDP preflight PASS 12/12，给出**明确分类**：格 B（应用 + `WXMP_CDP_PORT`）6 次采样全部 `tcp-econnrefused`（`--remote-debugging-port` 确实出现在 WebView2 子进程命令行上、实际 `--user-data-dir` 下递归 65 层无 `DevToolsActivePort`），格 C（普通 Edge 同开关）CDP over TCP **可用**（`/json/version` 200、3 targets）。结论：**本机 WebView2 运行时不监听该端口**，不能归因为"本机不支持 CDP"，也**不能**排除仓库启动配置/宿主权限——根因仍未定，需换环境或单变量对照。
+- L1 用修复后的驱动器实跑一次（`--resume-after-fix`，**0 次派发、0 次绘图、无费用**）：账本跨进程持久化的业务失败屏障先正确拦住，解除后启动新 exe、CDP 90s 无页面 → BLOCKED，自有 PID 按 wm-close 正常关闭、身份核验通过、`persistFailures/lockFailures/mirrorFailures` 全 0、累计额度 0/20 与 0/4 未动。**L1–L6 业务验收仍未完成**，不因驱动器修好而宣称通过。
+- 已知边界（如实记录，不声称已做）：`reconcile`/`runL3` 的**接线**用结构断言覆盖（真机路径要连 WebView2 才走得到），行为部分是纯函数用例；L6 的 375px 预览改为抓 iframe 真实截图并核对元素宽度 375 CSS px，分页仍只证明单页情形。
+- 证据：构建日志与产物哈希、`release-smoke`/`cdp-preflight` 输出与矩阵（含 sha256）、L1 BLOCKED 的 `run-result.json`/`evidence.json` 均在临时隔离目录，按要求未入库；`docs/artifacts/2026-10-02-continuation-review/` 为复核方原件，本次未覆盖。
+
+### [Review][Docs] 未提交驱动器修改复核与 DS 续跑收口
+
+- 基线仍为 `472fd3d`，但开始时已有 20 个已跟踪文件修改及预算/事实/trace/preflight 等新脚本；不能沿用上轮“干净工作树、修复待实施”的状态。已有产品 B/C/D 和驱动器有效修复保留。本次没有改产品或正式 runner。
+- 独立重跑：compose 98/98、delivery 123/123、budget 43/43、driver 21/21、facts 20/20；完整指定本机 Playwright 与 Chromium 后，runner-negative 26/26，三个子 runner 均实际到达连接拒绝。只指定 Playwright 时则 23/26，repair-flow 的缺浏览器启动异常不产判定文件；两组证据分别保留。
+- 新反例：共享预算多实例额度 1 可放行 2 且盘上记 1；负数计数/坏 phases 被接受；失败标记写盘返回值被忽略；live 报告状态与主结果不一致；L2 绘图量接错总量、L3 发送后访问未定义 page；trace 少记/绘图不匹配未拦；关闭失败误标已关闭、无成功基准仍取失败版；事实关系仍有假绿/假红。CDP preflight 还存在身份不匹配仍关闭、矩阵落错目录和收尾恒真。纯模块、原函数提取与静态发现的边界分别记在证据报告。
+- 新定位 10-01 16:49、16:53 两次 L1 CDP 启动 BLOCKED，以及 16:55 L2 被失败标记 BLOCKED 的原始结果；归档副本逐份核对 SHA-256。历史 suite 的 17 份直接子目录 PASS 只作原件索引，未冒充本次重跑。
+- 当前 exe/setup SHA-256 仍为 `bdbf102a…` / `7c610fc0…`，与上轮一致；本次未重建、未桌面冒烟、未真实模型调用，L1–L6 业务验收仍未完成。已同步 [DS 指南 §0.0](docs/design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务)、需求、结构、导航和 CDP 结论；先修全局预算/关闭身份，再修实际入口、诊断，满足门槛后按已有授权继续。
+- 证据：[10-02 复核索引](docs/artifacts/2026-10-02-continuation-review/README.md)，含源码指纹、独立探针、复跑结果、历史原件副本及哈希。本次文档维护不触发代码变更的 release 重建。
+
 ## 2026-10-01
+
+### [Review][Docs] 最新进度独立复核与 DS 继续任务 R1–R5
+
+- 基线 `472fd3d`，开始时工作树干净；核对最近四个提交、产品调用链、正式 runner 与二进制。现存 exe/setup SHA-256 与下方最新记录一致；独立重跑 `compose-check` **98/98、exit 0**，没有重跑完整浏览器/Rust/桌面验收。
+- 新反例：共享判定器写盘 EEXIST 后仍 PASS/exit 0；live 原函数提取探针复现六组问题——invoke 无派发前预算、超额后才停止、四项启动检查失败仍到发送、损坏账本清零、缺 traces 导致记账前 TypeError、事实断言错误放行/误拒绝。探针只用替身 IPC/文件读回，**没有实际模型派发**。
+- A/E 的证据可靠性部分重新打开，保留 B/C/D 既有修复；F 仍 NOT RUN。旧“wry setter 覆盖环境变量”“本机运行时不提供 CDP”的根因声明证据不足，按微软 API 参数合并语义收窄为历史所测配置未连通，等待零调用 preflight。
+- 继续指令写入 [第二轮指南 §0](docs/design/ds-repair-guide-2026-09-30.md#0-2026-10-01-继续执行入口)：R1 判定落盘 → R2 持久预算 → R3 启动/断言/重开；R4 零调用 CDP 诊断可并行，之后 R5 集成与已授权 L1–L6。同步需求、精简进度、结构及文档导航。证据见 [复核索引](docs/artifacts/2026-10-01-continuation-audit/README.md)。
+- 本次仅文档及独立调查探针；未修改产品/正式 runner、未启动应用、未调用真实模型、未重建 release。修复实施仍交给 DS，不能把本条当修复完成。
 
 ### [Verify] 指南 §4.3「有效无事实正文」App 层回归 + §7 发布输入清单绑定本次 release
 

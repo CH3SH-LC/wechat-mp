@@ -106,7 +106,9 @@ let failed = 0
 // 于是 `--out <dir>` 时判定结果去了对的地方，`compose-sample.html` 却写进了一个叫 `--out/` 的目录
 // （实测在仓库根建出来过）。证据要么在正确的地方，要么别声称有。
 const { outDir } = parseRunnerArgs()
-const judge = createJudge({ script: 'compose-check', outDir })
+// minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
+// 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 98 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {

@@ -299,6 +299,21 @@ const CASES = [
     want: { kind: 'failed', failure: 'exhausted', calls: 3 },
   },
   {
+    // **2026-10-02 真机 L1 的失败形状**（默认发布 exe 实测）：三轮**全部**是知识工具调用，
+    // 一次 finish_preparation 都没有 → 准备阶段按设计耗尽失败。第 4 条返回是断言"没有第 4 次请求"的哨兵：
+    // 真出现第 4 次就说明预算被放开了。
+    // 这条用例同时是"预算提醒真的发出去"的唯一非空样本（只有它走到最后一次请求）。
+    name: 'exhausted-knowledge-only',
+    replies: [
+      { text: null, calls: [{ id: 'k1', name: 'load_knowledge', args: '{"name":"engine-write-protocol"}' }] },
+      { text: null, calls: [{ id: 'k2', name: 'search_knowledge', args: '{"query":"校园图书馆开放通知"}' }] },
+      { text: null, calls: [{ id: 'k3', name: 'load_knowledge', args: '{"name":"type-notice"}' }] },
+      { text: null, calls: [{ id: 'k4', name: 'load_knowledge', args: '{"name":"sentinel-must-not-be-called"}' }] },
+    ],
+    // 注意：exhausted 分支**不带** digest——没有撰写发生，知识摘要无处可用（有 digest 的是 reply/compose/candidate）。
+    want: { kind: 'failed', failure: 'exhausted', calls: 3 },
+  },
+  {
     // 回合内重复读取同一份知识 → 只执行一次（缓存），但两次 tool 结果都要回给模型
     name: 'duplicate-knowledge-reads-cached',
     replies: [
@@ -385,6 +400,17 @@ try {
               threw,
               progressPhases: progress.map((p) => p.phase),
               maxCalls: MAX_PREP_CALLS,
+              // 预算提醒（2026-10-02 真机修复）：按**每次请求实际发出去的消息**数它出现几次。
+              // 真机实测的失败形状是"模型三轮全取资料、一次没声明"——提醒必须真的随最后一次请求发出去，
+              // 而不是只写在源码里（那种断言抓不住"忘了接线"）。
+              reminderCounts: invokes.map(
+                (i) => i.messages.filter((m) => m.role === 'user' && String(m.content).includes('最后一次请求')).length,
+              ),
+              // 首次请求就必须把"知识工具与终结工具不能同一条回复"这条规则发给模型。
+              // 2026-10-02 真机实测：模型把 load_knowledge 与 finish_preparation 放在同一条回复，
+              // 按契约整条判协议失败（L4 因此没有换图、没有提交）——而当时的指令里**没有**这条规则。
+              // 这里断言的是"实际发出去的消息"里有没有它，不是源码文本。
+              firstInvokeForbidsMixing: invokes[0].messages.some((m) => String(m.content).includes('不能出现在同一条回复里')),
             })
           }
           // 纯函数边界（严格参数逐条可证伪）
@@ -470,6 +496,21 @@ if (!run.errors.length && rows.rows) {
       check(`${c.name}：知识工具只执行一次（重复读取复用回合内缓存）`, prepCount === c.want.prepProgressCount, `prep 上报 ${prepCount} 次（期望 ${c.want.prepProgressCount}）`)
     }
     if (c.want.firstInvokeUserHasImages) check(`${c.name}：本回合参考图随用户消息送到了模型`, r.firstInvokeUserHasImages, `首次请求含 images=${r.firstInvokeUserHasImages}`)
+    check(
+      `${c.name}：首次请求就声明了"知识工具与 finish_preparation 不能同一条回复"`,
+      r.firstInvokeForbidsMixing === true,
+      `首次请求含该规则=${r.firstInvokeForbidsMixing}`,
+    )
+    // 预算提醒必须**真的发出去**、且只出现在最后一次准备请求里（指南 §5.3 的 3 次总额不变）
+    {
+      const counts = r.reminderCounts || []
+      const expected = counts.map((_, i) => (i === r.maxCalls - 1 ? 1 : 0))
+      check(
+        `${c.name}：最后一次准备请求真的带上了预算提醒（且只在最后一次）`,
+        counts.length === r.invokeCount && JSON.stringify(counts) === JSON.stringify(expected),
+        `各次提醒条数=${JSON.stringify(counts)}，期望=${JSON.stringify(expected)}（往返 ${r.invokeCount} 次，上限 ${r.maxCalls}）`,
+      )
+    }
     const thinkCount = r.progressPhases.filter((x) => x === 'think').length
     check(`${c.name}：每次模型往返恰好一次 think 阶段上报`, thinkCount === r.invokeCount, `think×${thinkCount}，往返 ${r.invokeCount} 次`)
     const firstHasKnowledge = Boolean(c.replies[0] && c.replies[0].calls.some((x) => x.name !== 'finish_preparation'))

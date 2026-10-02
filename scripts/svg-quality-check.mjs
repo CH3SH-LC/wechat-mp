@@ -7,7 +7,8 @@ import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 import { analyzeSvg, checkSvgQuality, SLOT_PX } from '../src/lib/svg-quality.ts'
 const { mockArtSvg } = await import('../src/lib/image-agent.ts')
 
-const judge = createJudge({ script: 'svg-quality-check', outDir: resolveOutDir('svg-quality-check') })
+// minChecks：2026-10-01 实测 20 条（无分场景前缀，靠条数下界证明执行完整）
+const judge = createJudge({ script: 'svg-quality-check', outDir: resolveOutDir('svg-quality-check'), minChecks: 20 })
 guardCrashes(judge)
 
 let failed = 0

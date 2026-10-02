@@ -1,6 +1,6 @@
 # 项目结构
 
-更新：2026-09-30（复测与第二轮指南）。本文维护模块位置；使用方式见 [开发指南](docs/DEVELOPMENT.md)，完整文档入口见 [文档导航](docs/README.md)。
+更新：2026-10-02 最新复核（真实成果、驱动器边界与交付任务）。本文维护模块位置；使用方式见 [开发指南](docs/DEVELOPMENT.md)，完整文档入口见 [文档导航](docs/README.md)。
 
 ## 顶层
 
@@ -26,6 +26,7 @@ wechat-mp-desktop/
 │   │   quality-recovery-plan-2026-09-29.md 最新稿源码泄漏与自动修复、完整版本回滚方案（A–E 五批已实施，含两处口径裁决）
 │   │   ds-repair-guide-2026-09-29.md 第一轮任务与实施时点记录（整体关闭结论已被第二轮复测更新）
 │   │   ds-repair-guide-2026-09-30.md 当前 DS 执行指南：复测缺口修复、回归、发布及已授权的少量真实模型验收
+│   │   webview2-cdp-and-live-acceptance-2026-10-01.md CDP 历史阻塞观察与待核实根因，继续诊断见指南 §0
 │   │   improvement-review-2026-09-24.md 体验与素材问题调查建议（P0/P1/P2 已实施）
 │   ├── maintenance/          文档整理范围、证据与恢复说明
 │   └── artifacts/            发布期配图、排版样例、按日期归档的运行证据（2026-09-24/ 2026-09-28-repair/ 2026-09-29-e2e/ 2026-09-29-e2e-final/ 2026-09-29-photo-swallow/ 2026-09-29-capability-review/ 2026-09-29-repair-integrity/ 2026-09-29-repair-flow/ 2026-09-29-prep-contract/ 2026-09-29-preview-resource/）、README.md
@@ -45,7 +46,23 @@ wechat-mp-desktop/
 
 `docs/artifacts/2026-09-30-ds-audit/` 新增第二轮审计精选副本：README、evidence-index、regression-inputs、总审计、facts/prep/preview 三专项及日志/截图。39 份原件副本按 SHA-256 校验；不是下一轮修复通过产物，内含调查脚本禁止原地运行。
 
+`docs/artifacts/2026-10-01-continuation-audit/` 为继续任务独立复核：`README.md` 索引、`persistence/` 共享判定器写盘失败反例、`live-runner-offline-probe/` 正式 live runner 原函数提取探针及冻结结果。均为离线调查，探针复现成功不代表产品通过；再次运行使用新目录。
+
+`docs/artifacts/2026-10-02-continuation-review/` 为最新复核：README、源码指纹、预算/主流程/CDP 三专项、compose/delivery/负向复跑与历史 L1/L2/矩阵副本及哈希。当前继续任务在原指南 §0.0；不在冻结证据目录重跑并覆盖结果。仓库根 `cdp-matrix.json` 是已有 preflight 落错目录的历史原件，未当作正式输出入口，也未删除。
+
+`docs/artifacts/2026-10-02-evening-review/` 为晚间复核：预算/IPC、live原件、CDP/发布三专项、当前离线回归、34个历史尝试索引、原件哈希与实际成品副本；源码指纹和证据索引分别保存。当前执行入口仍为DS指南§0.0，午间证据保留。
+
+`docs/artifacts/2026-10-02-closeout/` 为 §0.0 收口执行记录（**只有 Markdown**，大件原件按仓库口径不入库）：A/B/C 三个缺口的修法、变异证红/转绿证据、账务 1/1 差额的逐格对齐表与直接证据、38 个尝试目录的分母、发布版 exe 的 L5/L6 零模型签收、以及推翻旧 CDP 根因文案的那次对照。原件根目录写在文首（`%TEMP%/wxmp-closeout-*`、`%TEMP%/wxmp-pubver-*`）。
+
 ## 前端模块
+
+`docs/artifacts/2026-10-02-readiness-review/` 为最新独立复核：README、21个源码指纹、budget/（特殊IPC与收尾反例）、live/（默认版L5/L6与清单重算）、cdp-release/（身份修复与发布原件）、live-driver/本次结果，以及验证/证据索引；均不覆盖历史证据。当前任务仍为DS指南§0.0，核心修复后推进多页与交付。
+
+`docs/artifacts/2026-10-02-r8-real-acceptance/` 为真实模型验收的执行记录（**只有 Markdown**，大件原件按仓库口径不入库）：默认发布版 exe 在同一隔离 root 上 L1–L6 的结果表、过程中两次真实失败（模型耗尽 prep 预算不声明 / 同条回复混用工具）的根因与修法、`prep-contract-check` 的证红变异、两次重建与最终 exe 上重跑整套的口径、以及如实记录的两处不完美（L5 一次强杀收尾偶发、提醒无法证明为通过的决定因素）。原件在 `%TEMP%/wxmp-live-r6-*`（失败）、`-r7-*`（失败）、`-r8-*`（最终通过）。
+
+`docs/artifacts/2026-10-02-p2-delivery/` 为用户交付面（P1/P2）的记录：多页导出的核对表与页边界切口清单（含未覆盖的"带图多页"及其原因）、安装交付事实（当前中文包路径/哈希、被测 exe、数据位置、6 步隔离清单、**安装 NOT RUN** 的条件、手册旧安装名的差异）、公众号后台人工核对清单（NOT RUN）、以及 P1 的证据口径修订（尝试分母 41、1/1 差额的归因边界、待验证解释）。新增的长文代表稿 L7/L8 结果也在其中（原件 `%TEMP%/wxmp-live-r10-*`）。
+
+`docs/artifacts/2026-10-02-p0-closeout/` 为第二轮 P0 收口的执行记录（**只有 Markdown**，大件原件按仓库口径不入库）：P0-A（204/205/304 空体 json 绕过预算）与 P0-C（B1 失败屏障两写、B2 先闭合后写证据）两条的修法、逐条**旧形状对照**（复现复核记录的反例）、真新子进程门槛验证、以及本轮全量零模型回归清单。原件根目录写在文首；P1/P2 未推进。
 
 | 路径（src/ 下） | 职责 |
 | --- | --- |
@@ -78,9 +95,12 @@ wechat-mp-desktop/
 
 ## scripts/
 
-- 当前检查：`verify-ui.mjs`、`compose-check.mjs`、`asset-resolve-check.mjs`、`svg-quality-check.mjs`、`progress-check.mjs`、`trace-check.mjs`、`raster-check.mjs`、`fixture-repair.mjs`、`delivery-quality-check.mjs`、`photo-swallow-check.mjs`（照片位吞并源码泄漏的回归；`--prove-red` 从 git 取修复前版本证红；用例 ⑥ 打在真实最新稿的整份只读副本上）、`asset-completion-check.mjs`（素材完成状态：排版拒收回写台账、复用路径同过适用门禁、预算不被自动流程重置）、`repair-integrity-check.mjs`（事实规范化与正文投影的纯函数回归：正反对照、口径一致、"比不了必须阻断"）、`repair-flow-check.mjs`（**真实 App** + 受控模型输出：丢事实组不得 accepted、保留组必须 accepted、trace 必须有 `bodyApplicability=applied`；含第二轮指南 §4.1 的三个**单项**事实反例：仅删地点 / 上午改下午 / 删行内代码电话）、`prep-contract-check.mjs`（真实 `runPrep` + stub `prep_turn`：reply/compose/candidate 三分支、旧协议兼容、普通答疑不提交、参数非法、预算封顶无第 4 次请求）、`preview-resource-check.mjs`（从发送前记录所有请求：八组预览输入都必须零外链尝试，且**特定** `html.external-img` 诊断与原始违规原文仍在门禁记录里）、`runner-negative-check.mjs`（判定器负向回归：错误端口/零检查必须报错而不是全 PASS）、`release-smoke.mjs`（release exe 的隔离启动冒烟：窗口标题用**操作系统**读取、真实工作区逐字节未变；CDP 可用性单独如实记录）、`live-acceptance.mjs`（**真机 + 真实模型**六回合验收 L1–L6，隔离启动器 + 跨回合预算账本；详见 `docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md`）、`live-conformance.mjs`、`live-three-samples.mjs`（**已被 `live-acceptance.mjs` 取代，勿再作为签收依据**）。
+- **验收专用构建开关**（`src-tauri/Cargo.toml`）：`acceptance-devtools = ["tauri/devtools"]`——**默认关闭**，发布产物行为与体积不变。它原来被当成"CDP 连不上"的根因，**该结论已被 2026-10-02 收口的单变量对照推翻**：不开该特性的默认发布 exe 在同一 profile 预热后 **432ms** 就能连上（首启 90s 无页面）。实测支持的因素是 **profile 首轮初始化**；特性本身与 TCP 端点之间没有证据。特性与验收 exe 继续保留（工作正常），但不再是"能不能连上"的解释。详见 [CDP 记录 §6.1](docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md)。
+- 验收驱动器配套模块（2026-10-02 收口 + 第二轮 P0 收口）：`lib/dispatch-budget.mjs`（派发**前**预留 + 跨进程串行账本：全局账本旁的 `open(...,'wx')` 锁、临界区内重新读盘、损坏结构拒绝、写失败上抛；**`requirePhaseOpen` 默认 true**——付费派发前必须先 `beginPhase()` 把在途状态持久写进账本，`closePhase()` 写成功才算闭合，`unresolvedPhase()`/`resolveUnresolved()` 让下一个进程先核对；`priorBusinessFailure()` 除 `businessFailure` 标记外也认已闭合条目的 `outcome=error/fail`）、`lib/ledger-finalize.mjs`（**账本收尾的唯一实现**：`finalizePhase()` 把业务失败标记与 phase 终结合并成**同一次原子写**、写失败即保持未闭合；`runFinalizeSequence()` 固定顺序"证据先落盘 → 再闭合账本 → 按最终判定重写证据"；`preflightLedgerGate()` 供驱动与回归共用的两道历史门槛）、`lib/ipc-gate.mjs`（**页面侧门禁的唯一实现**：永不 reject + 故障即停发 + 覆盖率自证；响应按**协议真实解码分支**判定（`content-type` 决定 `json()/text()/arrayBuffer()`，不看 status），复用也重新自证；付费命令表由 `dispatch-budget.mjs` 生成）、`lib/fact-assert.mjs`（固定题面事实断言：按句读切分、起止成对、否定语义、年份/星期核对）、`lib/trace-read.mjs`（trace 读取与三方请求核对：少记/绘图类别/不可观察、关闭能否重开）；配套 `budget-check.mjs`、`ipc-gate-check.mjs`（用本机真实 tauri 协议源码跑 `node:vm` 假传输，含旧形状对照）、`ledger-finalize-check.mjs`（真预算写者 + 生产收尾函数 + **真新子进程**）、`fact-assert-check.mjs`、`live-driver-check.mjs`，以及零模型 `cdp-preflight.mjs` 与纯 mock 的 `cdp-preflight-check.mjs`；`fixtures/ledger-gate-child.mjs` 是"下一个进程"的替身夹具（`spawnSync` 另起 node）。§0.0 的 A/B/C 与第二轮 P0-A/P0-C 已收口（离线 17 + 浏览器 6 个 runner 全绿），账务 1/1 差额已定位但计费状态仍 UNKNOWN。
+- 多页导出的零模型验收：`export-paging-check.mjs`（在真实浏览器里走 `composeMarkdown → exportArticleImages → renderArticleImages → export_images`，把真正传给落盘命令的文件清单抓下来自己写盘并做文件级核对；夹具 `fixtures/2026-10-02-longarticle/source.md` 冻结不改。含"故意跨分页线的内容块"对照，证明切口检测器可证伪；"正文含 `<img>` 的多页"在本 runner 的 Chromium 下**转不出图**，如实记为未覆盖）。
+- 当前检查：`verify-ui.mjs`、`compose-check.mjs`、`asset-resolve-check.mjs`、`svg-quality-check.mjs`、`progress-check.mjs`、`trace-check.mjs`、`raster-check.mjs`、`fixture-repair.mjs`、`delivery-quality-check.mjs`、`photo-swallow-check.mjs`（照片位吞并源码泄漏的回归；`--prove-red` 从 git 取修复前版本证红；用例 ⑥ 打在真实最新稿的整份只读副本上）、`asset-completion-check.mjs`（素材完成状态：排版拒收回写台账、复用路径同过适用门禁、预算不被自动流程重置）、`repair-integrity-check.mjs`（事实规范化与正文投影的纯函数回归：正反对照、口径一致、"比不了必须阻断"）、`repair-flow-check.mjs`（**真实 App** + 受控模型输出：丢事实组不得 accepted、保留组必须 accepted、trace 必须有 `bodyApplicability=applied`；含第二轮指南 §4.1 的三个**单项**事实反例：仅删地点 / 上午改下午 / 删行内代码电话）、`prep-contract-check.mjs`（真实 `runPrep` + stub `prep_turn`：reply/compose/candidate 三分支、旧协议兼容、普通答疑不提交、参数非法、预算封顶无第 4 次请求）、`preview-resource-check.mjs`（从发送前记录所有请求：八组预览输入都必须零外链尝试，且**特定** `html.external-img` 诊断与原始违规原文仍在门禁记录里）、`runner-negative-check.mjs`（判定器负向回归：错误端口/零检查必须报错而不是全 PASS）、`ipc-gate-check.mjs`（**页面侧预算门禁**的离线验收：把 `lib/ipc-gate.mjs` 的源码连同本机真实 tauri 协议源码放进 `node:vm` 沙箱跑假传输，覆盖正常 / fetch 失败 / 响应解码失败 / 宿主预留 reject / 回退已激活 / 拦截函数脱落 / 中止线 0 七类；协议源码按 `Cargo.lock` 现取，取不到即 BLOCKED）、`release-smoke.mjs`（release exe 的隔离启动冒烟：窗口标题用**操作系统**读取、真实工作区逐字节未变；CDP 可用性单独如实记录）、`live-acceptance.mjs`（**真机 + 真实模型**六回合验收 L1–L6，隔离启动器 + 跨回合预算账本；详见 `docs/design/webview2-cdp-and-live-acceptance-2026-10-01.md`）、`live-conformance.mjs`、`live-three-samples.mjs`（**已被 `live-acceptance.mjs` 取代，勿再作为签收依据**）。
 - `lib/run-result.mjs`：runner 统一判定器（`createJudge`/`statusOf`/`finish`/`guardCrashes`/`resolveOutDir`/`tapCheckLines`）——PASS 必须同时满足"计划场景齐全 + 检查数 > 0 + 无错误"，零检查与异常为 ERROR、缺依赖为 BLOCKED；输出一律落 `run-result.json`。
-- `lib/desktop-harness.mjs`：真机验收的**隔离启动器**（专属 `USERPROFILE` + `WEBVIEW2_USER_DATA_FOLDER` + 空闲 CDP 端口 + 隐藏窗口），隔离目录与真实工作区重叠/嵌套时**直接拒绝启动**；另含只关本轮 PID、目录哈希清单与差异比对。
+- `lib/desktop-harness.mjs`：真机验收的**隔离启动器**（专属 `USERPROFILE` + `WEBVIEW2_USER_DATA_FOLDER` + 空闲 CDP 端口 + 隐藏窗口），隔离目录与真实工作区重叠/嵌套时**直接拒绝启动**；关闭只认**本轮启动的那个 PID**，关闭前先要求**启动身份齐备**（映像名 + 完整路径 + 创建时刻，缺一即 `incomplete-identity`、零关闭操作），再用它复核；温和关闭等待超时后、发 `/F` **之前**再核验一次（身份变了回 `identity-changed-before-force` 且绝不强杀）；`procIdentity()` 回 `identityComplete`/`missingFields`，"读不出来"记 `matchesExpected=null` 而不是 true；"请求前就已退出"单列 `exitedBeforeRequest` 不算正常退出；另含目录哈希清单/差异比对，以及 CDP 诊断纯函数（TCP 错误分类、HTTP 响应分类、target 结构分类、按实际 `--user-data-dir` 递归找 `DevToolsActivePort`）与 `isolateCdpEnv`（显式清掉继承的 CDP/runtime 环境覆盖）。
 - `lib/ls-stub.mjs`：内存 localStorage 桩，让素材链路可无头驱动（供 `asset-resolve-check.mjs` 用）。
 - `lib/fixtures.mjs`：读取 `fixtures/` 下的真实失败样例；`fixtures/2026-09-28-basement/` 是 2026-09-28「筑基」失败稿 + 四枚库素材 + 当时告警的**只读**副本（脚本只读不写），`fixtures/deco-calibration/` 是角饰实际尺寸检查的校准样例（含真实库素材副本与两个合成退化样例），`fixtures/2026-09-29-photo-swallow/` 是照片位吞并后续素材块的失败样例（最小片段 + 真实结构裁剪版 + **真实 `source.md` 整份只读副本**，含前后对比证据）。
 - 手动转换：`compose-cli.mjs`。
