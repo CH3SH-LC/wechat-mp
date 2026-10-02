@@ -3,6 +3,13 @@
 详细原因与验证见 [PROGRESS.md](PROGRESS.md)；当前待办见 [REQUIREMENTS.md](REQUIREMENTS.md)。每条只写一句话，阶段结束后合并里程碑。
 
 ---
+## 2026-10-03
+
+- [Fix][Change] **F1 全入口遵守材料依据边界**（[证据](docs/artifacts/2026-10-03-f1-grounding/README.md)）：共同规则收敛为 `persona.ts` 的**唯一定义**，并按同一句短引用接进 prep（含**直接 candidate**）、compose WRITE、自动 REVISE 三个入口；收窄 App 的 digest 事实优先级（不再"冲突以库为准"）与正式稿口径（「权威」只指版本与素材引用）；`type-announcement.md` 的示例骨架标注为**虚构写法示例**、联系方式缺项改为"向作者指出"而非编造。新增 `app-message-grounding-check.mjs`——把**真实 App** 跑在 Tauri 桩上截获**实际发出的消息**（prep 三轮到末轮 / WRITE / 自动 REVISE）：改后 **67/67 PASS**、改前同套断言 **21/67**（46 条红）、两个变异各 **64/67** 且红的**恰好**是 3 条对应断言；独立复核提的三条证据层问题（末轮未触发、prep 断言被 system 盖过、实参按引用记录）已整改并复验。G1 纯读原件判定旧稿越界：L7 **13 条**，L8 共 **9 条（1 新增 + 8 继承）**。**无 API 授权（任务卡第 5 节），真实语义遵守未验**；全量零模型回归全绿。
+- [Build] 按铁律 7 重建 release 并冒烟：exe `431cba52…`、setup `智序_0.1.0_x64-setup.exe` `8bf85772…`（4,603,853 字节），`release-smoke` PASS（标题由操作系统读取、真实工作区逐文件哈希未变、自有 PID 走应用自身退出路径关闭）。
+- [Research][Verify] 续研定位L7/L8为prep直接候选、分页可仅改安全切点、慢任务含CDP启动重试；新增[深挖与交付实验](docs/research/2026-10-03-strategy/README.md)，独立离线复跑IPC67/67与ledger39/39通过，未改产品或调用模型。
+- [Research][Plan] 四路并行完成[未来方向与DS执行计划](docs/research/2026-10-03-strategy/README.md)：从最新839183b及原始成品复盘返工，下一包优先无依据运营承诺，随后分页可读性/安装交付；默认一实施一复核，三个样本起步，本轮未改产品或调用真实模型。
+
 ## 2026-10-02
 
 - [Fix][Verify] **收口 §0.0 的 P1/P2 交付面**（[证据](docs/artifacts/2026-10-02-p2-delivery/README.md)）：**P2.1 多页导出**新增 `export-paging-check` + 冻结长文夹具，走真实 `compose→exportArticleImages→export_images` 链路，**16/16 PASS**（5 页、750px、分页拼回与长图**逐像素一致**、PNG 结构独立核对；页边界 3 处切口含一处切开文字 12px 已列清），并如实记覆盖边界（本 runner 的 Chromium 转不出含图正文，"≥3 页"取自纯文字夹具；**带图多页由真实 WebView2 补**：长文导出 750×2474 长图 + 2 页分页，插画在第 1 页强饱和像素占 13.84%）；**P2.3 长文代表稿**新增 L7/L8 两个 phase（只改脚本），**L7 PASS 930 字 + 恰一开篇横图**、**L8 PASS 标题改+正文 930→424 字、gen_svg=0、素材身份不变**；**P2.2 安装交付**给出中文包路径/哈希/数据位置/6 步清单但**安装 NOT RUN**（无可隔离环境），手册写的 `wechat-mp-desktop-x.x.x-setup.exe` 是已停用命名、按指南留待下次交付校对；**P2.4 后台核对**只留清单、无账号即 NOT RUN；**P1** 分母改 41 口径、1/1 差额维持 UNKNOWN、包名与手册差异勘误。过程中两次红都是**驱动自己的口径错**（L8 把字数上限写死 180 / 同 root 重跑的标题状态假红），已在全新 root 重跑取得干净证据。本轮 +10 派发/+2 绘图，**全会话累计 56/11→89/16**，未重置未扩容。

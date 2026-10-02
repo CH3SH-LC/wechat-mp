@@ -34,3 +34,7 @@ docs/artifacts/**/*.png
 docs/artifacts/**/*.json
 docs/artifacts/**/*.jsonl
 docs/artifacts/tuiwen-*.png
+# 研究目录同理：结论（.md/.html）提交，机器判定数据（JSON/JSONL）与截图只留本地。
+docs/research/**/*.json
+docs/research/**/*.jsonl
+docs/research/**/*.png

@@ -4,6 +4,9 @@
 
 | 读者 / 问题 | 唯一入口 |
 | --- | --- |
+| F1 已实施：全入口遵守材料依据边界（改动、实参截获红绿对照、三组样本判定、未覆盖项） | [F1 交付与证据](artifacts/2026-10-03-f1-grounding/README.md) |
+| 未来方向、为何慢、怎样高效驱动DS | [2026-10-03四路研究与计划](research/2026-10-03-strategy/README.md) |
+| 下一轮只派F1的短任务卡，旧专项已独立复核 | [五字段DS任务卡](research/2026-10-03-strategy/next-ds-task.md) |
 | 项目目标、范围和完成标准 | [GOAL](../GOAL.md) |
 | 产品介绍、安装、截图 | [项目 README](../README.md) |
 | 软件具体怎么用 | [随安装包发布的使用手册](../src-tauri/resources/使用手册.html) |
@@ -11,7 +14,7 @@
 | 开发环境、验证与打包 | [开发指南](DEVELOPMENT.md) |
 | 文件在哪、模块做什么 | [项目结构](../STRUCTURE.md) |
 | 最近状态 / 变更原因与验证 | [精简进度](../PROGRESS-LITE.md) / [详细进度](../PROGRESS.md) |
-| 当前能力与继续任务：短通知可用样本、发布版重开/导出已证；两类执行缺口已修并附反证（待独立复核），再补用户交付 | [最新独立复核](artifacts/2026-10-02-readiness-review/README.md)、[DS当前指南§0.0](design/ds-repair-guide-2026-09-30.md#00-2026-10-02-最新复核与直接执行任务) |
+| 当前能力与继续任务：F1 材料依据边界已实施并离线验收（真实语义未验），下一包为分页可读性与真实交付 | [F1 交付与证据](artifacts/2026-10-03-f1-grounding/README.md)、[10月3日综合状态](research/2026-10-03-strategy/README.md)、[定向复核](research/2026-10-03-strategy/verification/README.md) |
 | 真实模型验收（默认发布版 L1–L6 同一 exe）的结果、两次真实失败与修复 | [真实模型验收记录](artifacts/2026-10-02-r8-real-acceptance/README.md) |
 | 用户交付面：多页导出、安装交付与后台核对清单、长文代表稿、证据口径修订 | [P1/P2 交付面记录](artifacts/2026-10-02-p2-delivery/README.md) |
 | 第二轮 P0 收口（P0-A 特殊 IPC 响应 / P0-C 终结顺序）执行记录与反证 | [第二轮 P0 收口](artifacts/2026-10-02-p0-closeout/README.md) |

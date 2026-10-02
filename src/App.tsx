@@ -837,7 +837,12 @@ export default function App() {
     // 历史助手 raw reply 只是历史消息，**不是**最新成品。
     if (priorIsAccepted && priorAccepted?.source) {
       system +=
-        `\n\n## 当前正式文稿（应用实际保存的权威版本）\n` +
+        `\n\n## 当前正式文稿（应用实际保存的版本）\n` +
+        // F1（2026-10-03）：这里的「权威」**只指版本与素材引用**，不是"文中每句话都已由用户确认"。
+        // 旧措辞写"应用实际保存的权威版本"会被读成整篇内容已获事实认证，于是续改时把上一版里
+        // 没有材料依据的规则（次日恢复 / 预约顺延 / 值班时段…）当成既定事实继续沿用。
+        `这里的「权威」只指**当前保存的版本与素材引用**（revisionId 与下面的稳定素材 ID），` +
+        `**不表示**文中已有的陈述都经过用户事实确认：其中没有材料依据的规则不要当成事实继续沿用或扩写。\n` +
         `revisionId: ${priorAccepted.revisionId || '(未知)'}\n` +
         `修改请基于下面这份正文；其中 [[asset:分类|素材ID|用途说明]] 是已固化素材的稳定引用，` +
         `**原样照抄分类与 ID**。用户只说改文字时，不要给已有素材加 |new，也不要改成 [[img]]/[[deco]] 占位。\n` +
@@ -983,13 +988,15 @@ export default function App() {
         assetPolicy = prep.assetPolicy
         // 把实际取用知识点摘要 + 撰写指令拼进流式续写（不透传工具回合消息）
         // 第 29 轮：persona 已精简，v2 契约迁知识库——digest 若缺 engine-write-protocol 则强制附加
+        // F1（2026-10-03）：原措辞「作为本次创作依据，冲突以库为准」把"写作知识"抬成了**事实来源**——
+        // 知识文件提供的是写法与例子，不能覆盖用户材料。这里按"语法/表达"与"事实"分开表述。
         let digestNote = prep.digest
-          ? `\n\n## 已取用知识点（来自知识工具，作为本次创作依据，冲突以库为准）\n${prep.digest}\n`
+          ? `\n\n## 已取用写作知识（来自知识工具：只约束引擎语法、排版与表达方式；其中的示例不构成本稿事实，本稿事实以用户材料或明确确认为准）\n${prep.digest}\n`
           : ''
         if (!digestNote.includes('engine-write-protocol')) {
           const proto = await loadEngineProtocol()
           if (proto) {
-            digestNote += `\n\n## 排版引擎协议（必读：v2 语法/美术占位/风格声明/质量底线，冲突以本协议为准）\n${proto}\n`
+            digestNote += `\n\n## 排版引擎协议（必读：v2 语法/美术占位/风格声明/质量底线；冲突以本协议为准——**但本协议只决定语法与样式，不决定本稿事实**）\n${proto}\n`
           }
         }
         streamMsgs = [...baseMsgs, { role: 'user', content: digestNote + WRITE_INSTRUCTION }]

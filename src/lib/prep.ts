@@ -9,6 +9,9 @@ import { assetLine, categoryKey, searchAssets } from './asset-library.ts'
 import type { ProgressFn } from './progress.ts'
 import { prepToolLabel } from './progress.ts'
 import { trace } from './trace.ts'
+// 共同「材料依据边界」的**唯一定义**在 persona.ts；本文件的各条指令只引用同一句短引用，
+// 不另抄一份长规则（多份口径必然漂移，漂移的那份就是漏检的那条路）。
+import { MATERIAL_GROUNDING_REF } from './persona.ts'
 
 export interface PrepReply {
   text: string | null
@@ -67,7 +70,13 @@ export const PREP_INSTRUCTION =
   'finish_preparation 的取值：只是回答/澄清 → outcome=reply 并把答复写进 text；' +
   '需求已明确、由系统撰写 → outcome=compose；你已经写好了完整正文 → outcome=candidate 并把完整 v2 正文放进 source。' +
   '若本回合只是改文字、现有配图与其引用保持不动 → assetPolicy=preserve；本回合要修改或新增素材 → assetPolicy=modify。' +
-  '不要只回复 READY 之类的控制词，也不要只给正文而不声明结果。'
+  '不要只回复 READY 之类的控制词，也不要只给正文而不声明结果。' +
+  // F1（2026-10-03）：**无论走哪条出口**都要守同一条边界。这一段必须在 prep 指令里出现，
+  // 因为 prep 的候选正文（outcome=candidate）**不经过 WRITE**，是它自己直接进交付门禁的——
+  // 只在 WRITE/修订里提醒，就会漏掉本轮真实反例的首发入口。
+  '另外，无论你声明 compose 还是直接提交 candidate，都遵守' + MATERIAL_GROUNDING_REF +
+  '不要把知识示例（内容类型骨架、风格与视觉规范里的例子）当成用户资料；' +
+  '非必要的缺项可以省略，确实必要的未知才用 outcome=reply 问作者，不要为了凑字数或凑结构补定机构规则。'
 
 // 最后一轮的**预算提醒**：仅当本次是准备阶段最后一次请求时追加。
 //
@@ -82,7 +91,9 @@ export const PREP_LAST_ROUND_REMINDER =
   '这是准备阶段的**最后一次请求**：不要再调用任何知识工具，现在就调用 finish_preparation 声明本回合结果。' +
   '按你已经掌握的信息判断：需要用户补充信息 → outcome=reply 并把问题写进 text；' +
   '信息够了、由系统撰写 → outcome=compose；你自己已经写好完整正文 → outcome=candidate。' +
-  '只回文字不声明结果会被判为准备失败，本轮不会产生任何文稿。'
+  '只回文字不声明结果会被判为准备失败，本轮不会产生任何文稿。' +
+  // 「最后一次请求」的紧迫感不能被读成"必须把信息补全"——边界照旧：材料没给的具体规则不补写。
+  '最后提醒一句：' + MATERIAL_GROUNDING_REF + '时间紧也不要把没材料依据的规则写进去。'
 
 // 兼容期提示：模型走了旧协议（只回 READY / 只贴一段正文）时，用**同一总额预算内的一次**请求请它规范声明。
 //
@@ -98,7 +109,10 @@ export const PREP_CORRECTION =
 
 // READY 后进入正文撰写的指令（由 App 在最终流式消息末尾追加；第 29 轮：允许正文前自然说明，不再强制"不要解释"）
 export const WRITE_INSTRUCTION =
-  '开始撰写正文：正文放进一个 ```v2 围栏代码块（不要 ```html）。正文前可以用普通文字自然说明（写好了/按什么风格/采纳什么默认）。'
+  '开始撰写正文：正文放进一个 ```v2 围栏代码块（不要 ```html）。正文前可以用普通文字自然说明（写好了/按什么风格/采纳什么默认）。' +
+  // F1：撰写阶段单独再点一次边界——本回合随附的知识摘要只约束写法，
+  // 不能因为"取过某份知识"就被当成事实授权。
+  MATERIAL_GROUNDING_REF + '知识摘要仍适用。'
 
 /** 准备阶段的**总额**预算：知识取用、空回复重试、协议纠偏共用它，不各自拥有三次 */
 export const MAX_PREP_CALLS = 3
