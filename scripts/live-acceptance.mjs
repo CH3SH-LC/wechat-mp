@@ -95,7 +95,7 @@ const repoRoot = resolve(here, '..')
 // =====================================================================================
 
 const argv = process.argv.slice(2)
-const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8']
+const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3']
 const phase = String(argv.find((a) => PHASES.includes(a.toUpperCase())) || '').toUpperCase()
 const opt = (name, def = null) => {
   const i = argv.indexOf('--' + name)
@@ -121,8 +121,10 @@ const RESUME_REASON = opt('resume-after-fix', null)
 const MAX_DISPATCHES = MAX_DISPATCHES_ARG.ok ? (MAX_DISPATCHES_ARG.value == null ? undefined : MAX_DISPATCHES_ARG.value) : NaN
 const MAX_GEN_SVG = MAX_GEN_SVG_ARG.ok ? (MAX_GEN_SVG_ARG.value == null ? undefined : MAX_GEN_SVG_ARG.value) : NaN
 
-const CONFIG_HINT = `用法：node scripts/live-acceptance.mjs <L1|L2|L3|L4|L5|L6> [--root <dir>] [--exe <path>]
+const CONFIG_HINT = `用法：node scripts/live-acceptance.mjs <L1..L8|G1|G2A|G2B|G3> [--root <dir>] [--exe <path>]
   · L1..L4 必须共用同一个 --root（同一 profile / workspace / 会话），L5/L6 也用同一个；
+  · F1 三组样本：G1（稀疏长稿，逐字同 L7 题面）→ G2B（只改标题）必须共用同一个 --root；
+    G2A（首稿未定）与 G3（正向授权）各自用**新的空 root**（它们都是首稿）；
   · 缺省 root：${join(process.env.TEMP || process.env.TMP || tmpdir(), DEFAULT_ROOT_TAG)}`
 
 // =====================================================================================
@@ -330,6 +332,24 @@ const PROMPTS = {
   L8:
     '把标题改为“冬季开馆时间调整”，正文压缩到 300–500 字；完整保留开放日期时段、周日全天闭馆、一楼自习区和电话。' +
     '只改文字，现有配图和所有素材保持原样。',
+
+  // ---- F1（2026-10-03，用户明文授权真实小样）三组材料依据样本 ----
+  // G1 **逐字同 L7 题面**：同一输入，改前产出的是"补了 13 条未给规则"的坏稿（见 F1 证据），
+  // 这样才构成同输入的前后对照，而不是换一道题再夸一遍。
+  G1:
+    '请直接写一篇校园图书馆的介绍长文，采用默认校园风格，不再询问。固定测试情境：2026年10月10日周六 9:00–17:00 开放；' +
+    '2026年10月11日周日全天闭馆；自习区在一楼；咨询电话010-55556666。标题“校园图书馆开放通知”，正文不少于800字、不超过1200字。' +
+    '只配一张开篇横图：暖色台灯照亮蓝色书本，不要照片位、角饰或额外图片。',
+  // G2a 首稿未定：费用与人数上限**明确没给**，不得补成免费 / 限额。
+  G2A:
+    '帮我写一篇周末亲子手工活动的报名通知，直接写，不要再问我。固定情境：活动日期是 2026年11月15日（周六）。' +
+    '报名费用和人数上限还没定下来，先按这个写。标题“亲子手工活动报名通知”。',
+  // G2b 旧稿只改标题：正文与素材必须原样保留。
+  G2B: '只把标题改成“图书馆开放时间调整通知”，正文和配图一个字都不要动。',
+  // G3 正向授权：材料**确实给了**免费 / 预约顺延 / 9–17 值守，必须准确保留，不能被"防编造"误伤砍掉。
+  G3:
+    '帮我写一篇馆内活动通知，直接写。材料如下：本活动免费参加；原预约自动顺延到下周一同一时段，不用重新预约；' +
+    '现场 9:00–17:00 有人值守。标题“周末活动安排通知”，最后再附两句一般性的到场建议。',
 }
 
 /** 每个 phase 的额度与写不写稿。maxDispatches 是本回合的**中止线**（超了就停手并 BLOCKED），不是目标值。 */
@@ -344,6 +364,61 @@ const PHASE_PLAN = {
   L7: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: '校园图书馆开放通知' },
   // L8 只改文字：不绘图
   L8: { writes: true, minDispatches: 2, maxDispatches: 4, maxGenSvg: 0, title: '冬季开馆时间调整' },
+  // F1 三组样本：每篇仍按同一套有界预算（首篇 5 次、绘图 3 次；只改标题那条不绘图）
+  G1: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: '校园图书馆开放通知' },
+  G2A: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: null },
+  G2B: { writes: true, minDispatches: 2, maxDispatches: 4, maxGenSvg: 0, title: '图书馆开放时间调整通知' },
+  G3: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: null },
+}
+
+// =====================================================================================
+// 第 4.5 节：F1「材料依据边界」三组样本的内容判定
+// =====================================================================================
+//
+// 判定读的是**成品正文**（admissibility 的产物），不是产品侧的关键词阻断——
+// 产品里没有、也不允许有这种阻断（铁律 6 / 任务卡 §2）。这里只是验收脚本在体检成品。
+// 长短匹配一律走 `norm()`（去空白、破折号统一），与 factChecks 同一口径。
+const GROUNDING = {
+  // G1：**逐字同 L7 题面**。改前同一输入产出的稿件补了 13 条材料未给的规则（见 F1 证据），
+  // 下面每一条就是那 13 条里的一个可识别片段——它们**必须不出现**。
+  G1: {
+    facts: 'l1', // 与 L1/L7 同一组固定事实，继续用 factChecks 核对（不另造一套）
+    forbidden: [
+      ['周一恢复开放', '恢复正常'],
+      ['清场安排', '清场'],
+      ['门口张贴告示', '告示'],
+      ['线上续借承诺', '续借'],
+      ['预约/归还日顺延', '顺延'],
+      ['储物格等现场设施', '储物格'],
+      ['插座数量', '插座'],
+      ['一楼服务台', '服务台'],
+      ['"按学校统一安排"式机构授权来源', '学校'],
+      ['电话有人值守', '值守'],
+      ['预约取书/预约规则', '预约'],
+    ],
+  },
+  // G2a：费用与人数**明确未定**，不得补成免费 / 限额 / 先到先得；日期要保住。
+  G2A: {
+    required: [['材料给的日期被保住', '11月15日']],
+    forbidden: [
+      ['把未定的费用写成免费', '免费'],
+      ['把未定的费用写成不收费', '不收费'],
+      ['把未定的人数写成限额', '限额'],
+      ['把未定的人数写成名额数', '名额'],
+      ['把未定的规则写成先到先得', '先到先得'],
+    ],
+  },
+  // G3 正向授权（过度阻断对照）：材料**确实给了**的规则必须准确保留。
+  G3: {
+    required: [
+      ['材料给的"免费参加"被保住', '免费'],
+      ['材料给的"预约自动顺延"被保住', '顺延'],
+      ['材料给的"9:00–17:00 值守"被保住', '9:00'],
+    ],
+    // 过度阻断的失败形态是"把已给的规则也删了/写成待定"，用一个明确片段兜底；
+    // 真正的"反复追问"由"本轮必须 accepted 提交"兜住（追问就没有提交）。
+    forbidden: [['把已给的免费写成待定', '费用待定']],
+  },
 }
 
 // =====================================================================================
@@ -1671,6 +1746,10 @@ function reconcile(budget, turn, traceInfo, plan) {
 async function runFirstPhase(ctx, app, plan, promptKey, opts = {}) {
   const wordLimit = opts.wordLimit || 180
   const minWords = opts.minWords || null
+  // 素材位数：L1/L7 的题面要求"恰好一张开篇横图"；F1 的 G2a/G3 题面**没有**配图要求，
+  // 不能拿 L1 的口径去判它们（`null` = 跳过这两条）。默认仍是 1，L1/L7 行为不变。
+  const expectAssets = opts.expectAssets === undefined ? 1 : opts.expectAssets
+  const grounding = opts.grounding || null
   const launchRead = await verifyLaunch(app, ctx, { expectEmpty: true })
   if (!launchRead) return
 
@@ -1704,23 +1783,40 @@ async function runFirstPhase(ctx, app, plan, promptKey, opts = {}) {
     state.ui.docState === 'accepted' && state.disk.ok && state.disk.meta.validation === 'verified',
     `doc-state=${state.ui.docState}；validation=${state.disk.ok ? state.disk.meta.validation : '(磁盘不可读)'}`,
   )
-  check(
-    `${idTag()}恰好一个素材位真正落位（预览内联图片 1 张、版本 bindings 1 条）`,
-    state.ui.images.length === 1 && state.disk.ok && (state.disk.meta.bindings || []).length === 1,
-    `预览图片=${state.ui.images.length} 张；bindings=${state.disk.ok ? JSON.stringify((state.disk.meta.bindings || []).map((b) => b.slot)) : '(不可读)'}`,
-  )
   const binds = state.disk.ok ? state.disk.meta.bindings || [] : []
-  check(
-    `${idTag()}素材位是开篇横图，不是照片位/角饰/分割线等额外素材`,
-    binds.length > 0 && binds.every((b) => !/photo|frame|deco|divider|heading/i.test(String(b.slot))),
-    `slots=${JSON.stringify(binds.map((b) => b.slot))}`,
-  )
+  if (expectAssets !== null) {
+    check(
+      `${idTag()}恰好一个素材位真正落位（预览内联图片 1 张、版本 bindings 1 条）`,
+      state.ui.images.length === 1 && state.disk.ok && (state.disk.meta.bindings || []).length === 1,
+      `预览图片=${state.ui.images.length} 张；bindings=${state.disk.ok ? JSON.stringify((state.disk.meta.bindings || []).map((b) => b.slot)) : '(不可读)'}`,
+    )
+    check(
+      `${idTag()}素材位是开篇横图，不是照片位/角饰/分割线等额外素材`,
+      binds.length > 0 && binds.every((b) => !/photo|frame|deco|divider|heading/i.test(String(b.slot))),
+      `slots=${JSON.stringify(binds.map((b) => b.slot))}`,
+    )
+  }
   check(
     `${idTag()}成品 HTML 无外链资源（离线可渲染）`,
     state.disk.ok && !/src\s*=\s*["']https?:|url\(\s*["']?https?:/i.test(state.disk.html),
     `html 长度=${state.disk.ok ? state.disk.html.length : -1}`,
   )
-  for (const c of factChecks(state.ui.article, srcTitle, { expectTitle: plan.title, limit180: wordLimit, tag: idTag() })) check(c.id, c.pass, c.evidence)
+  // 固定事实核对：只有"与 L1/L7 同一组固定事实"的题面才走 factChecks。
+  // F1 的 G2a/G3 是另外的材料，套 L1 的事实断言必然假红，所以传 `facts:'l1'` 才走这条。
+  if (!grounding || grounding.facts === 'l1') {
+    for (const c of factChecks(state.ui.article, srcTitle, { expectTitle: plan.title, limit180: wordLimit, tag: idTag() })) check(c.id, c.pass, c.evidence)
+  }
+  // F1 内容判定：给定事实保留 / 未给依据的规则不得补写（读的是成品正文，不是产品侧的阻断）
+  if (grounding) {
+    const body = norm(state.ui.article ? state.ui.article.bodyText : '')
+    for (const [label, needle] of grounding.required || []) {
+      check(`${idTag()}材料给的信息被保住：${label}`, body.includes(norm(needle)), `查「${needle}」，读数 ${body.length} 字`)
+    }
+    for (const [label, needle] of grounding.forbidden || []) {
+      const hit = body.includes(norm(needle))
+      check(`${idTag()}没有补写材料未给的规则：${label}`, !hit, hit ? `正文里出现了「${needle}」` : `未出现「${needle}」`)
+    }
+  }
   if (minWords) {
     const chars = norm(state.ui.article ? state.ui.article.bodyText : '').length
     check(`${idTag()}正文不少于 ${minWords} 字（长文口径）`, chars >= minWords, `实际 ${chars} 字`)
@@ -1755,7 +1851,9 @@ async function runWritePhase(ctx, app, kind, plan, opts = {}) {
   // 字数口径随题面走：L2 是"≤180 字"的短通知，L8 是"300–500 字"的收缩稿。
   // 写死 180 会把一条**按题面完全正确**的收缩稿判红（2026-10-02 实测踩到：L8 交 399 字被判超限，
   // 模型是照题面写的，红的是驱动这边的口径）。
-  const wordLimit = opts.wordLimit || 180
+  // `null` = **本题面没有字数要求**（F1 的 G2b"只改标题"正文必须原样保留，套 180 会假红）——
+  // 所以判据是"传没传"，不是 `||`（`||` 会把显式的 null 也变成 180，同一个坑再踩一次）。
+  const wordLimit = opts.wordLimit === undefined ? 180 : opts.wordLimit
   const prev = latestBaseline()
   if (!prev) {
     block('baseline', `找不到可比较的上一版基准（baselines.json 里没有任何"检查全过"的成功版本）——请先用同一个 --root 跑 L1`)
@@ -1825,6 +1923,36 @@ async function runWritePhase(ctx, app, kind, plan, opts = {}) {
   // ⚠️ 下面三条是 **L2 专属**语义（"只改文字"才要求标题/正文/源文都变）。
   // L4 的要求正好相反（"标题和全部正文保持原样"），套在 L4 上必然假红——
   // 2026-10-02 真机链路上 L4 明明红着这几条、产品却完全正确（新画已派发、素材内容确实不同、文本逐字未变）。
+  // F1 的 G2b（只改标题）：与 L2/L8 **正好相反**——正文必须**逐字保持**，只有标题变。
+  // 两条路的断言不能共用（共用必然假红，2026-10-02 在 L4 上踩过同类）。
+  if (kind === 'G2B') {
+    const sansHeading = (a) => {
+      if (!a) return null
+      const t = norm(a.bodyText)
+      const h = norm(a.firstHeadingText)
+      return h && t.includes(h) ? t.replace(h, '') : t
+    }
+    check(
+      `${idTag()}预览标题节点确实变化且等于新标题`,
+      norm(after.ui.article ? after.ui.article.firstHeadingText : '').includes(norm(plan.title)) &&
+        after.ui.article &&
+        after.ui.article.titleNodeMatched &&
+        norm(after.ui.article.firstHeadingText) !== norm(before.ui.article ? before.ui.article.firstHeadingText : ''),
+      `标题节点「${clip(before.ui.article ? before.ui.article.firstHeadingText : '', 40)}」→「${clip(after.ui.article ? after.ui.article.firstHeadingText : '', 40)}」`,
+    )
+    check(
+      `${idTag()}源文标题行也变了（不是只改了预览）`,
+      norm(srcTitle).includes(norm(plan.title)) &&
+        norm(srcTitle) !== norm(before.disk.ok ? firstSourceTitle(before.disk.source) : ''),
+      `源文标题行=「${clip(srcTitle, 60)}」`,
+    )
+    check(
+      `${idTag()}正文逐字保持（去掉标题节点后与改前一致——"保留原文"不等于"认证原文事实"）`,
+      sansHeading(before.ui.article) !== null && sansHeading(after.ui.article) === sansHeading(before.ui.article),
+      `${before.ui.article ? before.ui.article.bodyChars : -1} 字 → ${after.ui.article ? after.ui.article.bodyChars : -1} 字`,
+    )
+  }
+
   if (kind === 'L2' || kind === 'L8') {
     check(
       `${idTag()}预览标题节点确实变化且等于新标题`,
@@ -1862,7 +1990,7 @@ async function runWritePhase(ctx, app, kind, plan, opts = {}) {
       '图片是 SVG 经 canvas 光栅化后的结果，光栅化不保证逐字节稳定，因此"素材没变"一律以版本 meta 的 bindings/snapshots 哈希为准。',
   )
 
-  if (kind === 'L2' || kind === 'L8') {
+  if (kind === 'L2' || kind === 'L8' || kind === 'G2B') {
     check(
       `${idTag()}gen_svg=0（只改文字，没有重新画图）`,
       recon.countedGenSvg === 0 && recon.phases.every((p) => p !== 'gen_svg'),
@@ -2763,6 +2891,11 @@ async function main() {
     else if (phase === 'L8') await runWritePhase(ctx, app, 'L8', plan, { wordLimit: 500 })
     else if (phase === 'L5') await runL5(ctx, app)
     else if (phase === 'L6') await runL6(ctx, app)
+    // F1 三组样本（2026-10-03 用户明文授权真实小样）
+    else if (phase === 'G1') await runFirstPhase(ctx, app, plan, 'G1', { wordLimit: 1200, minWords: 800, grounding: GROUNDING.G1 })
+    else if (phase === 'G2A') await runFirstPhase(ctx, app, plan, 'G2A', { wordLimit: 1200, grounding: GROUNDING.G2A, expectAssets: null })
+    else if (phase === 'G3') await runFirstPhase(ctx, app, plan, 'G3', { wordLimit: 1200, grounding: GROUNDING.G3, expectAssets: null })
+    else if (phase === 'G2B') await runWritePhase(ctx, app, 'G2B', plan, { wordLimit: null })
     run.executedCases = [phase]
   } catch (e) {
     fail('phase', `${String(e && e.stack ? e.stack.split('\n').slice(0, 2).join(' | ') : e)}`)

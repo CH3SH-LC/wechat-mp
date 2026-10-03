@@ -70,6 +70,11 @@ export const PREP_INSTRUCTION =
   'finish_preparation 的取值：只是回答/澄清 → outcome=reply 并把答复写进 text；' +
   '需求已明确、由系统撰写 → outcome=compose；你已经写好了完整正文 → outcome=candidate 并把完整 v2 正文放进 source。' +
   '若本回合只是改文字、现有配图与其引用保持不动 → assetPolicy=preserve；本回合要修改或新增素材 → assetPolicy=modify。' +
+  // 2026-10-03 真机（F1 的 G1）实测：模型想要"一边声明 compose 一边附一句说明"，
+  // 于是把 `text` 也塞进 compose 的参数里，被契约整条拒绝（outcome=compose 与 text 互斥），
+  // 本回合 0 产出。契约本身是对的（不能猜"以谁为准"），缺的是**把互斥说白**——原来的清单
+  // 只罗列三种 outcome，没说 compose/candidate 不许带 text。这里补一句，不放松任何校验。
+  '**compose 与 candidate 都不接受 text 字段**（要附说明就用 outcome=reply）；三者的字段互斥，带了会被整条拒绝。' +
   '不要只回复 READY 之类的控制词，也不要只给正文而不声明结果。' +
   // F1（2026-10-03）：**无论走哪条出口**都要守同一条边界。这一段必须在 prep 指令里出现，
   // 因为 prep 的候选正文（outcome=candidate）**不经过 WRITE**，是它自己直接进交付门禁的——

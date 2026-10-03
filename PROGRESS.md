@@ -5,6 +5,37 @@
 ---
 ## 2026-10-03
 
+### [Verify][Fix] F1 真实模型小样（用户明文授权「明文写入，允许授权api做测试」）
+
+- **授权与口径**：用户原话已明文记入 [REQUIREMENTS](REQUIREMENTS.md)。密钥口径不变——只从环境变量 / 应用本机设置 /
+  旧 `~/.dsh/.credentials.yaml` 兼容路径读取，**没有写进任何文件**。仍走既有有界预算与全局账本，不重置、不改计费。
+- **驱动**：`live-acceptance.mjs` 新增 `G1`/`G2A`/`G2B`/`G3` 四个 phase（**只改验收脚本**）。G1 逐字同 L7 题面
+  （同一输入的前后对照）；G2B 接在 G1 的稿上；G2A/G3 各用新 root。判定读**成品正文**，不在产品侧加任何阻断。
+- **结果**：
+  - **G1 PASS**：993 字（题面 800–1200）、四事实齐全、恰一张开篇横图、accepted+verified；
+    **11 条"材料未给的规则"逐条未出现**（恢复正常/清场/告示/续借/顺延/储物格/插座/服务台/"学校统一安排"/值守/预约）。
+    对照 2026-10-02 同一题面的成品补了 **13 条**。
+  - **G2B**：标题改、**正文 993→993 字逐字保持**、gen_svg=0、素材身份与快照哈希逐项不变——功能全通过。
+    唯一红是**驱动自己的口径错**：把 L2 的 `≤180 字` 默认套到"无字数要求"的题面上。判据已改
+    （`opts.wordLimit === undefined` 才用 180，G2B 传 `null`），**没有重跑**——按样本卡"不为修 runner 判据重新创作基线"，
+    重跑会因标题已改变成状态假红（同 2026-10-02 L8 那次）。
+  - **G2A / G3 FAIL（模型协议错误，不是依据边界问题）**：模型输出 `finish_preparation{outcome:'compose', text:…}`，
+    被互斥契约整条拒绝，**本轮 0 产出**、旧稿未被动。契约是对的（指南 §5.3 禁止猜"以谁为准"）。
+- **一次已做的修补与停止线**：首次 G1 尝试也是同一形状，判断根因是 `PREP_INSTRUCTION` 没写明
+  "compose/candidate 不接受 text"→ 补了那一句，按铁律 7 重建（exe `c86f5059…`，并核对这句确实进了
+  `dist/assets/index-*.js`）。**新 exe 上 G2A、G3 仍复现**→ 按任务卡「连续两次同因失败即停修补循环，交最小反例转诊断」**停手**，
+  不再改提示词；两个触发题面、观测与"看不到模型塞进 text 的原话"（Rust 只存工具名不存参数）都写进了证据 README，
+  并登记为待办 **T3**。
+- **花费**：账本 `89/16 → 101/17`（+12 派发 / +1 绘图；G1 首次 2 + G1 复验 3（含 1 绘图）+ G2B 2 + G2A 3 + G3 2）。
+  失败后退避走既有 `--resume-after-fix` 并写明理由；G2A 的失败标记**如实保留未解除**。
+- **回归**：改 `prep.ts` 后重跑全量零模型——`tsc` 干净、F1 harness **67/67**、verify-ui **134/134**、
+  delivery-quality 123/123、trace 107/107、compose 98/98、budget 91/91、asset-resolve 86/86、ipc-gate 67/67、
+  live-driver 42/42、ledger-finalize 39/39、progress 36/36、runner-negative 34/34、fact-assert 30/30、
+  svg-quality 20/20、export-paging 16/16、raster 8/8，prep-contract / repair-flow / preview-resource PASS。
+  （`runner-negative` 一次 31/34 是**我自己把两次运行写进同一个 `--out` 目录**造成的 EEXIST，换新目录后 34/34。）
+- **产物**：exe `c86f5059ca42fc115f8cb18e0f337bbf24e3d2f5a508a9ac890a220dd26ff840`（含 prep 那句修补），
+  已在 [F1 证据](docs/artifacts/2026-10-03-f1-grounding/README.md) 第七节与 [REQUIREMENTS](REQUIREMENTS.md) 同步。
+
 ### [Fix][Change] F1 全入口遵守材料依据边界（提示词与知识范例；零模型验收）
 
 - **问题 / 动机**：2026-10-02 的真实成品 L7/L8（隔离 root `wxmp-live-r10-1790955871`）里出现了**材料根本没给**的机构规则——
@@ -46,9 +77,11 @@
 
 ### [Build] F1 变更后的 release 重建与隔离冒烟
 
-- 产品源码（persona / prep / revise / App / 知识范例）变更后按铁律 7 重建**一次**（不因每改一句提示就重跑一轮真机）：
-  `pnpm tauri build --bundles nsis`，产物 `wechat-mp-desktop.exe` sha256 `431cba52…`、
-  `智序_0.1.0_x64-setup.exe` sha256 `8bf85772…`（4,603,853 字节）；上一版验收 exe 是 `b3cbb966…`。
+- 产品源码（persona / prep / revise / App / 知识范例）变更后按铁律 7 重建：`pnpm tauri build --bundles nsis`。
+  第一次产物 `wechat-mp-desktop.exe` sha256 `431cba52…`（上一版验收 exe 是 `b3cbb966…`）；
+  真实小样首次 G1 暴露"模型把 text 塞进 compose"后补了一句提示词，**按同一条铁律再重建一次**，
+  最终 `c86f5059ca42fc115f8cb18e0f337bbf24e3d2f5a508a9ac890a220dd26ff840`
+  （第 2–4 个真实样本用的都是它；这句话确实进了 `dist/assets/index-*.js`）。
 - 隔离冒烟 `release-smoke` **PASS**：窗口标题由**操作系统**读取确认为「智序 · 公众号推文助手」、
   隔离工作区由应用自动建立且为空、**真实工作区逐文件哈希未变**（新增 0 / 删除 0 / 修改 0）、
   本轮自有 PID 按启动身份核验后走应用自身退出路径关闭（`via=wm-close`，`forced=false`）。
