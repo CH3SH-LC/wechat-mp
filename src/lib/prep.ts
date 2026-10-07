@@ -112,6 +112,60 @@ export const PREP_CORRECTION =
   '不要再只回复 READY，也不要只贴正文。'
 
 
+// 终结工具**参数被拒**时的一次有界纠偏（2026-10-08，T3）。
+//
+// 与上面 `PREP_CORRECTION` 的区别：那条处理"模型走旧协议、只回自由文本"；这条处理"模型用了
+// finish_preparation，但参数不符合契约"。两者**共用同一个总额预算与同一个 corrected 标志**（至多一次）。
+//
+// 为什么这里不改参数就够用：模型这次真的发起了工具调用，"调用被拒"本来就该以 **tool 结果** 的身份回去，
+// 而不是被 `return` 吞掉（旧实现正是吞掉的：模型永远不知道自己的调用被拒绝，剩余预算直接作废，
+// F1 的 G2A/G3 各复现一次 0 产出）。所以这里只做两件机械的事——把校验器的**原错误串**和
+// "请重新声明"的选项播回去；**一个字都不改**它发来的 arguments。
+export const PREP_FINISH_REJECT_MARKER = 'finish_preparation 调用被拒绝'
+
+function finishArgsCorrection(error: string): string {
+  return (
+    `${PREP_FINISH_REJECT_MARKER}：${error}\n` +
+    '请**重新调用一次** finish_preparation 声明本回合结果（不要重写正文、也不要在同一条回复里再调用知识工具）：' +
+    '只是回答/澄清 → outcome=reply（答复放进 text）；需求已明确、由系统撰写 → outcome=compose（**不要带 text 字段**）；' +
+    '你已经写好了完整正文 → outcome=candidate（正文放进 source，**不要带 text 字段**）。'
+  )
+}
+
+/**
+ * 这条终结参数错误**是否属于可纠正的一类**（2026-10-08，T3）。
+ *
+ * 判据是**结构**的，与用户意图无关，也不读任何对话状态：`outcome` 是合法值（compose / candidate），
+ * 却带了只属于 reply 的 `text`——即 F1 观测到的真实失败形状
+ * `finish_preparation { outcome:"compose", text:…, assetPolicy:… }`。
+ *
+ * 它**只回答"要不要再问一次"**，绝不产出结果：本函数返回 true 时，参数**仍然**被 `parseFinishArgs`
+ * 拒绝；纠偏只是把拒绝的事实播回给模型，让它自己重新声明（是 reply 还是 compose，由模型决定——
+ * 前端不猜、也不替它删字段）。这也正是"协议负例可以被机械识别与有界纠偏，用户意图仍交模型判断"。
+ *
+ * 判据只看**一个结构事实**：合法 outcome（compose / candidate）携带只属于 reply 的 `text`。
+ * 因此它与其它错误的**复合**同样会走纠偏（例如同一条里还缺 `assetPolicy`）——纠偏只把"调用被拒"
+ * 播回去，不替模型补字段、不放松校验，代价是至多一次有界请求。2026-10-08 独立复核指出这一点，
+ * 原先的注释把它写成"不覆盖 assetPolicy"，与代码不符，已改正（行为未变）。
+ *
+ * **单独出现**（不带 `text`）的形状一律**不**纠偏，继续"一次即失败"（无真实复现，且扩面会让回归不可控）：
+ * 缺/非法 `assetPolicy`、`reply`+`source` 互斥、未知 `outcome`、`source` 为空或围栏不成对、
+ * 知识工具与终结工具混用、多个终结工具。
+ */
+export function isCorrectableFinishError(args: string): boolean {
+  let j: unknown
+  try {
+    j = JSON.parse(args || '{}')
+  } catch {
+    return false
+  }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) return false
+  const o = j as Record<string, unknown>
+  if (o.outcome !== 'compose' && o.outcome !== 'candidate') return false
+  // 与 parseFinishArgs 判定"text 存在"的口径逐字一致（undefined / null 都算没有）
+  return o.text !== undefined && o.text !== null
+}
+
 // READY 后进入正文撰写的指令（由 App 在最终流式消息末尾追加；第 29 轮：允许正文前自然说明，不再强制"不要解释"）
 export const WRITE_INSTRUCTION =
   '开始撰写正文：正文放进一个 ```v2 围栏代码块（不要 ```html）。正文前可以用普通文字自然说明（写好了/按什么风格/采纳什么默认）。' +
@@ -405,8 +459,41 @@ export async function runPrep(
       return { mode: 'prep', kind: 'failed', failure: 'protocol', reason: `模型一次返回了 ${terminal.length} 个终结工具，无法判断以哪个为准` }
     }
     if (terminal.length === 1) {
-      const r = finishOutcome(terminal[0].args, digestOf())
-      return r ?? protocolFailure(terminal[0].args)
+      const args = terminal[0].args
+      const r = finishOutcome(args, digestOf())
+      if (r) return r
+      // --- 可纠正的终结参数错误（T3）：至多一次有界纠偏，占用同一总额预算 ---------------------------------
+      //
+      // 旧行为：`return protocolFailure(args)` —— 校验正确，但**拒绝被吞掉**：模型看不到任何反馈，
+      // 剩余预算全部作废（2026-10-03 真实小样 G2A、G3 各一次，0 产出）。
+      // 新行为：只对这一类**已知协议错误**（见 isCorrectableFinishError）把工具的拒绝**作为 tool 结果**
+      // 播回去，让模型自己重新声明；`!corrected` 保证整个准备回合至多纠偏一次（与旧协议文本纠偏共用），
+      // `callNo + 1 < MAX_PREP_CALLS` 保证**最后一轮不再纠偏**——总额仍是 3 次，没有第 4 次请求。
+      // 这里**不修改模型的 arguments**、不补默认值、不猜 outcome：合同一个字都没放松。
+      if (!corrected && callNo + 1 < MAX_PREP_CALLS && isCorrectableFinishError(args)) {
+        corrected = true
+        const parsed = parseFinishArgs(args)
+        const call = terminal[0]
+        // 模型的调用**原样**回填（同一个 id、同一串 arguments）——它必须能认出这是自己刚发的那次调用。
+        convo.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: [call].map(
+            (c): ChatToolCall => ({
+              id: c.id,
+              type: 'function',
+              function: { name: c.name, arguments: c.args },
+            }),
+          ),
+        })
+        convo.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: finishArgsCorrection(parsed.ok ? '参数不符合 finish_preparation 的约定' : parsed.error),
+        })
+        continue
+      }
+      return protocolFailure(args)
     }
 
     if (knowledge.length) {
