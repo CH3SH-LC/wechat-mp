@@ -2433,19 +2433,27 @@ async function runL6(ctx, app) {
     decodeResults.map((d) => `${d.name}:${d.ok ? `${d.w}x${d.h}` : 'decode失败'}`).join(' | '),
   )
   if (longInfo && longInfo.ok) {
-    const expectPages = Math.ceil(longInfo.height / 2000)
-    const heightsOk = pageNames.every((n, i) => {
-      const info = infos.find((x) => x.name === n)
-      return info && info.height === Math.min(2000, longInfo.height - i * 2000)
-    })
+    // 2026-10-08（父协调者集成 · B 路安全分页的跨文件后果）：
+    // 旧断言写死了**实现细节**——`页数 = ceil(长图高/2000)` 且每页高 `= min(2000, 剩余)`。
+    // 安全分页把切点改成由**内容边界**决定（不穿过文字行/插画），页高因此不再等高，旧公式必红；
+    // 而且它本来就断言不了"分页对不对"，只断言了"切法是不是那一种"。
+    // 改为断言分页真正要保证的不变式：各页高度之和**恰等于**长图高（连续覆盖 = 无缺页、无重复、无空隙），
+    // 且每页高度为正。旧等高实现同样满足这条（它没坏在拼接上），所以这不是"为了转绿而放松"——
+    // 它只是不再把某一种切法当成合同。
+    const pageInfos = pageNames.map((n) => infos.find((x) => x.name === n))
+    const pageHeights = pageInfos.map((i) => (i ? i.height : NaN))
+    const pageSum = pageHeights.every((h) => Number.isFinite(h)) ? pageHeights.reduce((a, b) => a + b, 0) : NaN
     check(
-      `${idTag()}分页无缺漏（页数 = ceil(长图高/2000)，每页高度符合切分口径）`,
-      pageNames.length === expectPages && heightsOk,
-      `长图 ${longInfo.width}x${longInfo.height}；期望 ${expectPages} 页，实际 ${pageNames.length} 页：${JSON.stringify(infos.filter((i) => /-\d+\.png$/.test(i.name)).map((i) => i.height))}`,
+      `${idTag()}分页严格连续拼接（页高之和 = 长图高；无缺页/重复/空隙；每页高为正）`,
+      pageInfos.every(Boolean) && pageHeights.every((h) => h > 0) && pageSum === longInfo.height,
+      `长图 ${longInfo.width}x${longInfo.height}；${pageNames.length} 页，页高=${JSON.stringify(pageHeights)}，合计=${pageSum}`,
     )
     observe(
-      `${idTag()}分页覆盖范围`,
-      `本次短文长图 ${longInfo.width}x${longInfo.height}px、分页 ${pageNames.length} 页：**只证明${pageNames.length === 1 ? '单页' : '这一次的分页'}情形**，多页边界（溢出页）仍需确定性长文夹具验证，不能据此声称覆盖多页分页。`,
+      `${idTag()}分页切点与覆盖范围`,
+      `页高由内容驱动的安全切点决定（不再是固定 2000 设备像素），本次页高=${JSON.stringify(pageHeights)}。` +
+        `单页高超出目标页高**只应**出现在"不可分割块高于一页"的超高页；本行只观测不判定` +
+        `（切点精度与超高页原因由 export-paging-check 的夹具断言承载）。` +
+        `本次只证明${pageNames.length === 1 ? '单页' : '这一次的分页'}情形，多页边界仍需确定性长文夹具验证，不能据此声称覆盖多页分页。`,
     )
   }
 
