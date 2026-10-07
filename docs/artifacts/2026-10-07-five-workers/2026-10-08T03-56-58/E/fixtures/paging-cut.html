@@ -1,0 +1,22 @@
+<section style="padding:18px 16px;">
+  <h2 style="font-size:22px;line-height:1.4;margin:0 0 14px;color:#0c5c57;">E 复核分页夹具：连续正文 + 一张跨页插画</h2>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">这一段是普通正文，用来制造连续的文本行盒。连续文本的行盒首尾相接，因此任意一条水平切线与一段连续文本相交时，几乎必然落在某一个行盒内部，从而把该行文字切成上下两半。这正是需要被独立核对的判据：一张分页图的切口不得穿过任何一个文字行盒，也不得穿过任何一张插画的图形盒。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第二段继续延展正文的高度，让第一个千像素切点落在这一段内部而不是段落之间的空白处。段落越多，切点落在行盒内部的概率越高；同一段文本只要跨过切点，就一定会被切开，因为行盒之间没有可用的水平空隙可供选择。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第三段正文继续堆叠高度。判据不依赖具体的像素数值，而依赖一个与实现无关的性质：切点是否位于某一行盒的开下界与闭下界之间。只要存在这样的切点，就可以断定分页在图三是不可读的。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第四段：把正文高度推到第一个千像素边界附近，并让随后的插画块落在第二个边界的附近，以便同时检查文字行与插画两条判据。</p>
+  <svg xmlns="http://www.w3.org/2000/svg" width="343" height="420" style="display:block;width:343px;height:420px;margin:14px 0;border:1px solid #0f766e;"><rect width="343" height="420" fill="#eef7f6"/><circle cx="170" cy="200" r="110" fill="#0f766e" opacity="0.25"/><text x="171" y="210" font-size="34" text-anchor="middle" fill="#0c5c57">插图</text></svg>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">插画之后的正文继续填高版面。文字与插画各自成盒，切口一旦落在盒内就不再是"页边界"而成了"内容截断"，读者在手机上看到的会是被腰斩的一行字或半张图。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">再补几段正文，确保总高度超过三个千像素切点，使三个切点都有机会落在内容内部，而不是只有首尾两种情况。段落的高度由字号与行高决定，与具体文案无关。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第七段：这一段用来把版面高度推进到第二个千像素切点之后，并尽量让切点落在行盒内部，而不是落在段落间距或图片的外边距里。</p>
+  <svg xmlns="http://www.w3.org/2000/svg" width="343" height="300" style="display:block;width:343px;height:300px;margin:14px 0;border:1px solid #d4b45a;"><rect width="343" height="300" fill="#fff8e6"/><text x="171" y="160" font-size="34" text-anchor="middle" fill="#7a5a12">第二张插图</text></svg>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第八段：第二张插画之后继续写正文，把版面推过第三个千像素切点。第三张分页图的目标高度约一千像素，若第三个切点落在正文行盒内部，则第三页的顶行同样是被截断的残行。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第九段：正文继续。为了不依赖运气，本夹具先用足够多的连续段落把切点埋进行盒内部；具体的命中数量由运行时的行盒测量给出，不由夹具作者声称。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十段：收尾正文，确保第四个千像素切点之内仍有文字行可供检查，从而观察到"每一页都从被切开的行开始"这一现象。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十一段：继续收尾。到此为止的段落足以覆盖三个以上切点；接下来的测量会逐条列出每个切点落在哪个元素的盒内，作为"文字行被切断"的直接证据。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十二段：最后一段正文。夹具到此结束，之后没有更多内容，末页允许不满一整页，但不允许为空。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十三段：继续加高版面，让第四个千像素切点也落在正文内部。每一段的行盒都是首尾相接的，因此切点只能落在某一个行盒里面，或者恰好落在段落之间的外边距里；后者纯属版面高度的巧合，并不是切点算法主动选择了安全位置。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十四段：这一段继续延长正文，使得第三个千像素切点附近仍有连续文字，便于观察切口是否落在行盒内部。判据与文案无关，只与行盒的上下界有关。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十五段：正文继续。分页设计的目标是让每一页都从自然的行间空隙开始，而不是从一行文字的中间开始；因此切点必须由版面结构决定，不能由固定的像素等差决定。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十六段：再补一段，把总高度推过第四个千像素切点，确保至少有一个切点与文字行盒相交，从而构成决定性的反例。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第十七段：收尾。到此为止，夹具已经覆盖了连续的正文段落与两张固定高度的插画块，足以检验"切点是否穿过内容"这一条判据。</p>
+</section>

@@ -1,0 +1,582 @@
+// prep.ts —— 创作前置"模型选知识"回合（第 25 轮）
+// 本文件不是对话状态机：它是"模型发起 tool_calls → 前端机械执行本地工具 → 回传 tool 结果"的
+// 确定性工具取用循环，仅在模型要求时发生，不改变用户可见的对话回合（用户消息不被阻挡）。
+// 浏览器模式不调用（直接返回 { mode:'skip' }），E2E mock 语义不变。
+import { invoke } from '@tauri-apps/api/core'
+import { ChatMsg, ChatToolCall, inTauri } from './chat.ts'
+import { runKnowledgeTool } from './retrieval.ts'
+import { assetLine, categoryKey, searchAssets } from './asset-library.ts'
+import type { ProgressFn } from './progress.ts'
+import { prepToolLabel } from './progress.ts'
+import { trace } from './trace.ts'
+// 共同「材料依据边界」的**唯一定义**在 persona.ts；本文件的各条指令只引用同一句短引用，
+// 不另抄一份长规则（多份口径必然漂移，漂移的那份就是漏检的那条路）。
+import { MATERIAL_GROUNDING_REF } from './persona.ts'
+
+export interface PrepReply {
+  text: string | null
+  calls: { id: string; name: string; args: string }[]
+  /** 服务端回显的模型名；没返回就是 null（unknown，不补默认值） */
+  model?: string | null
+  /** 结束原因（stop / length / tool_calls…）；没返回就是 null */
+  finishReason?: string | null
+  /** token 用量；服务端没给就是 null——**不写成 0**（那会把"没拿到"说成"没花钱"） */
+  usage?: { prompt?: number | null; completion?: number | null; total?: number | null } | null
+}
+
+/** 本回合素材怎么处理（由模型在 finish_preparation 里声明，**不由前端关键词猜**） */
+export type AssetPolicy = 'preserve' | 'modify'
+
+/** 准备阶段失败的原因分类（与"模型在澄清"不是一回事——失败不产生任何写作授权） */
+export type PrepFailure =
+  /** 预算内始终没拿到合法的终结结果 */
+  | 'exhausted'
+  /** 拿到了终结工具但参数非法（未知 outcome / candidate 没有正文 / 多个终结工具） */
+  | 'protocol'
+
+/**
+ * 准备阶段的结果。**判别联合**替换了旧的 `ready?: boolean + text?: string`——
+ * 后者把"模型在澄清""模型要写稿""模型已经写好稿""准备失败"四种情况挤进两个可选字段，
+ * 调用方只能靠猜（实测 F2/F3：完整 v2 回复被 `ready:false` 分支当成聊天存下来，文稿版本原地不动）。
+ */
+export type PrepOutcome =
+  | { mode: 'skip' }
+  /** 模型选择普通答复/澄清：**不写稿、不提交文稿** */
+  | { mode: 'prep'; kind: 'reply'; text: string; digest?: string }
+  /** 模型选择写作：由应用发起一次正文撰写 */
+  | { mode: 'prep'; kind: 'compose'; digest?: string; assetPolicy: AssetPolicy; echoedBaseRevisionId?: string }
+  /** 模型已经给出完整正文：**直接进入统一交付流程**，不再花一次请求重写同稿 */
+  | { mode: 'prep'; kind: 'candidate'; source: string; digest?: string; assetPolicy: AssetPolicy; echoedBaseRevisionId?: string }
+  /**
+   * 准备失败：分类报告，保留旧成品，**不自动获得写作授权**。
+   * `raw` 是模型那一段**没有形成合法终结**的原文（指南 §5.2："旧完整稿不得丢弃"）——
+   * 调用方应把它作为聊天记录展示，而不是静默吞掉。
+   */
+  | { mode: 'prep'; kind: 'failed'; failure: PrepFailure; reason: string; raw?: string }
+
+// 准备阶段对模型的约束（第 29 轮：理解型澄清 + 创作必取引擎协议；是否明确由模型判断，允许跨轮追问）
+// 2026-09-29：终结方式改为**结构化工具** finish_preparation。旧写法"只回复 READY"要求整串精确相等，
+// 模型带一句说明就落空（实测：真实续改连续两次因此提前结束，成品版本一动没动）。
+export const PREP_INSTRUCTION =
+  '创作类请求的处理方式：先用知识工具取用点文件——必取 排版引擎/engine-write-protocol（本地渲染引擎协议：v2 语法/美术占位/风格声明/质量底线），' +
+  '再按需取 内容类型(type-*)、风格(style-*)、合规(comp-*)、文案(copy-*) 等本次创作真正用到的点；' +
+  '**这些点尽量一次性并列取全**（同一条回复里可以同时调用多个知识工具）。' +
+  '**知识工具与 finish_preparation 不能出现在同一条回复里**（混用会被系统按协议错误整条拒绝）：' +
+  '先把资料取完，**取完之后的下一条回复**再调用 finish_preparation 声明结果。' +
+  '**准备阶段能发出的请求次数有限（含本次共 3 次），所以要一次取够、尽快声明**：' +
+  '如果到最后一轮还在取资料、始终没有声明，整个准备阶段就会失败，本轮不会产出任何文稿。' +
+  '取完后若仍有影响成稿的关键点没弄清楚，就在 finish_preparation 里用 outcome=reply 把问题写进 text 交给用户，等用户回答——' +
+  '**不要用"再取一轮资料"代替提问**。' +
+  'finish_preparation 的取值：只是回答/澄清 → outcome=reply 并把答复写进 text；' +
+  '需求已明确、由系统撰写 → outcome=compose；你已经写好了完整正文 → outcome=candidate 并把完整 v2 正文放进 source。' +
+  '若本回合只是改文字、现有配图与其引用保持不动 → assetPolicy=preserve；本回合要修改或新增素材 → assetPolicy=modify。' +
+  // 2026-10-03 真机（F1 的 G1）实测：模型想要"一边声明 compose 一边附一句说明"，
+  // 于是把 `text` 也塞进 compose 的参数里，被契约整条拒绝（outcome=compose 与 text 互斥），
+  // 本回合 0 产出。契约本身是对的（不能猜"以谁为准"），缺的是**把互斥说白**——原来的清单
+  // 只罗列三种 outcome，没说 compose/candidate 不许带 text。这里补一句，不放松任何校验。
+  '**compose 与 candidate 都不接受 text 字段**（要附说明就用 outcome=reply）；三者的字段互斥，带了会被整条拒绝。' +
+  '不要只回复 READY 之类的控制词，也不要只给正文而不声明结果。' +
+  // F1（2026-10-03）：**无论走哪条出口**都要守同一条边界。这一段必须在 prep 指令里出现，
+  // 因为 prep 的候选正文（outcome=candidate）**不经过 WRITE**，是它自己直接进交付门禁的——
+  // 只在 WRITE/修订里提醒，就会漏掉本轮真实反例的首发入口。
+  '另外，无论你声明 compose 还是直接提交 candidate，都遵守' + MATERIAL_GROUNDING_REF +
+  '不要把知识示例（内容类型骨架、风格与视觉规范里的例子）当成用户资料；' +
+  '非必要的缺项可以省略，确实必要的未知才用 outcome=reply 问作者，不要为了凑字数或凑结构补定机构规则。'
+
+// 最后一轮的**预算提醒**：仅当本次是准备阶段最后一次请求时追加。
+//
+// 为什么需要它（2026-10-02 真机实测）：同题面在验收版上跑过 3 个会话，termination 恰好都落在
+// 第 3 次——预算是**零余量**的。当天用默认发布版跑 L1 时，模型三轮全花在 load_knowledge/search_knowledge 上、
+// 一次 finish_preparation 都没调用，整个准备阶段按设计耗尽失败（证据：`%TEMP%/wxmp-live-r6-*/evidence/L1-*/`）。
+//
+// 这不是放宽契约（总额仍是 3 次，也没有第 4 次），而是把**本来就存在的硬上限**如实说明白；
+// 它由"这是第几次请求"这个**执行计数**触发，不读任何对话意图、不做任何路由——
+// 与既有 `PREP_CORRECTION`（旧协议纠偏）是同一类有界提示，不是前端对话状态机（项目铁律 6）。
+export const PREP_LAST_ROUND_REMINDER =
+  '这是准备阶段的**最后一次请求**：不要再调用任何知识工具，现在就调用 finish_preparation 声明本回合结果。' +
+  '按你已经掌握的信息判断：需要用户补充信息 → outcome=reply 并把问题写进 text；' +
+  '信息够了、由系统撰写 → outcome=compose；你自己已经写好完整正文 → outcome=candidate。' +
+  '只回文字不声明结果会被判为准备失败，本轮不会产生任何文稿。' +
+  // 「最后一次请求」的紧迫感不能被读成"必须把信息补全"——边界照旧：材料没给的具体规则不补写。
+  '最后提醒一句：' + MATERIAL_GROUNDING_REF + '时间紧也不要把没材料依据的规则写进去。'
+
+// 兼容期提示：模型走了旧协议（只回 READY / 只贴一段正文）时，用**同一总额预算内的一次**请求请它规范声明。
+//
+// 指南 §5.2 的硬要求："纠偏要求声明**现有稿**的结果与素材策略"，且"旧完整稿不得丢弃或为确认再重写"——
+// 所以这里反复强调"原样放进 source、不要重写"，否则模型会借纠偏再做一次全文重写（白花钱且可能改坏事实）。
+export const PREP_CORRECTION =
+  '请改用 finish_preparation 工具**声明你刚才那份内容**的结果，不要重写、不要加长、不要再贴一遍全文：' +
+  '刚才那段只是回答/澄清 → outcome=reply（原文放进 text）；委托系统撰写 → outcome=compose；' +
+  '刚才那段就是完整正文 → outcome=candidate（原样放进 source，不要带 ``` 围栏）。' +
+  '并声明 assetPolicy（只改文字、现有配图保持不动 → preserve；本回合要改/加素材 → modify）。' +
+  '不要再只回复 READY，也不要只贴正文。'
+
+
+// 终结工具**参数被拒**时的一次有界纠偏（2026-10-08，T3）。
+//
+// 与上面 `PREP_CORRECTION` 的区别：那条处理"模型走旧协议、只回自由文本"；这条处理"模型用了
+// finish_preparation，但参数不符合契约"。两者**共用同一个总额预算与同一个 corrected 标志**（至多一次）。
+//
+// 为什么这里不改参数就够用：模型这次真的发起了工具调用，"调用被拒"本来就该以 **tool 结果** 的身份回去，
+// 而不是被 `return` 吞掉（旧实现正是吞掉的：模型永远不知道自己的调用被拒绝，剩余预算直接作废，
+// F1 的 G2A/G3 各复现一次 0 产出）。所以这里只做两件机械的事——把校验器的**原错误串**和
+// "请重新声明"的选项播回去；**一个字都不改**它发来的 arguments。
+export const PREP_FINISH_REJECT_MARKER = 'finish_preparation 调用被拒绝'
+
+function finishArgsCorrection(error: string): string {
+  return (
+    `${PREP_FINISH_REJECT_MARKER}：${error}\n` +
+    '请**重新调用一次** finish_preparation 声明本回合结果（不要重写正文、也不要在同一条回复里再调用知识工具）：' +
+    '只是回答/澄清 → outcome=reply（答复放进 text）；需求已明确、由系统撰写 → outcome=compose（**不要带 text 字段**）；' +
+    '你已经写好了完整正文 → outcome=candidate（正文放进 source，**不要带 text 字段**）。'
+  )
+}
+
+/**
+ * 这条终结参数错误**是否属于可纠正的一类**（2026-10-08，T3）。
+ *
+ * 判据是**结构**的，与用户意图无关，也不读任何对话状态：`outcome` 是合法值（compose / candidate），
+ * 却带了只属于 reply 的 `text`——即 F1 观测到的真实失败形状
+ * `finish_preparation { outcome:"compose", text:…, assetPolicy:… }`。
+ *
+ * 它**只回答"要不要再问一次"**，绝不产出结果：本函数返回 true 时，参数**仍然**被 `parseFinishArgs`
+ * 拒绝；纠偏只是把拒绝的事实播回给模型，让它自己重新声明（是 reply 还是 compose，由模型决定——
+ * 前端不猜、也不替它删字段）。这也正是"协议负例可以被机械识别与有界纠偏，用户意图仍交模型判断"。
+ *
+ * 故意**不**覆盖的形状（无真实复现，且扩面会让回归不可控）：
+ * 缺/非法 `assetPolicy`、`reply`+`source` 互斥、未知 `outcome`、`source` 为空或围栏不成对、
+ * 知识工具与终结工具混用、多个终结工具——这些继续走"一次即失败"。
+ */
+export function isCorrectableFinishError(args: string): boolean {
+  let j: unknown
+  try {
+    j = JSON.parse(args || '{}')
+  } catch {
+    return false
+  }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) return false
+  const o = j as Record<string, unknown>
+  if (o.outcome !== 'compose' && o.outcome !== 'candidate') return false
+  // 与 parseFinishArgs 判定"text 存在"的口径逐字一致（undefined / null 都算没有）
+  return o.text !== undefined && o.text !== null
+}
+
+// READY 后进入正文撰写的指令（由 App 在最终流式消息末尾追加；第 29 轮：允许正文前自然说明，不再强制"不要解释"）
+export const WRITE_INSTRUCTION =
+  '开始撰写正文：正文放进一个 ```v2 围栏代码块（不要 ```html）。正文前可以用普通文字自然说明（写好了/按什么风格/采纳什么默认）。' +
+  // F1：撰写阶段单独再点一次边界——本回合随附的知识摘要只约束写法，
+  // 不能因为"取过某份知识"就被当成事实授权。
+  MATERIAL_GROUNDING_REF + '知识摘要仍适用。'
+
+/** 准备阶段的**总额**预算：知识取用、空回复重试、协议纠偏共用它，不各自拥有三次 */
+export const MAX_PREP_CALLS = 3
+
+async function prepInvoke(messages: ChatMsg[], runId?: string): Promise<PrepReply> {
+  return await invoke<PrepReply>('prep_turn', { messages, runId: runId ?? null })
+}
+
+// V3-R3：search_assets 工具本地执行（个人素材库检索），返回给模型看的库条目清单。
+// 阶段 2：清单行与 libraryDigest **共用 `assetLine`**——两个入口给出不同口径，
+// 正是"模型照抄了 A 口径、解析器只认 B 口径"这类故障的温床。
+async function runPrepTool(call: { name: string; args: string }): Promise<string> {
+  if (call.name === 'search_assets') {
+    try {
+      const args = (JSON.parse(call.args || '{}') || {}) as Record<string, unknown>
+      const q = String(args.query ?? '').trim()
+      if (!q) return 'search_assets 缺少参数 query（描述想要什么素材）。'
+      const catRaw = String(args.category ?? '').trim()
+      const cat = catRaw ? categoryKey(catRaw) : undefined
+      const hits = await searchAssets(q, {
+        category: cat || undefined,
+        style: args.style ? String(args.style) : undefined,
+      })
+      if (!hits.length) {
+        return '个人素材库未检索到匹配素材。可改用 [[img]]/[[deco]] 占位（系统会先检索库、无命中则委托素材智能体现场制作并自动入库）。'
+      }
+      const lines = hits.map(assetLine)
+      return `个人素材库命中（风格只是参考，语义与安放位贴合即可用；**照抄每行末尾的「引用写法」即可，分类与 ID 都不要改写**）：\n${lines.join('\n')}`
+    } catch (e) {
+      return `素材库检索失败：${String(e)}`
+    }
+  }
+  return runKnowledgeTool(call)
+}
+
+/**
+ * 模型是否声明"可以开始撰写"。
+ *
+ * **只认整串 READY**——这是旧协议的兼容判据；带前置说明的 `说明 + READY` **不**算（实测故障：
+ * 正是这种带说明的回复让真实续改连续两次提前结束）。新协议下这句话由
+ * `finish_preparation { outcome }` 结构化表达，本函数只用于识别"模型还在讲旧协议"。
+ */
+export function isReadinessMarker(text: string): boolean {
+  return text.trim().toUpperCase() === 'READY'
+}
+
+/** 文本里**出现** READY 字样（含带说明的形态）。
+ *
+ * 指南 §5.2 之后它的用途**只剩一个**：判断"该请模型改用结构化结果"，也就是走一次协议纠偏。
+ * 它**不再**、也**不得**被用来推导"本回合要写稿"——历史创作状态或控制词都不构成创作授权。
+ */
+function mentionsReady(text: string): boolean {
+  return /\bREADY\b/i.test(text)
+}
+
+/**
+ * 从一段**自由文本**里取唯一一份完整 v2 正文（旧协议兼容用）：多份 / 不闭合 → null。
+ *
+ * 注意它只适用于"模型随口给了段文字"的场合。`finish_preparation` 的 `source` 参数**本身
+ * 就是正文**，不经这里——那里由 `v2SourceFromToolArg` 校验，否则正文里合法的一段
+ * ``` 代码块会把整份候选判成协议错误。
+ */
+export function extractV2Source(raw: string): string | null {
+  const s = String(raw || '')
+  const fences = [...s.matchAll(/```\s*v2\s*\n([\s\S]*?)```/g)]
+  if (fences.length > 1) return null
+  if (fences.length === 0) return null
+  const t = fences[0][1].trim()
+  return t || null
+}
+
+/**
+ * 校验 `finish_preparation { outcome:'candidate', source }` 里的正文本体。
+ *
+ * 与自由文本路径的区别：这里的入参**已经被模型声明为正文**，所以不需要（也不能）靠围栏
+ * 反推边界——正文里合法地可以含 ``` 代码块（compose 支持）。只做两项机械校验：
+ * 非空、且**围栏成对**（奇数个 ``` 说明有未闭合的围栏，本体边界可疑）。
+ *
+ * 指南 §5.3：**不做无依据的类型转换**。数字/对象一律判为非法，不再 `String(...)` 硬转——
+ * 把 `source: 123` 转成正文 `"123"` 会让一次协议错误变成一份以数字为正文的"成品"。
+ */
+export function v2SourceFromToolArg(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const t = raw.trim()
+  if (!t) return null
+  const fenceCount = (t.match(/```/g) || []).length
+  if (fenceCount % 2 !== 0) return null
+  return t.split(/\r?\n/).some((l) => l.trim().length > 0) ? t : null
+}
+
+/** 只剩**围栏**里的那份 v2（用于扫描模型自由回复）。不带围栏的自由文本不算"它给了稿子" */
+export function fencedV2Source(raw: string): string | null {
+  const s = String(raw || '')
+  if (!/```/.test(s)) return null
+  return extractV2Source(s)
+}
+
+/**
+ * 解析 finish_preparation 的参数（纯函数，可测）。
+ *
+ * 指南 §5.3 的**严格参数**规则（逐条落在下面）：
+ *   · 顶层必须是非空对象；null / 数组 / 数值 / 字符串都返回**可分类的协议错误**，不抛未分类异常；
+ *   · `outcome` 必须是字符串且在 reply / compose / candidate 之内；
+ *   · `assetPolicy` **必须显式给出**且取值合法——不依据有无历史绑定补一个默认值；
+ *   · reply 要**非空字符串** text；compose / candidate 不接受 text；
+ *   · candidate 要**单一完整字符串** source，不允许类型转换；
+ *   · 互斥字段（reply+candidate 之类）直接判协议错误，不做"以谁为准"的猜测。
+ */
+export function parseFinishArgs(
+  args: string,
+):
+  | { ok: true; kind: 'reply'; text: string; assetPolicy: AssetPolicy; echoedBaseRevisionId?: string }
+  | { ok: true; kind: 'compose'; assetPolicy: AssetPolicy; echoedBaseRevisionId?: string }
+  | { ok: true; kind: 'candidate'; source: string; assetPolicy: AssetPolicy; echoedBaseRevisionId?: string }
+  | { ok: false; error: string } {
+  let j: unknown
+  try {
+    j = JSON.parse(args || '{}')
+  } catch {
+    return { ok: false, error: `finish_preparation 的参数不是合法 JSON：${String(args || '').slice(0, 80)}` }
+  }
+  if (j === null || typeof j !== 'object' || Array.isArray(j)) {
+    return { ok: false, error: `参数必须是一个 JSON 对象（收到 ${describeType(j)}）` }
+  }
+  const o = j as Record<string, unknown>
+  if (Object.keys(o).length === 0) return { ok: false, error: '参数对象为空，没有 outcome' }
+
+  const outcome = o.outcome
+  if (typeof outcome !== 'string') return { ok: false, error: `outcome 必须是字符串（收到 ${describeType(outcome)}）` }
+  const hasText = o.text !== undefined && o.text !== null
+  const hasSource = o.source !== undefined && o.source !== null
+  /**
+   * 模型回显的 baseRevisionId（指南 §5.1）：**只作一致性核对，不能替换宿主捕获的基准**。
+   * 非字符串 / 空串一律当"没回显"，不因此取消 CAS（"缺失也不能取消 CAS"）。
+   */
+  const echo = typeof o.baseRevisionId === 'string' && o.baseRevisionId.trim() ? o.baseRevisionId.trim() : undefined
+
+  if (outcome === 'reply') {
+    // reply 不产生稿件，因此**不要求** assetPolicy（它没有任何素材语义）；
+    // 但若模型硬塞了一个非法值，仍当协议错误报出来，不静默忽略。
+    const polRaw = o.assetPolicy
+    if (polRaw !== undefined && polRaw !== null && polRaw !== 'preserve' && polRaw !== 'modify') {
+      return { ok: false, error: `outcome=reply 不该带 assetPolicy，且给出的值非法（收到 ${describeType(polRaw)}）` }
+    }
+    if (hasSource) return { ok: false, error: 'outcome=reply 与 source 互斥（reply 不产生正文，要交稿请用 candidate）' }
+    if (typeof o.text !== 'string' || !o.text.trim()) {
+      return { ok: false, error: `outcome=reply 需要非空字符串 text（收到 ${describeType(o.text)}）` }
+    }
+    return { ok: true, kind: 'reply', text: o.text.trim(), assetPolicy: (polRaw as AssetPolicy) || 'modify', echoedBaseRevisionId: echo }
+  }
+
+  // compose / candidate：assetPolicy **必须显式给出且合法**——不依据有无历史绑定补一个默认值
+  // （指南 §5.3："不依据有无历史绑定补 assetPolicy；缺失或非法值走有界纠偏/失败"）。
+  const polRaw = o.assetPolicy
+  if (polRaw !== 'preserve' && polRaw !== 'modify') {
+    return {
+      ok: false,
+      error: `outcome=${outcome} 必须显式声明 assetPolicy 为 "preserve" 或 "modify"（收到 ${describeType(polRaw)}${typeof polRaw === 'string' ? `「${polRaw}」` : ''}）——不能用历史绑定或默认值补齐`,
+    }
+  }
+  const assetPolicy = polRaw
+
+  if (outcome === 'compose') {
+    if (hasText) return { ok: false, error: 'outcome=compose 与 text 互斥（要答复请用 reply）' }
+    if (hasSource) return { ok: false, error: 'outcome=compose 与 source 互斥（要交稿请用 candidate）' }
+    return { ok: true, kind: 'compose', assetPolicy, echoedBaseRevisionId: echo }
+  }
+  if (outcome === 'candidate') {
+    if (hasText) return { ok: false, error: 'outcome=candidate 与 text 互斥（要答复请用 reply）' }
+    if (typeof o.source !== 'string') {
+      return { ok: false, error: `outcome=candidate 需要字符串 source（收到 ${describeType(o.source)}）` }
+    }
+    const source = v2SourceFromToolArg(o.source)
+    if (!source) {
+      return { ok: false, error: 'outcome=candidate 的 source 不是可用的完整正文（为空 / 围栏不成对）' }
+    }
+    return { ok: true, kind: 'candidate', source, assetPolicy, echoedBaseRevisionId: echo }
+  }
+  return { ok: false, error: `未知的 outcome：${outcome}（只接受 reply / compose / candidate）` }
+}
+
+/** 参数类型的中文说明：错误串要能直接看出"收到的是什么"，不写猜测性的解释 */
+function describeType(v: unknown): string {
+  if (v === undefined) return '缺失'
+  if (v === null) return 'null'
+  if (Array.isArray(v)) return '数组'
+  if (typeof v === 'string') return v.trim() ? '字符串' : '空字符串'
+  if (typeof v === 'number') return `数值 ${v}`
+  if (typeof v === 'boolean') return `布尔 ${v}`
+  return typeof v
+}
+
+/**
+ * 创作前置工具循环（**总额预算 3 次**，含协议纠偏；纠偏不额外占名额）。
+ * 入参为 payload 形态：[system(注册表), ...history, user(raw)]。
+ *
+ * 返回判别联合 `PrepOutcome`：reply / compose / candidate / failed。
+ *
+ * **指南 §5.2：当前入口只认合法模型终结结果。** 旧协议文本（只回 READY / 说明+READY / 只贴一段完整
+ * 正文 / 无回执的完成宣称）不再是"创作授权"：先在剩余预算内请模型规范声明**它已经给出的那份内容**；
+ * 仍然拿不到合法终结就按协议失败/耗尽处理，**不自行授权**、也**不丢弃原文**（`failed.raw`）。
+ * 历史创作布尔值不参与这里——历史只是模型上下文。
+ *
+ * 意图判断全部由模型（工具调用）给出，本模块只做**机械校验与执行**，不含任何对话状态机。
+ * 注意：最终撰写不再透传 assistant tool_calls / tool 消息（DeepSeek 对"带工具历史但不带 tools"
+ * 的续写请求有 400 风险），改为把实际取用结果拼成"知识摘要（digest）"随撰写指令进上下文。
+ *
+ * opts.onProgress：纯展示上报（气泡显示"正在读哪份资料 / 正在等模型"），不改变任何分支判断。
+ */
+export async function runPrep(
+  messages: ChatMsg[],
+  opts?: {
+    onProgress?: ProgressFn
+    runId?: string
+    /** 当前文档是否已有素材绑定：**只用于提示模型**，不再充当 assetPolicy 的缺省值（指南 §5.3） */
+    hasPriorBindings?: boolean
+  },
+): Promise<PrepOutcome> {
+  if (!inTauri()) return { mode: 'skip' }
+  const say = opts?.onProgress || (() => {})
+
+  const last = messages[messages.length - 1]
+  const rawUser = last && last.role === 'user' ? (last.content ?? '') : ''
+  // 指南 §5.3："保留最新用户 images"——本回合附带的参考图必须跟着用户消息进 prep，
+  // 否则模型在准备阶段看不到图、"按参考图配素材"这类判断直接失真。
+  const lastImages = last && last.role === 'user' ? last.images : undefined
+  const system = messages.find((m) => m.role === 'system')
+  const prior = messages.filter(
+    (m) => m !== last && m.role !== 'system' && (m.role === 'user' || m.role === 'assistant'),
+  )
+
+  // 注册表系统提示 + 历史 + 原始请求 + prep 规约（原始请求供模型判断需求是否已明确）
+  const convo: ChatMsg[] = [
+    ...(system ? [system] : []),
+    ...prior,
+    { role: 'user', content: rawUser, ...(lastImages && lastImages.length ? { images: lastImages } : {}) },
+    { role: 'user', content: PREP_INSTRUCTION },
+  ]
+  // 实际取用知识点摘要（每轮追加；进入撰写阶段时随上下文给主模型）
+  const digestParts: string[] = []
+  const digestOf = () => (digestParts.length ? digestParts.join('\n\n') : undefined)
+  /** 协议纠偏只允许一次，且**占用同一个总额预算**（不能各自拥有三次） */
+  let corrected = false
+  let lastText = ''
+  /**
+   * 回合内工具结果缓存（指南 §5.3："重复知识读取可复用回合内缓存"）。
+   * 同一个（工具名 + 参数）在一次准备回合里只执行一次——模型重复取同一份点文件不会重复读盘、
+   * 也不会在同一回合内得到两份可能不一致的检索结果。
+   */
+  const toolCache = new Map<string, string>()
+
+  // MAX_PREP_CALLS（=3）：知识取用、空回复重试、协议纠偏共用这三次，不各自计次。
+  for (let callNo = 0; callNo < MAX_PREP_CALLS; callNo++) {
+    say({ phase: 'think', text: callNo === 0 ? '分析需求…' : corrected ? '请模型声明本回合结果…' : '继续确认需求…' })
+    // 最后一轮追加预算提醒（不改 `convo` 本身——否则 MAX_PREP_CALLS 变大时它会残留到后面的回合）。
+    const outgoing = callNo === MAX_PREP_CALLS - 1 ? [...convo, { role: 'user' as const, content: PREP_LAST_ROUND_REMINDER }] : convo
+    const reply = await prepInvoke(outgoing, opts?.runId)
+    // 指南 §5.3：实际模型 / finish_reason / usage 接齐（缺字段如实记 null，不补 0）
+    trace({
+      kind: 'note',
+      runId: opts?.runId,
+      stage: 'validation',
+      ok: true,
+      model: reply.model ?? undefined,
+      finishReason: reply.finishReason ?? null,
+      usage: reply.usage ?? null,
+      note: `prep#${callNo + 1} 模型=${reply.model ?? 'unknown'} finish=${reply.finishReason ?? 'unknown'} usage=${reply.usage ? JSON.stringify(reply.usage) : 'unknown'}`,
+    })
+
+    const terminal = reply.calls.filter((c) => c.name === 'finish_preparation')
+    const knowledge = reply.calls.filter((c) => c.name !== 'finish_preparation')
+
+    // 指南 §5.3：一份响应只接受**知识工具集合**或**一次终结**；混用与多终结都视协议错误。
+    // 这不是"多此一举"：混用时"以终结为准"等于让模型在同一次回复里既取资料又宣布结果，
+    // 而它取的资料根本没进它那次宣布的判断——那一步到底基于什么做出的，无人知道。
+    if (terminal.length > 0 && knowledge.length > 0) {
+      return {
+        mode: 'prep',
+        kind: 'failed',
+        failure: 'protocol',
+        reason: `模型在同一份响应里既调用了知识工具（${knowledge.map((c) => c.name).join('、')}）又调用了终结工具，协议不允许混用`,
+      }
+    }
+    if (terminal.length > 1) {
+      return { mode: 'prep', kind: 'failed', failure: 'protocol', reason: `模型一次返回了 ${terminal.length} 个终结工具，无法判断以哪个为准` }
+    }
+    if (terminal.length === 1) {
+      const args = terminal[0].args
+      const r = finishOutcome(args, digestOf())
+      if (r) return r
+      // --- 可纠正的终结参数错误（T3）：至多一次有界纠偏，占用同一总额预算 ---------------------------------
+      //
+      // 旧行为：`return protocolFailure(args)` —— 校验正确，但**拒绝被吞掉**：模型看不到任何反馈，
+      // 剩余预算全部作废（2026-10-03 真实小样 G2A、G3 各一次，0 产出）。
+      // 新行为：只对这一类**已知协议错误**（见 isCorrectableFinishError）把工具的拒绝**作为 tool 结果**
+      // 播回去，让模型自己重新声明；`!corrected` 保证整个准备回合至多纠偏一次（与旧协议文本纠偏共用），
+      // `callNo + 1 < MAX_PREP_CALLS` 保证**最后一轮不再纠偏**——总额仍是 3 次，没有第 4 次请求。
+      // 这里**不修改模型的 arguments**、不补默认值、不猜 outcome：合同一个字都没放松。
+      if (!corrected && callNo + 1 < MAX_PREP_CALLS && isCorrectableFinishError(args)) {
+        corrected = true
+        const parsed = parseFinishArgs(args)
+        const call = terminal[0]
+        // 模型的调用**原样**回填（同一个 id、同一串 arguments）——它必须能认出这是自己刚发的那次调用。
+        convo.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: [call].map(
+            (c): ChatToolCall => ({
+              id: c.id,
+              type: 'function',
+              function: { name: c.name, arguments: c.args },
+            }),
+          ),
+        })
+        convo.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: finishArgsCorrection(parsed.ok ? '参数不符合 finish_preparation 的约定' : parsed.error),
+        })
+        continue
+      }
+      return protocolFailure(args)
+    }
+
+    if (knowledge.length) {
+      convo.push({
+        role: 'assistant',
+        content: null,
+        tool_calls: reply.calls.map(
+          (c): ChatToolCall => ({
+            id: c.id,
+            type: 'function',
+            function: { name: c.name, arguments: c.args },
+          }),
+        ),
+      })
+      // 逐个机械执行本地工具（知识库 / 个人素材库检索，不抛错——失败返回提示串）
+      for (const c of knowledge) {
+        const key = `${c.name} ${c.args}`
+        const cached = toolCache.get(key)
+        if (cached !== undefined) {
+          convo.push({ role: 'tool', tool_call_id: c.id, content: cached })
+          continue
+        }
+        say({ phase: 'prep', text: prepToolLabel(c.name, c.args) })
+        const result = await runPrepTool(c)
+        toolCache.set(key, result)
+        convo.push({ role: 'tool', tool_call_id: c.id, content: result })
+        digestParts.push(`【${c.name} ${c.args}】\n${result}`)
+      }
+      continue
+    }
+
+    const text = reply.text?.trim() ?? ''
+    // 无工具调用、正文也为空（模型瞬时空回复 / 推理吃光预算）→ 本轮不算数：
+    // 不把兜底话术当正式回复泄漏给用户，也不当成"要写稿"，继续下一轮重试。
+    if (!text) continue
+
+    // 旧协议形态（含 READY 字样 / 带一段完整围栏正文）→ **不**自行升级为创作授权，
+    // 先在剩余预算内请模型用 finish_preparation 声明**它已经给出的这份内容**。
+    const legacyShape = mentionsReady(text) || fencedV2Source(text) !== null
+    if (legacyShape && !corrected && callNo + 1 < MAX_PREP_CALLS) {
+      corrected = true
+      convo.push({ role: 'assistant', content: text })
+      convo.push({ role: 'user', content: PREP_CORRECTION })
+      lastText = text
+      continue
+    }
+    if (legacyShape) {
+      // 已经纠偏过（或没有剩余预算纠偏）仍旧不声明 → 协议失败。原文保留在 raw 里交给调用方展示，
+      // 不静默丢弃，也**不替模型决定**这是"要写稿"还是"只是举例"。
+      return {
+        mode: 'prep',
+        kind: 'failed',
+        failure: 'protocol',
+        reason: '模型给出了正文或控制词（READY / 代码围栏）却没有用 finish_preparation 声明本回合结果',
+        raw: text,
+      }
+    }
+
+    // 普通答复 / 澄清：既没有控制词也没有稿件形态 → 直接回传给用户可见消息流（不提交任何文稿）
+    return { mode: 'prep', kind: 'reply', text, digest: digestOf() }
+  }
+
+  // 预算用尽仍拿不到合法的终结结果 → **明确失败**，不再像旧实现那样降级为"直接撰写"
+  // （旧行为会把网络/协议问题转换成一次没被授权的创作；指南 §5.3 末段明确禁止）。
+  return {
+    mode: 'prep',
+    kind: 'failed',
+    failure: 'exhausted',
+    reason: `准备阶段 ${MAX_PREP_CALLS} 次请求内没有得到合法的结果声明${lastText ? '（模型始终只回复旧协议文本）' : ''}`,
+    ...(lastText ? { raw: lastText } : {}),
+  }
+}
+
+/** 终结工具 → PrepOutcome；参数非法返回 null（由调用方转成协议失败） */
+function finishOutcome(args: string, digest: string | undefined): PrepOutcome | null {
+  const r = parseFinishArgs(args)
+  if (!r.ok) return null
+  if (r.kind === 'reply') return { mode: 'prep', kind: 'reply', text: r.text, digest }
+  if (r.kind === 'compose') return { mode: 'prep', kind: 'compose', digest, assetPolicy: r.assetPolicy, echoedBaseRevisionId: r.echoedBaseRevisionId }
+  return { mode: 'prep', kind: 'candidate', source: r.source, digest, assetPolicy: r.assetPolicy, echoedBaseRevisionId: r.echoedBaseRevisionId }
+}
+
+function protocolFailure(args: string): PrepOutcome {
+  const r = parseFinishArgs(args)
+  return {
+    mode: 'prep',
+    kind: 'failed',
+    failure: 'protocol',
+    reason: r.ok ? '协议校验失败' : r.error,
+  }
+}

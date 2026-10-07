@@ -1,0 +1,44 @@
+# D 路原件哈希（重判当天复核，2026-10-08）
+
+## 冻结原件（只读，未改动）
+\9930d905cf420e6fb54421af7cccf40f140e9f631d8c51b8dd2f0869ea55205f *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/G1-committed-article.html
+\999102851cb50ee01b122e3e3ef8955bd40c5de03daf265a89e927dc8e4a829b *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/G1-committed-source.md
+\1ee9dd26400decbbd39ff9332f705fa1437df3e8140b941169ffe314df3d0981 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/G1-state.json
+\28720a7638bca62b227a88a353aeb31dc6917be5ac08d1cb7598d9137cad0627 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/evidence.json
+\6ad6bc5e0e63d4e7339ea8f81f33418b94e1e0445cf0d5981efce132944cc070 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/report.md
+\e95e3a3d4b163d808fd53f887642573a97d6c347ddc8bc19e3a08cbf4b721da8 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/run-result.json
+\e85bd8ff8530ae3df1116faf97a99abe182c79fcb168e0c41e337c8a0eb4ecf9 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G1-2026-10-03T04-41-46-69f5bf4d/stdout.txt
+\ff6a8fd59bf7736abd8bcacf2234c269e5ad7393dc01d1a0a6301129a662ae4c *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/G2B-before.json
+\558b3442fb2200aaf7657eed96efb90beaa9b2537bbc9d5f3bae3d65a81d4089 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/G2B-committed-article.html
+\dc1dc38d6ee5caa0977c08f21d759ce67215bcf1957c2323e88995aab31869ef *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/G2B-committed-source.md
+\6af2f15f6ba60071c1e0115085e233aba53e41e17b2881a33adba1cf41bac52a *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/G2B-state.json
+\e21bd50d5e37e29ac1c2fa17560228551449bf28446f3b9ec13d62c1406ed48b *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/evidence.json
+\8860d3df3960e7b9a544cbef8ef6023d4b8ef4eba7a60726f05c73238b956f1a *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/report.md
+\31ea16cc5c6258517a2444782fdc152a154b33686f6dc3467322eed4fe3cdcca *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/run-result.json
+\db0c6e179b4cca8ebd1f929b8ba1961356e6625cfb38ec9965fb173238bea568 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/evidence/G2B-2026-10-03T04-44-15-17a443c1/stdout.txt
+\fd7c046d09de8f8078de4182c47bc6f08f46ddcbefc6536869cea804f2dcb0ef *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/evidence/G2A-2026-10-03T04-44-58-0ef6576e/G2A-state.json
+\2934609369a4e56a54210fd8859b59e9e22b7a282463d5a978c58c54a4562d32 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/evidence/G2A-2026-10-03T04-44-58-0ef6576e/evidence.json
+\215dc8a6fdf5e3d2927f8d745a7430bb22e3c188d4a8a80655705243f2de46ae *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/evidence/G2A-2026-10-03T04-44-58-0ef6576e/report.md
+\27ab7551fc88189e32476471cb736be0b33e6d87ecd4ea96032e4d0dcdead572 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/evidence/G2A-2026-10-03T04-44-58-0ef6576e/run-result.json
+\6830a8c79412c81da441ea75731780d7c4aa20908f485fcd70d1b86b70465d15 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/evidence/G2A-2026-10-03T04-44-58-0ef6576e/stdout.txt
+\e04271e34a7fe5334504850f202735b3326af2d3c4149d65effb7a704b4e6fdf *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/evidence/G3-2026-10-03T04-47-15-f9e20cda/G3-state.json
+\bcb1c80ab0181737509eed1fa8ffdfbe832e8cbfb73ff60d6d7c53c40bb9967e *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/evidence/G3-2026-10-03T04-47-15-f9e20cda/evidence.json
+\17f4c7c7bde861d108739b4c917309b880e714d5bf1e73658596bdb26c115187 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/evidence/G3-2026-10-03T04-47-15-f9e20cda/report.md
+\4631851fb87e3a4916c9c3d11fa4015bf8263fd5feaaae17798e021211b15b7d *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/evidence/G3-2026-10-03T04-47-15-f9e20cda/run-result.json
+\c73c7cb8a8655a53238356084578cac327d6eb56d9fccb40e2e9cd3262936e88 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/evidence/G3-2026-10-03T04-47-15-f9e20cda/stdout.txt
+
+## 隔离工作区里的 trace / 素材 / 版本元数据
+\6737d5b516f7a39e36aefa641d230c014ab27cef60838980c8a55e5ccc54927c *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/profile/Documents/wechat-mp-workspace/traces/rmurwqn4b-1.jsonl
+\39604243acd338744da5deddb12cddea4d7b3f005f207a452d907a25d4026566 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/profile/Documents/wechat-mp-workspace/traces/rmurwrygt-1.jsonl
+\f47688a7299e8a1ef022bd14d98a0e16ddc9c49e5850ea3f9bd18bf9c349a243 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/profile/Documents/wechat-mp-workspace/traces/rmurwwvu7-1.jsonl
+\2380cf670ed71c35d5f129544af07567e71abd536884134365ac7572538c8581 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/profile/Documents/wechat-mp-workspace/assets/items/as-1791002642779074300/source.svg
+\999102851cb50ee01b122e3e3ef8955bd40c5de03daf265a89e927dc8e4a829b *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/profile/Documents/wechat-mp-workspace/documents/s1791002507804692100/revisions/r1791002643034467100/source.md
+\dc1dc38d6ee5caa0977c08f21d759ce67215bcf1957c2323e88995aab31869ef *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/profile/Documents/wechat-mp-workspace/documents/s1791002507804692100/revisions/r1791002663301059600/source.md
+
+## 会话原件（题面逐字来源）
+\808bacb1f430e89d849ac066f782e1561d38eb4d5418ef90a483dced3addd5e2 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g1/profile/Documents/wechat-mp-workspace/sessions/s1791002507804692100.json
+\a29d7d8a0aa09a4866b48ac95fe539f74e2b2f640a6928ba28d53b8b061a030b *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g2a/profile/Documents/wechat-mp-workspace/sessions/s1791002700247101600.json
+\118f17d14f5705232470754138be1b9a6db8b7c295fde2e4f48cb848382cf137 *C:\\Users\\Lenovo\\AppData\\Local\\Temp/wxmp-f1-real-g3/profile/Documents/wechat-mp-workspace/sessions/s1791002836418559900.json
+
+## 本轮 D 新增脚本
+44a4621f11779d00c7a500ae3f000f50894f70ea526c995297bb7d1c2dd7f995 *scripts/f1-artifact-rejudge.mjs

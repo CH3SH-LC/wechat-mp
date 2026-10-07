@@ -1,0 +1,9 @@
+<section style="padding:18px 16px;">
+  <h2 style="font-size:22px;line-height:1.4;margin:0 0 14px;color:#0c5c57;">E 复核：超高块（高于目标页高，不可分割）</h2>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">前面的正文把版面推到第一个千像素切点附近。下一块是一个高 1300 CSS px 的插画，比目标页高（1000 CSS px）还高，因此无论切在哪里都会落在它的内部——它属于"不可分割块"，应当整体输出为一张超高页，而不是被切开。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">第二段正文，继续把高度推近切点。判据：任何页边界都不得落在下面这个 1300 高度块的内部；若实现无法整块输出，必须给出明确错误而不是伪造成功。</p>
+  <svg xmlns="http://www.w3.org/2000/svg" width="343" height="1300" style="display:block;width:343px;height:1300px;margin:14px 0;border:1px solid #0f766e;"><rect width="343" height="1300" fill="#eef7f6"/><rect x="20" y="20" width="303" height="620" fill="#0f766e" opacity="0.18"/><rect x="20" y="660" width="303" height="620" fill="#0f766e" opacity="0.10"/></svg>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">超高块之后的正文。若分页器把它整块放进一页，这一页的高度会明显大于目标页高，且它前后两刀都不会穿过这个块。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">再补一段正文，确认超高页之后仍能继续正常分页，切点回到内容边界之外。</p>
+  <p style="font-size:16px;line-height:1.85;margin:0 0 14px;">收尾段落，确保末页非空且切点严格递增。</p>
+</section>

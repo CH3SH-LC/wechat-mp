@@ -4,9 +4,11 @@
 
 | 读者 / 问题 | 唯一入口 |
 | --- | --- |
+| 五并发**执行结果**：A–E 逐项结论、候选哈希、回归、真实小样与仍未完成的条件 | [2026-10-08 五并发最终交付](artifacts/2026-10-07-five-workers/2026-10-08T03-56-58/coord/final.md) |
+| 最新 DS 五并发执行入口：协议、分页、交付、证据、独立复核 | [2026-10-07 五并发操作指南](design/ds-five-workers-guide-2026-10-07.md) |
 | F1 已实施：全入口遵守材料依据边界（改动、实参截获红绿对照、三组样本判定、未覆盖项） | [F1 交付与证据](artifacts/2026-10-03-f1-grounding/README.md) |
 | 未来方向、为何慢、怎样高效驱动DS | [2026-10-03四路研究与计划](research/2026-10-03-strategy/README.md) |
-| 下一轮只派F1的短任务卡，旧专项已独立复核 | [五字段DS任务卡](research/2026-10-03-strategy/next-ds-task.md) |
+| 历史 F1 单包任务卡，实施结果见 F1 证据，当前派单见五并发指南 | [五字段DS任务卡](research/2026-10-03-strategy/next-ds-task.md) |
 | 项目目标、范围和完成标准 | [GOAL](../GOAL.md) |
 | 产品介绍、安装、截图 | [项目 README](../README.md) |
 | 软件具体怎么用 | [随安装包发布的使用手册](../src-tauri/resources/使用手册.html) |
