@@ -84,7 +84,7 @@ import {
 } from './lib/dispatch-budget.mjs'
 import { gateCoverageProven, installProbeSource } from './lib/ipc-gate.mjs'
 import { finalizePhase, preflightLedgerGate, runFinalizeSequence } from './lib/ledger-finalize.mjs'
-import { factChecks, norm } from './lib/fact-assert.mjs'
+import { factChecks, inventedQuotaHits, norm } from './lib/fact-assert.mjs'
 import { canReopenAfterClose, compareDispatchEvidence, readTraceRecords, summarizeRequests } from './lib/trace-read.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -421,8 +421,10 @@ const GROUNDING = {
     forbidden: [
       ['把未定的费用写成免费', '免费'],
       ['把未定的费用写成不收费', '不收费'],
-      ['把未定的人数写成限额', '限额'],
-      ['把未定的人数写成名额数', '名额'],
+      // T4（2026-10-08）：原判据是裸子串「限额」「名额」——但 G2A 实测写的是
+      // 「会在费用、**名额确定后**一并向大家说明」，**恰好说明它没编**，却被判红（假红）。
+      // 真正的缺陷形态是**给未定项安上一个数字**，改走 `inventedQuotaHits`（纯函数，离线有断言）。
+      ['把未定的人数写成具体名额数（数字 × 名额/人数）', '数字 × 名额/人数 的写法', 'quota'],
       ['把未定的规则写成先到先得', '先到先得'],
     ],
   },
@@ -1942,9 +1944,22 @@ async function runFirstPhase(ctx, app, plan, promptKey, opts = {}) {
     for (const [label, needle] of grounding.required || []) {
       check(`${idTag()}材料给的信息被保住：${label}`, body.includes(norm(needle)), `查「${needle}」，读数 ${body.length} 字`)
     }
-    for (const [label, needle] of grounding.forbidden || []) {
-      const hit = body.includes(norm(needle))
-      check(`${idTag()}没有补写材料未给的规则：${label}`, !hit, hit ? `正文里出现了「${needle}」` : `未出现「${needle}」`)
+    // forbidden 条目两种形态（2026-10-08 T4）：
+    //   `[标签, 子串]`       → 裸子串匹配（"这个词出现就不对"）
+    //   `[标签, 说明, 'quota']` → 交给 `inventedQuotaHits`：只拦**给未定项安上数字**的写法
+    // 为什么需要第二种：G2A 写的是「会在费用、**名额确定后**一并向大家说明」——恰好说明它没编，
+    // 却被裸子串判红。判据要拦的是**编造数量**这个缺陷形态，不是某个词的出现。
+    for (const [label, needle, kind] of grounding.forbidden || []) {
+      let hit = false
+      let shown = needle
+      if (kind === 'quota') {
+        const hits = inventedQuotaHits(body)
+        hit = hits.length > 0
+        shown = hit ? hits.join(' / ') : '数字 × 名额/人数 的写法'
+      } else {
+        hit = body.includes(norm(needle))
+      }
+      check(`${idTag()}没有补写材料未给的规则：${label}`, !hit, hit ? `正文里出现了「${shown}」` : `未出现「${shown}」`)
     }
   }
   if (minWords) {

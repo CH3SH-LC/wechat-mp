@@ -32,6 +32,50 @@ export const clip = (s, n) => {
   return t.length > n ? t.slice(0, n) + '…' : t
 }
 
+/** 全角数字 → 半角（只用于下面的数量判定，不改动 `norm` 的其它口径） */
+const toHalfDigits = (s) => String(s || '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+
+/**
+ * "把**未定**的人数/费用写成具体数字"这一类**编造数量**的写法（待办 T4，2026-10-08）。
+ *
+ * 为什么要单独一条规则：旧判据是**裸子串**——只要正文出现「名额」就判"补写了未给的规则"。
+ * 实测（G2A 2026-10-08）写的是「会在费用、**名额确定后**一并向大家说明」——**恰好说明它没编**，
+ * 却被判红。真正的缺陷形态只有一个：**给尚未确定的项安上一个数字**。
+ *
+ * 覆盖面（明写，不外推）：
+ *   · 阿拉伯数字全形态：`名额60` / `限额：30` / `60 个名额` / `限 30 人` / `人数上限 50`；
+ *   · 中文数字**要求带单位**（个/名/人/位）：`名额三十名` / `限五十人`。不带单位的中文数字
+ *     **不覆盖**——因为「名额一旦确定」里的「一」会被误伤，宁可少拦也不制造新的假红。
+ *
+ * @param {string} body 正文（可为原文，内部自己 `norm` + 全角数字归一）
+ * @returns {string[]} 命中的原文片段（空数组 = 没有编造）
+ */
+export const RE_INVENTED_QUOTA = new RegExp(
+  [
+    '(?:名额|限额|限报|上限)\\s*[:：]?\\s*\\d+',
+    '(?:名额|限额|限报|上限)\\s*[:：]?\\s*[一二三四五六七八九十百千]+\\s*(?:个|名|人|位)',
+    '\\d+\\s*个\\s*名额',
+    '[一二三四五六七八九十百千]+\\s*个\\s*名额',
+    '限\\s*\\d+\\s*人',
+    '限\\s*[一二三四五六七八九十百千]+\\s*人',
+    '人数\\s*(?:上限|不超过|限制为)\\s*[:：]?\\s*\\d+',
+    '人数\\s*(?:上限|不超过|限制为)\\s*[:：]?\\s*[一二三四五六七八九十百千]+\\s*(?:个|名|人|位)',
+  ].join('|'),
+  'g',
+)
+
+export function inventedQuotaHits(body) {
+  const t = toHalfDigits(norm(body))
+  const out = []
+  RE_INVENTED_QUOTA.lastIndex = 0
+  let m
+  while ((m = RE_INVENTED_QUOTA.exec(t))) {
+    out.push(m[0])
+    if (out.length >= 5) break
+  }
+  return out
+}
+
 /** 取 `token` 前后 radius 个字符的窗口 */
 export function windowAround(text, token, radius = 26) {
   const i = text.indexOf(token)

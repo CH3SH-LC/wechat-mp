@@ -11,12 +11,12 @@
 // 全离线：不联网、不调模型、不启浏览器。判定走唯一 RunResult（指南 §3.1）。
 
 import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
-import { SAMPLE_OK_BODY, extractTimes, factChecks } from './lib/fact-assert.mjs'
+import { SAMPLE_OK_BODY, extractTimes, factChecks, inventedQuotaHits } from './lib/fact-assert.mjs'
 
 const judge = createJudge({
   script: 'fact-assert-check',
   outDir: resolveOutDir('fact-assert-check'),
-  plannedCases: ["①", "②", "③", "④", "⑤", "⑦"],
+  plannedCases: ["①", "②", "③", "④", "⑤", "⑦", "⑧"],
 })
 guardCrashes(judge)
 let failed = 0
@@ -240,6 +240,47 @@ console.log('\n[⑦ 真机正文（开放与闭馆同句）不得假红]')
   const notClosedNear = '10月10日（周六）9:00-17:00开放；10月11日（周日）全天不闭馆。自习区在一楼，电话010-55556666。'
   const rNot = run(notClosedNear)
   check('⑦ 对照：「全天不闭馆」仍然必须红', failsWith(rNot, '全天闭馆'), `未通过项=${failing(rNot).join(' | ')}`)
+}
+
+console.log('\n[⑧ 数量编造判定（T4：把未定的人数写成具体数字）]')
+{
+  // 背景：G2A 的旧判据是**裸子串**「名额」——实测正文写的是
+  // 「会在费用、名额确定后一并向大家说明」（**恰好说明它没编**）却被判红。
+  // 判据要拦的是"给未定项安上一个数字"这个缺陷形态，不是某个词的出现。
+  const cases = [
+    // 必须命中：给未定项安了数字
+    ['名额60个', true],
+    ['限额：30', true],
+    ['60 个名额', true],
+    ['限 30 人', true],
+    ['人数上限 50', true],
+    ['人数不超过 40', true],
+    ['名额三十名', true],
+    ['限五十人', true],
+    ['名额６０', true], // 全角数字
+    // 必须不命中：如实说明"还没定"
+    ['会在费用、名额确定后一并向大家说明。', false],
+    ['报名费用与人数上限暂未确定，', false],
+    ['名额一旦确定就会通知', false],
+    ['费用尚未确定，确定后在本通知中同步', false],
+    ['请提前 5 分钟到场', false],
+  ]
+  for (const [s, want] of cases) {
+    const hits = inventedQuotaHits(s)
+    check(
+      `⑧ ${want ? '必须命中' : '必须不命中'}：${s}`,
+      want ? hits.length > 0 : hits.length === 0,
+      JSON.stringify(hits),
+    )
+  }
+  // 对照：同一句式只把"如实说明"改成"编造"，判据必须立刻翻面（证明它不是恒假）
+  const honest = '会在费用、名额确定后一并向大家说明。'
+  const invented = '名额 30 人，先到先得。'
+  check(
+    '⑧ 对照：同一句式改成「名额 30 人」必须命中（判据不是恒假）',
+    inventedQuotaHits(honest).length === 0 && inventedQuotaHits(invented).length > 0,
+    `honest=${JSON.stringify(inventedQuotaHits(honest))} invented=${JSON.stringify(inventedQuotaHits(invented))}`,
+  )
 }
 
 console.log('')
