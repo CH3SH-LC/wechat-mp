@@ -20,6 +20,11 @@ export interface RenderedImages {
   oversize: OversizePage[]
   /** 受保护区间的合并结果（设备像素），供诊断与复核 */
   protectedRanges: { top: number; bottom: number; kinds: string[] }[]
+  /**
+   * 吸附不到"无墨行"、**原值保留**的切点（设备像素）。正常应为空数组。
+   * 留着它是为了让"没吸附上"这件事**看得见**——静默保留等于把 T7 那类问题藏回去。
+   */
+  unsnappedCuts: number[]
 }
 
 export interface OversizePage {
@@ -161,6 +166,117 @@ function collectProtected(host: HTMLElement, top0: number, hostH: number): CssRa
   return out
 }
 
+/**
+ * 逐行扫一遍**已经画出来的画布**，标出"这一行有没有深墨"。
+ *
+ * 为什么需要它（待办 T7，2026-10-08）：切点是按 `collectProtected` 量出来的行盒算的，
+ * 而**量出来的行盒与真正画出来的墨迹之间存在系统性、累积性的纵向漂移**
+ * （真机实测：一篇长文尾部差约 17 设备像素——量到的正文底 11980 vs 实际最底墨迹 11997），
+ * 于是保护区整体比真实墨迹**偏高**，切点落在"以为的空隙"里、实际是上一行的字身。
+ *
+ * `planCuts` 本身没有算错，它拿到的是偏高的行位置。所以这里不再假设"量与画一致"，
+ * 而是回到**唯一可信的事实来源——画出来的像素**，把刀口吸附到"没有墨"的行上。
+ *
+ * 深墨判定（RGB 三通道都 < 180）与 `export-paging-check` / `paging-seam-probe` **同一套口径**：
+ * 只有同一套口径，验收里那条"跨缝列数 = 0"才真的在验这里做的事。
+ */
+function inkRowMap(ctx: CanvasRenderingContext2D, w: number, h: number): Uint8Array {
+  const ink = new Uint8Array(h)
+  const CHUNK = 256 // 分块读，别一次性 getImageData 整张 9MP 画布（36MB）
+  for (let y0 = 0; y0 < h; y0 += CHUNK) {
+    const rows = Math.min(CHUNK, h - y0)
+    const d = ctx.getImageData(0, y0, w, rows).data
+    for (let r = 0; r < rows; r++) {
+      const base = r * w * 4
+      for (let x = 0; x < w; x++) {
+        const i = base + x * 4
+        if (d[i] < 180 && d[i + 1] < 180 && d[i + 2] < 180) {
+          ink[y0 + r] = 1
+          break
+        }
+      }
+    }
+  }
+  return ink
+}
+
+/** 吸附时允许离开原切点的最大距离（设备像素）；超出就**如实放弃吸附、保留原值**，不硬拽 */
+const SNAP_MAX_PX = 200
+
+/**
+ * 把切点吸附到"没有墨"的行上（先往回找，再往前找，都在 `SNAP_MAX_PX` 以内）。
+ *
+ * 只动**内部**切点：0 与末切点（= 画布高）是边界，不参与吸附。
+ * 吸附不到就保留原值——**不假装成功**；调用方据此把"没吸附上"的切点如实记进 `oversize` 之外的备注。
+ *
+ * 返回 `{ cutsPx, unsnapped }`：`unsnapped` 是没找到无墨行的切点（原值保留）。
+ */
+function snapCutsToInkFree(
+  cutsPx: number[],
+  ink: Uint8Array,
+  canvasPx: number,
+  merged: { top: number; bottom: number; kinds: string[] }[],
+): { cutsPx: number[]; unsnapped: number[] } {
+  const out = cutsPx.slice()
+  const unsnapped: number[] = []
+  const free = (y: number) => y > 0 && y < canvasPx && ink[y] === 0
+  /** 居中时不得越过的左右墙：最近一个**已量到的**保护区边界。
+   *  为什么要这堵墙：深墨判定只认"暗"像素，**浅色实心块**是"无墨"的——
+   *  不设墙地往空白带两边扩展，切点会被带进浅色块里（离线夹具 ④ 实测踩到过）。 */
+  const walls = (y: number) => {
+    let lo = 1
+    let hi = canvasPx
+    for (const r of merged) {
+      if (r.bottom <= y && r.bottom > lo) lo = r.bottom
+      if (r.top >= y && r.top < hi) hi = r.top
+    }
+    return { lo, hi }
+  }
+  for (let i = 1; i < out.length - 1; i++) {
+    const c = out[i]
+    if (free(c)) continue
+    let found = -1
+    // 先往回（页变短，与 planCuts 的"宁可切短不切长"一致）
+    for (let d = 1; d <= SNAP_MAX_PX; d++) {
+      if (free(c - d)) {
+        found = c - d
+        break
+      }
+    }
+    if (found < 0) {
+      for (let d = 1; d <= SNAP_MAX_PX; d++) {
+        if (free(c + d)) {
+          found = c + d
+          break
+        }
+      }
+    }
+    if (found < 0) unsnapped.push(c)
+    else {
+      // 落到空白带的**中间**，而不是"最近的那一行"。
+      // 只取最近无墨行会贴着上一行/下一行的边缘（真机实测出现过"最近墨迹 1px"），
+      // 视觉上是干净的，但余量只有 1 像素、下一次渲染抖动就会再咬到字——居中才有真余量。
+      // 墙按**原切点** `c` 取（不是按 `found`）：要守住的是 planCuts 选定的那个**空隙**，
+      // 而不是"吸附落点周围"。按 found 取墙时，若 found 恰好落在某个保护区**内部**，
+      // 墙取不到它，居中就会把人带到别处去（离线夹具 ④ 实测踩到过）。
+      const w = walls(c)
+      let lo = found
+      let hi = found
+      while (lo - 1 > w.lo && ink[lo - 1] === 0) lo--
+      while (hi + 1 < w.hi && ink[hi + 1] === 0) hi++
+      out[i] = Math.floor((lo + hi) / 2)
+    }
+  }
+  // 吸附后必须仍严格递增（往回吸附可能撞上前一个切点）——撞了就**如实放弃这一处吸附**
+  for (let i = 1; i < out.length; i++) {
+    if (out[i] <= out[i - 1]) {
+      out[i] = cutsPx[i]
+      unsnapped.push(cutsPx[i])
+    }
+  }
+  return { cutsPx: out, unsnapped }
+}
+
 /** CSS 区间 → 整数设备像素区间（上缘向下取整、下缘向上取整 + 余量），并合并相交/相接的区间 */
 function toDeviceRanges(ranges: CssRange[], canvasPx: number): { top: number; bottom: number; kinds: string[] }[] {
   const dev = ranges
@@ -295,6 +411,17 @@ export async function renderArticleImages(html: string): Promise<RenderedImages>
     // 切点计划：把"碎片页 / 空白页"并入相邻页，保证没有空页、也没有窄到看不见的页。
     // 合并不丢像素（页区间始终连续覆盖 [0, canvasPx)），只是让相邻两页变成一页。
     const plan = planCuts(H2, protectedRanges, TARGET_PX)
+    // 待办 T7（2026-10-08）：切点是按 `collectProtected` 量出来的**行盒**算的，而"量"（文档里的 div）与
+    // "画"（`<img src=svg>` 里的 foreignObject，独立文档上下文、页面 CSS 不参与）之间存在
+    // **系统性、累积性的纵向漂移**——真机实测一篇长文尾部差约 17 设备像素（量到的正文底 11980
+    // vs 实际最底墨迹 11997）。于是保护区整体比真实墨迹**偏高**，切点落在"以为的空隙"里、实际是
+    // 上一行的字身（实测 6 刀里切穿 1 刀，跨缝 160 列）。
+    // `planCuts` 没算错，它拿到的是偏高的行位置。所以这里不再假设"量与画一致"，而是回到
+    // **画出来的像素**这个唯一可信的事实来源，把内部切点吸附到"没有墨"的行上。
+    const ink = inkRowMap(ctx, W2, H2)
+    const snapped = snapCutsToInkFree(plan.cutsPx, ink, H2, protectedRanges)
+    plan.cutsPx = snapped.cutsPx
+    const unsnappedCuts = snapped.unsnapped
     const blank = (y0: number, y1: number): boolean => {
       if (y1 - y0 <= 0) return true
       const d = ctx.getImageData(0, y0, W2, y1 - y0).data
@@ -345,7 +472,7 @@ export async function renderArticleImages(html: string): Promise<RenderedImages>
       }
       pages.push(url)
     }
-    return { cssH: h, long, pages, cutsPx: plan.cutsPx, oversize: plan.oversize, protectedRanges }
+    return { cssH: h, long, pages, cutsPx: plan.cutsPx, oversize: plan.oversize, protectedRanges, unsnappedCuts }
   } finally {
     host.remove()
   }

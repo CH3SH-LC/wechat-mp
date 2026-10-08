@@ -102,7 +102,7 @@ wechat-mp-desktop/
 | lib/asset-resolve.ts、asset-ledger.ts、svg-quality.ts、svg-raster.ts | 引用解析与复用判定、一轮创作的素材结果表（成败/预算/指纹）、素材 SVG 确定性质检（解析层 / 按真实显示尺寸的栅格层） |
 | lib/trace.ts、vision.ts、progress.ts、preview-pick.ts、preview-safe.ts | 请求证据与失败分类（纯函数层）、视觉复核（限次与缓存）、任务阶段事件与展示文案、预览组件拾取、**预览显示层的外部资源抑制**（纯函数 `neutralizeExternalResources`：把外链 src/href/srcset/CSS url() 换成内联占位；门禁与导出仍用原始 HTML） |
 | lib/documents.ts、sessions.ts、settings.ts | 文档、会话和设置持久化（读失败与"为空"**区分**返回：`{ok:…}` / boolean，界面据此给失败态 + 重试） |
-| lib/exportHtml.ts、exportImages.ts、htmlToImage.ts | HTML/图片导出 |
+| lib/exportHtml.ts、exportImages.ts、htmlToImage.ts | HTML/图片导出；`htmlToImage.ts` 的安全分页=「先量保护区、再选切点」+ **切点吸附到画出来的无墨行**（2026-10-08 修 T7：量/画之间存在系统性纵向漂移 ⇒ 保护区整体偏高，切点会落在上一行字身上；`inkRowMap`/`snapCutsToInkFree` 回到画出来的像素，居中时以原切点所在空隙为墙；吸附不到保留原值并记进 `unsnappedCuts`） |
 | knowledge/ | 文本、视觉、插图、其它及排版引擎协议；应用运行时加载，非历史文档 |
 
 ## 桌面后端（src-tauri/ 下）
