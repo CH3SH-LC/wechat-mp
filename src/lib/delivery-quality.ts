@@ -1717,12 +1717,16 @@ export function deliveryVerdict(issues: DeliveryIssue[], ctx?: DeliveryContext):
   const ok = blockers.length === 0 && requiredSlotsDone && bodyIntegrityOk && versionConsistent
   const publishReady = ok && pendingPhotos.length === 0
 
-  const unverified: string[] = []
-  if (checked.size) for (const st of ALL_STAGES) if (!checked.has(st)) unverified.push(st)
-  if (!c.version || c.version.length === 0) unverified.push('version')
+  const unverifiedRaw: string[] = []
+  if (checked.size) for (const st of ALL_STAGES) if (!checked.has(st)) unverifiedRaw.push(st)
+  if (!c.version || c.version.length === 0) unverifiedRaw.push('version')
   // 只记"该比却比不了"；"不适用"是明确结论，不算未核验（否则首稿永远背着一条假的未核验项）
-  if (bodyApp === 'failed') unverified.push('body')
-  if (!c.requiredSlots) unverified.push('requiredSlots')
+  if (bodyApp === 'failed') unverifiedRaw.push('body')
+  if (!c.requiredSlots) unverifiedRaw.push('requiredSlots')
+  // 去重：`version`（在 ALL_STAGES 里）与 `body` 既会被上面的"没查过的阶段"扫到，下面又各有一条更精确的判据，
+  // 不去重就会在界面质量条上渲染成「未核验：version / version」（2026-10-08 实测 BIG 成品就是这样）。
+  // 这不是显示小毛病：那份清单是**信任面**（"未核验不等于通过"），一个重复项会让整份清单看上去不可信。
+  const unverified = [...new Set(unverifiedRaw)]
 
   const notes: string[] = [
     'checkHtml.ok 单独为真不等于整稿通过：它只覆盖产品规范类，素材落位、栅格、正文完整性与版本绑定各自独立判定。',

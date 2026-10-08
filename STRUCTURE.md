@@ -93,7 +93,7 @@ wechat-mp-desktop/
 | components/DocsPane.tsx、AssetWorkshop.tsx、SettingsPanel.tsx | 文档库、素材工坊、设置 |
 | lib/persona.ts、prep.ts、retrieval.ts、needs.ts、chat.ts | 系统提示、工具准备、知识读取、请求判断与双通道对话 |
 | lib/compose.ts、palettes.ts、artRender.ts、quality.ts | 排版、色板、SVG 渲染与质量检查；compose 返回**结构化解析问题**（稳定 code + 源文行范围）、被质检拒收的素材块（`issues` / `rejectedArts`）以及**作者节点**（`authorUnits`：作者可见文本 + 源文行号，由 `emit` 元信息直接产出，供正文投影与事实保护用；见 `projectionOf` 的三态） |
-| lib/delivery-quality.ts | 交付门禁：把解析/素材/栅格/HTML/正文完整性+容量+版本汇成一条问题清单，输出 `DeliveryVerdict`（阻断项为 0 才允许提交成品）；`bodyIntegrity` 按**规范化事实**（`kind\\|canon`）比对并给出具体丢失片段，`bodyText()` 提供正文投影（剔 SVG/行内代码/拒收占位）；`BodyApplicability` 三态显式区分"已比 / 不适用 / 比不了" |
+| lib/delivery-quality.ts | 交付门禁：把解析/素材/栅格/HTML/正文完整性+容量+版本汇成一条问题清单，输出 `DeliveryVerdict`（阻断项为 0 才允许提交成品）；`bodyIntegrity` 按**规范化事实**（`kind\\|canon`）比对并给出具体丢失片段，`bodyText()` 提供正文投影（剔 SVG/行内代码/拒收占位）；`BodyApplicability` 三态显式区分"已比 / 不适用 / 比不了"；`unverified` 清单**去重后**输出（2026-10-08：「version」既被阶段扫描又被专项判据各推一次，曾让界面质量条显示「未核验：version / version」） |
 | lib/extract.ts、revise.ts | 提取成稿、归一叠稿和自动修订 |
 | lib/image-agent.ts、asset-agent.ts、asset-library.ts、asset-categories.ts | 素材解析复用与有界并发绘制（并发上限 `DRAW_CONCURRENCY_DEFAULT`，2026-10-08 由 2 提到 20；同输入共享在途、位预算 240s）、质检拒收后的**有信息重画**（`qualityRetryHint`：把上一版的失败原因带给下一次重画）、制作与库操作；分类表（零依赖纯数据，解析层与工坊共用） |
 | lib/asset-resolve.ts、asset-ledger.ts、svg-quality.ts、svg-raster.ts | 引用解析与复用判定、一轮创作的素材结果表（成败/预算/指纹）、素材 SVG 确定性质检（解析层 / 按真实显示尺寸的栅格层） |

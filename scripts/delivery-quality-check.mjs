@@ -539,6 +539,29 @@ const vClean = deliveryVerdict(collectDeliveryIssues({ source: '# 标题\n\n正�
 check('全绿时仍显式声明两条口径', vClean.ok === true && vClean.notes.some((n) => n.includes('checkHtml.ok')) && vClean.notes.some((n) => n.includes('保存成功')))
 check('未提供版本快照时记为 unverified，不含糊通过', deliveryVerdict([], {}).unverified.includes('version'))
 
+// 未核验清单必须**去重**（2026-10-08）：`version` 在 ALL_STAGES 里，既会被"没查过的阶段"扫到、
+// 又有一条更精确的判据；不去重就会在界面质量条上渲染成「未核验：version / version」（实测 BIG 成品如此）。
+// 触发形状是**声明查过部分阶段**（App.tsx 就是这么调的），所以下面按这个形状造红。
+const vStaged = deliveryVerdict([], { stagesChecked: ['parse', 'material', 'raster', 'html', 'body', 'capacity'] })
+check(
+  '未核验清单去重：声明查过部分阶段时 version 只出现一次',
+  vStaged.unverified.filter((u) => u === 'version').length === 1,
+  JSON.stringify(vStaged.unverified),
+)
+check(
+  '未核验清单整体无重复项',
+  new Set(vStaged.unverified).size === vStaged.unverified.length,
+  JSON.stringify(vStaged.unverified),
+)
+// 对照：另一种调用形状（什么阶段都不声明）也必须无重复、且仍是恰好一条 version
+const vNoStages = deliveryVerdict([], {})
+check(
+  '未核验清单去重：不声明阶段时同样无重复且 version 恰好一条',
+  new Set(vNoStages.unverified).size === vNoStages.unverified.length &&
+    vNoStages.unverified.filter((u) => u === 'version').length === 1,
+  JSON.stringify(vNoStages.unverified),
+)
+
 
 console.log('\n[⑪ 代码块不是源码泄漏（对抗式审计发现）]')
 {
