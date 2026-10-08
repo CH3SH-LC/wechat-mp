@@ -735,7 +735,29 @@ const PAGE_SRC = {
     '    }',
     '    out.push(rec); top += h;',
     '  }',
-    '  return { longW: lw, longH: lh, coveredSum: top, pages: out };',
+    // ⑥ 缝口：每个切点（= 每页上边）上下各取一行，数"同一列两行都是深墨"的列数。
+    // 口径与 export-paging-check 完全一致（深墨 = RGB 三通道都 < 180）。列数 > 0 ⇒ 这一刀切在字上。
+    '  var seams = [];',
+    '  for (var q = 1; q < out.length; q++) {',
+    '    var cy = out[q].top;',
+    '    if (cy <= 0 || cy >= lh) continue;',
+    '    var A = lctx.getImageData(0, cy - 1, lw, 1).data, B = lctx.getImageData(0, cy, lw, 1).data;',
+    '    var cross = 0;',
+    '    for (var j = 0; j < A.length; j += 4) {',
+    '      if (A[j] < 180 && A[j + 1] < 180 && A[j + 2] < 180 && B[j] < 180 && B[j + 1] < 180 && B[j + 2] < 180) cross++;',
+    '    }',
+    '    var nearest = -1;',
+    '    for (var d = 0; d <= 30 && nearest < 0; d++) {',
+    '      var up = cy - d >= 0 ? lctx.getImageData(0, cy - d, lw, 1).data : null;',
+    '      var dn = cy + d < lh ? lctx.getImageData(0, cy + d, lw, 1).data : null;',
+    '      var hitU = false, hitD = false;',
+    '      if (up) for (var k = 0; k < up.length; k += 4) if (up[k] < 180 && up[k + 1] < 180 && up[k + 2] < 180) { hitU = true; break; }',
+    '      if (dn) for (var k2 = 0; k2 < dn.length; k2 += 4) if (dn[k2] < 180 && dn[k2 + 1] < 180 && dn[k2 + 2] < 180) { hitD = true; break; }',
+    '      if (hitU || hitD) nearest = d;',
+    '    }',
+    '    seams.push({ cut: cy, cross: cross, nearestInk: nearest });',
+    '  }',
+    '  return { longW: lw, longH: lh, coveredSum: top, pages: out, seams: seams };',
     '});',
   ].join('\n'),
 
@@ -2675,6 +2697,22 @@ async function runL6(ctx, app) {
           })
         } catch (e) {
           observe(`${idTag()}逐页逐像素与长图比对`, `比对执行失败（${String(e).slice(0, 140)}）——**如实记为未比较**，不冒充通过。`)
+        }
+      }
+      if (cmp) {
+        const seams = cmp.seams || []
+        if (seams.length === 0) {
+          observe(`${idTag()}分页缝口`, '本次只有一页（没有内部切点），缝口无对象可查。')
+        } else {
+          const bad = seams.filter((s) => s.cross > 0)
+          const minNear = Math.min(...seams.map((s) => (s.nearestInk < 0 ? Infinity : s.nearestInk)))
+          check(
+            `${idTag()}分页**没有一刀切在字上**（每个切点跨缝列数 = 0；口径同 export-paging-check）`,
+            bad.length === 0,
+            `切点 ${seams.length} 个：` +
+              seams.map((s) => `y=${s.cut}(跨缝 ${s.cross}，最近墨迹 ${s.nearestInk < 0 ? '>30' : s.nearestInk}px)`).join('；') +
+              `；最近墨迹最小距离=${Number.isFinite(minNear) ? minNear + 'px' : '>30px'}`,
+          )
         }
       }
       if (cmp) {
