@@ -52,7 +52,7 @@
 //   字数口径固定为「文章正文可见文字，去空白；不计标题和纯图片，不以 raw 协议计字数」；
 //   实际计数的字符串会原样存进证据（`counted`）。题面逐字取自指南 §8.3 表格，不做改写、不偷偷补指令。
 
-import { createRequire } from 'node:module'
+import { createRequire, stripTypeScriptTypes } from 'node:module'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
@@ -822,6 +822,45 @@ const PAGE_SRC = {
     '})();',
   ].join('\n'),
 
+  /**
+   * 诊断（只观测，待办 T7）：在**真机的渲染环境**里，用**从源码抽出来的产品函数**把
+   * "保护区 →（padding+合并）区间 → 切点计划"整条链重算一遍，回答两个问题：
+   *   ① 目标点落在哪个（已 padding 的）区间里 → 于是退到哪个 top；
+   *   ② 最终每个切点是否落在某个**未 padding 的保护区**内部。
+   * 参数由 `extractT7Fns()` 提供（抽不到就根本不会走到这里）。
+   */
+  t7PlanProbe: [
+    'var a = arg || {};',
+    'var C = a.consts;',
+    // 抽出来的函数体引用了模块级常量 `SCALE` / `PROTECT_PAD_PX` / `MIN_TAIL_PX`，作为形参喂进去
+    'var fns = new Function("SCALE", "PROTECT_PAD_PX", "MIN_TAIL_PX", a.code + "\\nreturn { collectProtected: collectProtected, toDeviceRanges: toDeviceRanges, planCuts: planCuts };")' +
+      '(C.SCALE, C.PROTECT_PAD_PX, C.MIN_TAIL_PX);',
+    'return (async function () {',
+    '  var SCALE = C.SCALE, WIDTH = C.WIDTH;',
+    '  var host = document.createElement("div");',
+    '  host.style.cssText = "position:fixed;left:-20000px;top:0;width:" + WIDTH + "px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;";',
+    '  host.innerHTML = "<div style=\\"width:" + WIDTH + "px;box-sizing:border-box\\">" + a.html + "</div>";',
+    '  document.body.appendChild(host);',
+    '  await Promise.all(Array.prototype.slice.call(host.querySelectorAll("img")).map(function (im) { return im.decode ? im.decode().catch(function () {}) : Promise.resolve(); }));',
+    '  await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); });',
+    '  var h = Math.ceil(host.getBoundingClientRect().height);',
+    '  var canvasPx = h * SCALE;',
+    '  var top0 = host.getBoundingClientRect().top;',
+    '  var ranges = fns.collectProtected(host, top0, h);',
+    '  var merged = fns.toDeviceRanges(ranges, canvasPx);',
+    '  var plan = fns.planCuts(canvasPx, merged, C.PAGE_CSS_H * SCALE);',
+    '  document.body.removeChild(host);',
+    // 未 padding 的保护区（设备像素），用来判"这一刀是否真落在内容上"
+    '  var raw = ranges.map(function (r) { return [Math.round(r.top * SCALE), Math.round(r.bottom * SCALE), r.kind]; });',
+    '  var hits = [];',
+    '  for (var i = 0; i < plan.cutsPx.length; i++) {',
+    '    var c = plan.cutsPx[i]; if (c <= 0 || c >= canvasPx) continue;',
+    '    for (var j = 0; j < raw.length; j++) { if (raw[j][0] < c && c < raw[j][1]) { hits.push({ cut: c, kind: raw[j][2], top: raw[j][0], bottom: raw[j][1] }); break; } }',
+    '  }',
+    '  return { hCss: h, canvasPx: canvasPx, rangeCount: ranges.length, mergedCount: merged.length, cuts: plan.cutsPx, oversize: plan.oversize, cutInsideProtected: hits, mergedTail: merged.slice(-4) };',
+    '})();',
+  ].join('\n'),
+
   /** 浏览器真实解码一张 PNG（证明"可解码"，不是只看文件头） */
   decodePng: [
     'var dataUrl = arg.dataUrl;',
@@ -842,6 +881,34 @@ async function pageFn(page, name, arg = null) {
  * 超限就**如实记为"未比较"**，不做半截比较、也不冒充通过。
  */
 const PIXEL_CMP_MAX_BYTES = 24 * 1024 * 1024
+
+/**
+ * 诊断用（待办 T7）：把 `src/lib/htmlToImage.ts` 里真正干活的几个函数**按源码抽取**出来，
+ * 剥掉类型后注入页面执行——目的不是"复刻一份逻辑"，而是让**真机的渲染环境**跑**同一份源码**
+ * （抽取失败直接抛错；不允许退回自带副本，那正是会悄悄漂移的东西）。
+ *
+ * 为什么要这样：T7 的切点在应用外面**复现不出来**（字体度量不同 ⇒ 切点全变），
+ * 所以只能在应用里、用产品自己的函数把"保护区 → 区间 → 切点"这条链重算一遍。
+ */
+function extractT7Fns() {
+  const file = join(dirname(here), 'src', 'lib', 'htmlToImage.ts')
+  const src = readFileSync(file, 'utf8')
+  const names = ['isInvisible', 'transparentColor', 'hasVisibleBorder', 'collectProtected', 'toDeviceRanges', 'planCuts']
+  const parts = names.map((n) => {
+    const m = new RegExp('function ' + n + '\\([\\s\\S]*?\\n\\}').exec(src)
+    if (!m) throw new Error(`在 htmlToImage.ts 里抽不到 ${n}（抽取方式失效，请先修抽取）`)
+    return m[0]
+  })
+  const num = (n) => {
+    const m = new RegExp('const ' + n + ' = ([0-9]+)').exec(src)
+    if (!m) throw new Error(`抽不到常量 ${n}`)
+    return Number(m[1])
+  }
+  return {
+    code: stripTypeScriptTypes(parts.join('\n\n'), { mode: 'strip' }),
+    consts: { SCALE: num('SCALE'), WIDTH: num('WIDTH'), PROTECT_PAD_PX: num('PROTECT_PAD_PX'), MIN_TAIL_PX: num('MIN_TAIL_PX'), PAGE_CSS_H: num('PAGE_CSS_H') },
+  }
+}
 
 // =====================================================================================
 // 第 8 节：应用启动 / 收尾（一律走 desktop-harness 的隔离设施）
@@ -2773,6 +2840,21 @@ async function runL6(ctx, app) {
         )
       } catch (e) {
         observe(`${idTag()}量/画一致性（T7 取证，只观测）`, `诊断未执行：${String(e).slice(0, 160)}`)
+      }
+      // T7 取证之二：在真机里用**从源码抽出来的产品函数**重算"保护区 → 区间 → 切点"整条链。
+      try {
+        const { code, consts } = extractT7Fns()
+        const plan = await pageFn(app.page, 't7PlanProbe', { code, consts, html: currentHtml })
+        observe(
+          `${idTag()}切点计划复算（T7 取证，只观测）`,
+          `正文高 ${plan.hCss} CSS → 画布 ${plan.canvasPx}；保护区 ${plan.rangeCount} 个 → padding+合并成 ${plan.mergedCount} 个区间；` +
+            `切点 ${JSON.stringify(plan.cuts)}；尾部区间 ${JSON.stringify(plan.mergedTail)}；超高页 ${JSON.stringify(plan.oversize)}；` +
+            (plan.cutInsideProtected.length
+              ? `**落在未 padding 保护区内部**的切点 ${JSON.stringify(plan.cutInsideProtected)}`
+              : '没有切点落在未 padding 的保护区内部'),
+        )
+      } catch (e) {
+        observe(`${idTag()}切点计划复算（T7 取证，只观测）`, `诊断未执行：${String(e).slice(0, 200)}`)
       }
       if (cmp) {
         const seams = cmp.seams || []
