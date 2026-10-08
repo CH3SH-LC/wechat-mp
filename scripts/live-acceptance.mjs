@@ -761,6 +761,67 @@ const PAGE_SRC = {
     '});',
   ].join('\n'),
 
+  /**
+   * 诊断（只观测、不判定，2026-10-08 R10 / 待办 T7）：
+   * **把产品自己的"量 → 画"两步在真机上重跑一遍**，看"量出来的行盒"与"画出来的像素"对不对得上。
+   *
+   * 为什么要它：`renderArticleImages` 是**先量后画**——量的是挂在文档里的 `<div>`，
+   * 画的是 `<img src="data:image/svg+xml,…">` 里的 `<foreignObject>`（**图片是独立文档上下文，
+   * 页面 CSS 不参与**）。两者若布局有别，行盒位置就会整体错开并向下累积，切点就可能落在字上。
+   *
+   * 这里**逐行**核对：把量到的每个行盒换算成设备像素区间，数该区间里有没有墨。
+   * 返回"完全无墨的行盒数"与`首行到末行`的漂移抽样，用来区分两种根因：
+   *   · 行盒里有墨但位置系统性偏移 ⇒ 量/画两套上下文不一致（假设成立）；
+   *   · 行盒位置与墨迹吻合 ⇒ 量/画一致，问题在切点选择逻辑（假设不成立）。
+   * **只给观测数字，不给结论**——结论要人看。
+   */
+  measureRenderAgreement: [
+    'var html = arg.html;',
+    'var SCALE = 2, WIDTH = 375;',
+    'function inkInRow(ctx, y, w) { var d = ctx.getImageData(0, y, w, 1).data; var n = 0; for (var k = 0; k < d.length; k += 4) if (d[k] < 180 && d[k + 1] < 180 && d[k + 2] < 180) n++; return n; }',
+    'function inkInBand(ctx, y0, y1, w) { var n = 0; for (var y = Math.max(0, y0); y < y1; y++) n += inkInRow(ctx, y, w); return n; }',
+    'function nearestInk(ctx, y, w, h) { for (var d = 0; d <= 60; d++) { if (y - d >= 0 && inkInRow(ctx, y - d, w) > 0) return -d; if (y + d < h && inkInRow(ctx, y + d, w) > 0) return d; } return null; }',
+    'return (async function () {',
+    '  var host = document.createElement("div");',
+    // 与 src/lib/htmlToImage.ts 的 renderArticleImages **逐字一致**（改产品时必须同步改这里）
+    '  host.style.cssText = "position:fixed;left:-20000px;top:0;width:375px;background:#fff;font-family:-apple-system,BlinkMacSystemFont,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;";',
+    '  host.innerHTML = "<div style=\\"width:375px;box-sizing:border-box\\">" + html + "</div>";',
+    '  document.body.appendChild(host);',
+    '  await Promise.all(Array.prototype.slice.call(host.querySelectorAll("img")).map(function (im) { return im.decode ? im.decode().catch(function () {}) : Promise.resolve(); }));',
+    '  await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); });',
+    '  var hCss = Math.ceil(host.getBoundingClientRect().height);',
+    '  var top0 = host.getBoundingClientRect().top;',
+    '  var walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);',
+    '  var range = document.createRange(); var lines = [];',
+    '  while (walker.nextNode()) {',
+    '    var node = walker.currentNode;',
+    '    if (!node.nodeValue || !node.nodeValue.trim()) continue;',
+    '    var pe = node.parentElement; if (!pe) continue;',
+    '    var cs = getComputedStyle(pe);',
+    '    if (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity) === 0) continue;',
+    '    range.selectNodeContents(node);',
+    '    var rs = Array.from(range.getClientRects());',
+    '    for (var i = 0; i < rs.length; i++) lines.push({ top: rs[i].top - top0, bottom: rs[i].bottom - top0 });',
+    '  }',
+    '  var inner = "<div xmlns=\\"http://www.w3.org/1999/xhtml\\" style=\\"width:375px;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,\'PingFang SC\',\'Microsoft YaHei\',sans-serif\\">" + html + "</div>";',
+    '  var svg = "<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"" + (WIDTH * SCALE) + "\\" height=\\"" + (hCss * SCALE) + "\\"><g transform=\\"scale(" + SCALE + ")\\"><foreignObject width=\\"" + WIDTH + "\\" height=\\"" + hCss + "\\">" + inner + "</foreignObject></g></svg>";',
+    '  var img = new Image(); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg); await img.decode();',
+    '  var cv = document.createElement("canvas"); cv.width = WIDTH * SCALE; cv.height = Math.round(hCss * SCALE);',
+    '  var ctx = cv.getContext("2d", { willReadFrequently: true }); ctx.drawImage(img, 0, 0);',
+    '  var empty = 0; var drift = [];',
+    '  for (var q = 0; q < lines.length; q++) {',
+    '    var t = Math.max(0, Math.round(lines[q].top * SCALE)), b = Math.min(cv.height, Math.round(lines[q].bottom * SCALE));',
+    '    var ink = inkInBand(ctx, t, b, cv.width);',
+    '    if (ink === 0) empty++;',
+    '    if (q % 20 === 0 || q >= lines.length - 3) drift.push({ line: q, top: t, ink: ink, nearest: nearestInk(ctx, t, cv.width, cv.height) });',
+    '  }',
+    '  var last = lines.length ? Math.round(lines[lines.length - 1].bottom * SCALE) : 0;',
+    '  var inkBottom = -1; for (var y = cv.height - 1; y >= 0; y--) { if (inkInRow(ctx, y, cv.width) > 0) { inkBottom = y; break; } }',
+    '  document.body.removeChild(host);',
+    '  return { lines: lines.length, emptyLineBoxes: empty, hCss: hCss, canvasH: cv.height, measuredBottom: last, inkBottom: inkBottom, drift: drift };',
+    '})();',
+  ].join('\n'),
+
   /** 浏览器真实解码一张 PNG（证明"可解码"，不是只看文件头） */
   decodePng: [
     'var dataUrl = arg.dataUrl;',
@@ -2698,6 +2759,20 @@ async function runL6(ctx, app) {
         } catch (e) {
           observe(`${idTag()}逐页逐像素与长图比对`, `比对执行失败（${String(e).slice(0, 140)}）——**如实记为未比较**，不冒充通过。`)
         }
+      }
+      // 诊断（只观测）：在真机上把产品自己的"量 → 画"两步重跑一遍，看行盒对不对得上墨迹。
+      // 这是给待办 T7 取证用的——**不判定**，只把数字记下来。
+      try {
+        const agree = await pageFn(app.page, 'measureRenderAgreement', { html: currentHtml })
+        observe(
+          `${idTag()}量/画一致性（T7 取证，只观测）`,
+          `量到的文本行盒 ${agree.lines} 个，其中**渲染后完全没有墨**的 ${agree.emptyLineBoxes} 个；` +
+            `量到的正文底 = ${agree.measuredBottom} 设备像素，实际最底墨迹行 = ${agree.inkBottom}（差 ${agree.inkBottom - agree.measuredBottom}）；` +
+            `画布高 ${agree.canvasH}（= 量到 CSS 高 ${agree.hCss}×2）。抽样：` +
+            (agree.drift || []).map((d) => `#${d.line}(top=${d.top},墨=${d.ink},最近墨=${d.nearest})`).join(' '),
+        )
+      } catch (e) {
+        observe(`${idTag()}量/画一致性（T7 取证，只观测）`, `诊断未执行：${String(e).slice(0, 160)}`)
       }
       if (cmp) {
         const seams = cmp.seams || []
