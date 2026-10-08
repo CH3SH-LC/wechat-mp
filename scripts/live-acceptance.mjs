@@ -95,7 +95,7 @@ const repoRoot = resolve(here, '..')
 // =====================================================================================
 
 const argv = process.argv.slice(2)
-const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3', 'BIG', 'LONG2']
+const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3', 'BIG', 'LONG2', 'LONG3']
 const phase = String(argv.find((a) => PHASES.includes(a.toUpperCase())) || '').toUpperCase()
 const opt = (name, def = null) => {
   const i = argv.indexOf('--' + name)
@@ -371,6 +371,17 @@ const PROMPTS = {
     '开篇配 1 张横图；正文分成 3 个小节，每个小节各配 1 张插画，全文共 4 张插画。固定测试情境：' +
     '系统从 2026年11月3日（周二）起启用；自助设备在图书馆二楼自助服务区；咨询电话 010-55577777。' +
     '标题“自助借还系统使用指南”，正文 1600–2200 字。不要照片位。',
+
+  // LONG3（2026-10-09）：第三个长文题面，用来回答"到底是不是在贴下限写"。
+  // 三个刻意的选择：① 下限**明显高于人格默认值**（2000–2600，默认是 1500）；
+  // ② 体裁与现有两个**都不同类**（城市旧书店漫游，不是校园场景）；③ 结构与配图数又换一种
+  // （开篇横图 1 + 5 小节各 1 = 6 张）。
+  // 判读口径写在 REQUIREMENTS 的 R15 里，**先定后跑**——免得事后挑对自己有利的说。
+  LONG3:
+    '请直接写一篇面向公众号读者的《城市旧书店漫游指南》长文，采用默认校园风格，不再询问。要求：' +
+    '开篇配 1 张横图；正文分成 5 个小节，每个小节各配 1 张插画，全文共 6 张插画。固定测试情境：' +
+    '营业时间为周二至周日 10:00–20:00（周一闭店）；地址是老街 12 号；咨询电话 021-66668888。' +
+    '标题“旧书店漫游指南”，正文 2000–2600 字。不要照片位。',
 }
 
 /** 每个 phase 的额度与写不写稿。maxDispatches 是本回合的**中止线**（超了就停手并 BLOCKED），不是目标值。 */
@@ -402,6 +413,10 @@ const PHASE_PLAN = {
   // （4 张一起派出去时峰值就该是 4；要求 3 是**可达且仍有意义**的下界——这一档的并发不是本题的重点，
   // 重点是**分页缝合**，BIG 那档才承担"并发放开"的断言）。
   LONG2: { writes: true, minDispatches: 4, maxDispatches: 40, maxGenSvg: 12, title: '自助借还系统使用指南', minObservedConcurrency: 3 },
+  // LONG3（2026-10-09）：下限 2000——**明显高于人格默认值 1500**，用来判"模型是贴着下限写、
+  // 还是只是方差"。配图 6 张，`minObservedConcurrency` 取 3（4 张以上才判，同 LONG2 的理由：
+  // 并发不是这一档要证的东西，分页缝合才是）。
+  LONG3: { writes: true, minDispatches: 4, maxDispatches: 40, maxGenSvg: 14, title: '旧书店漫游指南', minObservedConcurrency: 3 },
 }
 
 // =====================================================================================
@@ -477,6 +492,17 @@ const GROUNDING = {
       ['材料给的启用日期被保住', '11月3日'],
       ['材料给的地点被保住', '二楼'],
       ['材料给的咨询电话被保住', '010-55577777'],
+    ],
+    forbidden: [],
+  },
+  // LONG3（2026-10-09）：材料又换一组——周二至周日 / 老街12号 / 021-66668888，
+  // 与 BIG（10月20日 / 活动中心 / 010-55566666）、LONG2（11月3日 / 二楼 / 010-55577777）
+  // 逐项不同。周一闭店是**反向**材料（写成本周每天都开就会漏这条）。
+  LONG3: {
+    required: [
+      ['材料给的营业时间被保住', '周二至周日'],
+      ['材料给的地址被保住', '老街12号'],
+      ['材料给的咨询电话被保住', '021-66668888'],
     ],
     forbidden: [],
   },
@@ -3380,6 +3406,9 @@ async function main() {
     // `expectAssets: null` 同 BIG——本题面要的是"开篇横图 1 + 3 小节各 1 = 4 张"，不是 L1 那种"恰好一张"，
     // 用 L1 的口径去判会假红。
     else if (phase === 'LONG2') await runFirstPhase(ctx, app, plan, 'LONG2', { wordLimit: 2200, minWords: 1600, maxWords: 2200, grounding: GROUNDING.LONG2, expectAssets: null })
+    // LONG3（2026-10-09）：第三个长文题面，下限 2000（**高于人格默认值 1500**），用来判
+    // "模型是贴着下限写、还是只是方差"——判读口径先定在 REQUIREMENTS R15 里，再跑。
+    else if (phase === 'LONG3') await runFirstPhase(ctx, app, plan, 'LONG3', { wordLimit: 2600, minWords: 2000, maxWords: 2600, grounding: GROUNDING.LONG3, expectAssets: null })
     run.executedCases = [phase]
   } catch (e) {
     fail('phase', `${String(e && e.stack ? e.stack.split('\n').slice(0, 2).join(' | ') : e)}`)
