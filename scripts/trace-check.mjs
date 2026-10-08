@@ -15,6 +15,8 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 // ---------- Tauri 通道桩（故障注入点） ----------
 const callLog = []
+/** gen_svg 的**实参**逐次留档：用来断言"重画是否带上了上一次的失败原因"（有信息重画） */
+const genArgLog = []
 let genBehavior = () => 'ok'
 let tauriCalls = 0
 /** 绘图请求的模拟耗时：用于观察并发峰值与"在途共享" */
@@ -39,6 +41,7 @@ globalThis.window.__TAURI_INTERNALS__ = {
       case 'load_settings':
         return { vision_review: false }
       case 'gen_svg': {
+        genArgLog.push(args)
         inFlight++
         if (inFlight > maxInFlight) maxInFlight = inFlight
         try {
@@ -65,13 +68,15 @@ const {
   raceTimeout,
   slotBudgetMs,
   drawConcurrency,
+  qualityRetryHint,
 } = await import('../src/lib/image-agent.ts')
 const { createLedger, unfinished } = await import('../src/lib/asset-ledger.ts')
 
 const { clearTraceBuffer, traceBuffer, setTraceSink, summarize, isTraceRecord, classifyError, classifyGenError, retryable, retryHintMs, newRunId, newSlotId, FAILURE_CLASSES, trace, clip } = traceMod
 
-// minChecks：2026-10-01 实测 107 条（无分场景前缀，靠条数下界证明执行完整）
-const judge = createJudge({ script: 'trace-check', outDir: resolveOutDir('trace-check'), minChecks: 107 })
+// minChecks：条数下界（无分场景前缀，靠它证明执行完整）。
+// 2026-10-01 实测 107 条 → 2026-10-08 加"有信息重画"8 条（纯函数 4 + 带/不带提示 4）= 115。
+const judge = createJudge({ script: 'trace-check', outDir: resolveOutDir('trace-check'), minChecks: 115 })
 guardCrashes(judge)
 
 let failed = 0
@@ -110,6 +115,15 @@ console.log('\n[分类与记录形状]')
   check('取消不可重试', !retryable('cancel'))
   check('网络类可重试一次', retryable('network'))
   check('质检拒收可重试一次', retryable('quality'))
+  // 有信息重画（2026-10-08）：重画提示的纯函数口径
+  check('重画提示：没有理由 → null（不附加任何东西）', qualityRetryHint([]) === null && qualityRetryHint(undefined) === null)
+  check('重画提示：空白项被过滤，全是空白 → null', qualityRetryHint(['  ', '']) === null)
+  check('重画提示：原样转述质检理由，不做改写', qualityRetryHint(['有 44 个可见元素完全落在画布外']) === '有 44 个可见元素完全落在画布外')
+  check(
+    '重画提示：最多转述 3 条（提示不能反过来淹掉画面描述）',
+    (qualityRetryHint(['a', 'b', 'c', 'd', 'e']) || '').split('；').length === 3,
+    qualityRetryHint(['a', 'b', 'c', 'd', 'e']) || '',
+  )
   // 限流等待提示：Rust 把 Retry-After 用 RETRY_HINT: 前缀转发过来（只认秒数）
   check('能读出服务端等待提示', retryHintMs('DeepSeek API 错误 429：rate limited RETRY_HINT:3') === 3000)
   check('没有提示返回 null（不猜一个等待时间）', retryHintMs('DeepSeek API 错误 500：boom') === null)
@@ -163,6 +177,7 @@ async function inject(name, behavior) {
   resetStub()
   clearTraceBuffer()
   callLog.length = 0
+  genArgLog.length = 0
   genBehavior = behavior
   const ledger = createLedger(newRunId())
   const info = emptyMaterializeInfo()
@@ -170,7 +185,17 @@ async function inject(name, behavior) {
   const recs = traceBuffer()
   const slot = recs.find((r) => r.kind === 'slot')
   const quality = recs.find((r) => r.kind === 'quality')
-  return { name, ledger, info, out, recs, slot, quality, draws: callLog.filter((c) => c === 'gen_svg').length }
+  return {
+    name,
+    ledger,
+    info,
+    out,
+    recs,
+    slot,
+    quality,
+    draws: callLog.filter((c) => c === 'gen_svg').length,
+    genArgs: [...genArgLog],
+  }
 }
 
 console.log('\n[故障注入：五类结果能明确区分（离线，禁网）]')
@@ -203,6 +228,25 @@ console.log('\n[预算：失败不越界重试，取消不重试]')
   check('质检拒绝重试一次', results['质检拒绝'].draws === 2, `draws=${results['质检拒绝'].draws}`)
   check('取消**不**重试', results['取消'].draws === 1, `draws=${results['取消'].draws}`)
   check('质检拒绝留下可读的具体原因', !!results['质检拒绝'].quality?.qualityReasons?.length, JSON.stringify(results['质检拒绝'].quality?.qualityReasons))
+  // 有信息重画（2026-10-08）：重画此前是**原样重发同一个 brief**，模型拿不到"上一版哪里不合规"，
+  // 实测越画越差（G2A：30/15 → 44/15 个元素落在画布外）。下面把"带信息 / 不带信息"两侧都钉住：
+  // 质检拒收必须带原因；其它失败类必须不带（那类失败重发同一 brief 才是对的）。
+  {
+    const qa = results['质检拒绝'].genArgs
+    check('有信息重画：首画不带修正提示（此时还没有可转述的失败事实）', !qa[0]?.hint, JSON.stringify(qa[0]?.hint ?? null))
+    check(
+      '有信息重画：重画带上了质检给出的原因（不是重发同一 brief）',
+      !!qa[1]?.hint && qa[1].hint.includes('<text>'),
+      JSON.stringify(qa[1]?.hint ?? null),
+    )
+    check(
+      '有信息重画：画面描述原样保留（提示只做追加，不替换 brief）',
+      !!qa[1]?.desc && qa[1].desc === qa[0]?.desc,
+      JSON.stringify(qa[1]?.desc ?? null).slice(0, 60),
+    )
+    const na = results['网络错误'].genArgs
+    check('网络类失败重画**不**带修正提示（那类失败重发同一 brief 才对）', !na[1]?.hint, JSON.stringify(na[1]?.hint ?? null))
+  }
   const s = summarize(results['网络错误'].recs)
   check('汇总能按失败分类计数', s.failures.network === 1, JSON.stringify(s.failures))
   check('汇总能给出素材位清单', s.slots.length === 1)
@@ -303,8 +347,10 @@ console.log('\n[阶段 4：有界并发、在途共享、超时与取消]')
   const ledger = createLedger(newRunId())
   const info = emptyMaterializeInfo()
   const out = await materializePlaceholders(v2, '校园', info, { persist: false, ledger, theme: '校园' })
-  check('并发峰值不超过 2', maxInFlight <= 2, `max=${maxInFlight}`)
-  check('确实并发（峰值达到 2，而不是串行）', maxInFlight === 2, `max=${maxInFlight}`)
+  // 2026-10-08：上限提到 20 后，四个素材位应当**全部同时在画**。
+  // 不再把某个具体数字当合同：断言"不超过配置上限" + "确实全并发（不是 2 个一波的串行）"。
+  check('并发峰值不超过配置上限', maxInFlight <= drawConcurrency(), `max=${maxInFlight} cap=${drawConcurrency()}`)
+  check('四个素材位全部同时在画（不是一波 2 个的串行）', maxInFlight === 4, `max=${maxInFlight}`)
   check('四个素材位各画一次', callLog.filter((c) => c === 'gen_svg').length === 4, `draws=${callLog.filter((c) => c === 'gen_svg').length}`)
   const order = out
     .split('\n')
@@ -337,7 +383,7 @@ console.log('\n[阶段 4：有界并发、在途共享、超时与取消]')
   check('超时后立刻返回（不无限等待）', !!timeoutErr && Date.now() - t0 < 800, `ms=${Date.now() - t0}`)
   check('超时错误归网络类（可在预算内重试）', classifyError(timeoutErr) === 'network')
   check('预算默认值为计划初始值 240 秒', slotBudgetMs() === 240_000, String(slotBudgetMs()))
-  check('并发默认值为计划初始值 2', drawConcurrency() === 2, String(drawConcurrency()))
+  check('并发默认值为用户指令设定的 20（不是实测值，见 image-agent 注释）', drawConcurrency() === 20, String(drawConcurrency()))
 
   // mapBounded：结果必须按输入顺序返回，无论完成先后如何
   const bounded = await mapBounded([40, 10, 30, 5], 2, async (ms, i) => {
@@ -345,6 +391,21 @@ console.log('\n[阶段 4：有界并发、在途共享、超时与取消]')
     return i
   })
   check('有界并发结果按输入顺序返回', bounded.join(',') === '0,1,2,3', bounded.join(','))
+
+  // 上限**真的生效**：25 个任务、上限 20 → 峰值必须正好是 20（既不是 25 的裸并发放任，也不是串行）
+  let peak = 0
+  let live = 0
+  await mapBounded(
+    Array.from({ length: 25 }, (_, i) => i),
+    drawConcurrency(),
+    async () => {
+      live++
+      if (live > peak) peak = live
+      await sleep(10)
+      live--
+    },
+  )
+  check('素材位多于上限时并发峰值恰好等于上限（上限真的生效）', peak === 20, `peak=${peak}`)
 
   // 取消后不再派发新任务、不入库
   resetStub()

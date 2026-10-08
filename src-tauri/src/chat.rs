@@ -773,7 +773,7 @@ const SVG_SYSTEM_PROMPT: &str = "\
 10. 若“画面内容”说明缺少落笔所必需的核心信息（主体不明 / 不知画什么动作场景 / 多个可能画面互相冲突），不要硬画——只输出一行以 CLARIFY: 开头的问题，问最关键的一点（一句话），由创作主模型补足后再画；凡能合理画出的情况一律直接画，不要为问而问。";
 
 /// 按 kind 组装用户消息（纯函数，可测；V3-R2 增 divider/heading；P1 增 photo-frame）
-fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>) -> Result<String, String> {
+fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>, hint: Option<&str>) -> Result<String, String> {
     let ctx = match kind {
         "wide" => "整行横幅插画（建议 viewBox=\"0 0 750 220\"，横向构图铺满）",
         "inline" => "小节旁的小插画（建议 viewBox=\"0 0 360 240\" 或 \"0 0 300 300\"）",
@@ -790,6 +790,14 @@ fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>) -> Result<String
     let mut msg = format!("请画一幅插画，用作：{ctx}。画面内容：{}", desc.trim());
     if let Some(t) = theme.map(str::trim).filter(|s| !s.is_empty()) {
         msg.push_str(&format!(" 主题/风格词：{t}，请按其气质配色。"));
+    }
+    // 上一版被本地质检拒收时的**修正提示**（前端 `qualityRetryHint` 产出，见 image-agent.ts）。
+    // 独立一句追加，**不混进"画面内容"**：它说的是"上一版哪里不合规"，不是画面本身的内容；
+    // 混进去会让模型把几何约束当成要画的对象。没有提示（首画 / 网络类失败重试）时不追加。
+    if let Some(h) = hint.map(str::trim).filter(|s| !s.is_empty()) {
+        msg.push_str(&format!(
+            " 注意：上一版未通过本地质检，原因是：{h}。请针对该问题修正后重画，其余画面内容保持不变。"
+        ));
     }
     Ok(msg)
 }
@@ -873,6 +881,8 @@ pub async fn gen_svg(
     kind: String,
     desc: String,
     theme: Option<String>,
+    // 上一版被本地质检拒收时的修正提示（重画才有值）。约定见 `svg_user_prompt`。
+    hint: Option<String>,
     ref_images: Option<Vec<String>>,
     run_id: Option<String>,
     slot_id: Option<String>,
@@ -881,7 +891,7 @@ pub async fn gen_svg(
     let _ = &app; // 非流式命令暂不需事件推送；保留 AppHandle 便于后续接入进度事件
     let cfg = resolve_config()?;
     let model = image_model();
-    let user = svg_user_prompt(&kind, &desc, theme.as_deref())?;
+    let user = svg_user_prompt(&kind, &desc, theme.as_deref(), hint.as_deref())?;
     // 共享复杂度契约 + 该角色的专用契约（角饰/分割线/标题装饰/照片框各有几何要求；
     // wide/inline 不附加，保持大图口径不退化）
     let system = format!("{SVG_SYSTEM_PROMPT}{}", svg_kind_prompt(&kind));
@@ -1699,18 +1709,42 @@ mod tests {
 
     #[test]
     fn svg_prompt_kind_ctx_and_theme() {
-        let wide = svg_user_prompt("wide", "咖啡店一角", Some("杂志")).expect("ok");
+        let wide = svg_user_prompt("wide", "咖啡店一角", Some("杂志"), None).expect("ok");
         assert!(wide.contains("750 220"), "wide 应提示横幅 viewBox");
         assert!(wide.contains("咖啡店一角"));
         assert!(wide.contains("杂志"));
-        let deco = svg_user_prompt("deco", "花簇", None).expect("ok");
+        let deco = svg_user_prompt("deco", "花簇", None, None).expect("ok");
         assert!(deco.contains("角饰"));
         assert!(deco.contains("右下 1/3"));
-        let divider = svg_user_prompt("divider", "花叶横条", None).expect("ok");
+        let divider = svg_user_prompt("divider", "花叶横条", None, None).expect("ok");
         assert!(divider.contains("750 120"), "divider 应提示横向窄条 viewBox");
-        let heading = svg_user_prompt("heading", "小书签", None).expect("ok");
+        let heading = svg_user_prompt("heading", "小书签", None, None).expect("ok");
         assert!(heading.contains("360 160"));
-        assert!(svg_user_prompt("banner", "x", None).unwrap_err().contains("未知图像类型"));
+        assert!(svg_user_prompt("banner", "x", None, None).unwrap_err().contains("未知图像类型"));
+    }
+
+    #[test]
+    fn svg_user_prompt_appends_quality_hint_without_polluting_content() {
+        // 重画修正提示：独立一句追加，且**不得**混进"画面内容"里
+        let base = svg_user_prompt("wide", "校园门口的银杏树", Some("日系"), None).expect("ok");
+        let with_hint = svg_user_prompt(
+            "wide",
+            "校园门口的银杏树",
+            Some("日系"),
+            Some("有 44 个可见元素完全落在画布外"),
+        )
+        .expect("ok");
+        assert!(!base.contains("未通过本地质检"), "无提示时不得出现修正语句");
+        assert!(with_hint.contains("未通过本地质检"), "有提示时必须追加修正语句");
+        assert!(with_hint.contains("44 个可见元素完全落在画布外"), "提示正文应原样转述");
+        // 关键：提示不能被当成画面内容——"画面内容："后面紧跟的仍只有原 desc
+        assert!(
+            with_hint.contains("画面内容：校园门口的银杏树"),
+            "画面内容必须保持原样，提示只能追加在后面（否则模型会把几何约束当成要画的对象）"
+        );
+        // 空白提示等同于无提示
+        let blank = svg_user_prompt("wide", "校园门口的银杏树", Some("日系"), Some("   ")).expect("ok");
+        assert!(!blank.contains("未通过本地质检"), "空白提示不得追加修正语句");
     }
 
     // ---------- P2：多模态线上形态（to_wire / build_messages） ----------
@@ -1929,10 +1963,10 @@ mod tests {
 
     #[test]
     fn svg_user_prompt_supports_photo_frame() {
-        let pf = svg_user_prompt("photo-frame", "木质画框", None).expect("photo-frame 应被识别");
+        let pf = svg_user_prompt("photo-frame", "木质画框", None, None).expect("photo-frame 应被识别");
         assert!(pf.contains("600 600"));
         assert!(pf.contains("透明"));
-        assert!(svg_user_prompt("banner", "x", None).unwrap_err().contains("photo-frame"));
+        assert!(svg_user_prompt("banner", "x", None, None).unwrap_err().contains("photo-frame"));
     }
 
     #[test]
@@ -2815,8 +2849,13 @@ mod tests {
     #[ignore = "需要真实 DeepSeek API 与密钥"]
     async fn live_gen_svg_draws_concrete_illustration() {
         let cfg = resolve_config().expect("应能解析到密钥配置");
-        let user = svg_user_prompt("wide", "清晨的咖啡店门头：木质招牌、暖黄灯光、门口一株绿植与花盆，门廊有地砖与盆栽层次", Some("日系"))
-            .expect("prompt 应组装成功");
+        let user = svg_user_prompt(
+            "wide",
+            "清晨的咖啡店门头：木质招牌、暖黄灯光、门口一株绿植与花盆，门廊有地砖与盆栽层次",
+            Some("日系"),
+            None,
+        )
+        .expect("prompt 应组装成功");
         let text = raw_completion(
             &cfg,
             image_model(),

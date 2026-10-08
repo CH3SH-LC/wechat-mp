@@ -56,8 +56,20 @@ import type { FailureClass } from './trace.ts'
 
 /** 单素材位累计预算（毫秒）：含排队之后的执行、重试与补描述（计划初始值 240 秒） */
 export const SLOT_BUDGET_MS_DEFAULT = 240_000
-/** 同时绘制的素材位上限（计划初始值 2）：结果与顺序无关，组装始终按正文原始行序 */
-export const DRAW_CONCURRENCY_DEFAULT = 2
+/**
+ * 同时绘制的素材位上限。结果与顺序无关：组装始终按正文原始行序（见 `mapBounded`）。
+ *
+ * 2026-10-08：由 2 提到 **20**（用户指令"我的并发数没有限额，先把限额设为 20，然后测试"）。
+ * 两点依据 + 一处如实说明：
+ *   · 这个上限**不控制成本**——每个素材位的派发都在账本里**派发前预扣**，且每素材位最多
+ *     2 画 + 1 次补描述；N 个素材位无论几路并发，**调用总数一样**，并发只改变**时间**。
+ *   · 原值 2 是"阶段 4 控制调用放大"时给的**计划初始值，从未实测**（旧注释自己就这么写的），
+ *     不是任何测量结果。
+ *   · **20 同样不是实测值**：服务端能扛多少路并发、429 限流从多少开始出现，**尚未测量**。
+ *     在实测之前不要把它当"已知安全"。测出真实上限后回填这里，别再用猜的数。
+ * 可用 `VITE_DRAW_CONCURRENCY` 覆盖，作为紧急收口。
+ */
+export const DRAW_CONCURRENCY_DEFAULT = 20
 
 function envNumber(key: string): number | undefined {
   // 直接在 node 下跑断言脚本时没有 Vite 的 import.meta.env，用可选链安全读取
@@ -1425,6 +1437,29 @@ interface GenOnce {
   clarify: string | null
   failure: FailureClass
   detail: string
+  /** 只看质检拒收：本地质检给出的**完整**理由清单（`detail` 里只留前 2 条，这里不截断） */
+  reasons?: string[]
+}
+
+/**
+ * 质检拒收后，下一次重画要带回给模型的**修正提示**（纯函数，可测）。
+ *
+ * 为什么需要它：重画此前是**原样重发同一个 brief**，模型拿不到"上一版哪里不合规"，
+ * 只能重掷一次同样的骰子——实测出现过越画越差（G2A：30 / 15 个可见元素落在画布外，
+ * 重画后变成 44 / 15）。已有 `refine_brief` 通道证明"把失败事实交回模型"这条路是通的
+ * （模型 CLARIFY 追问 → 主模型补 brief 再画），质检拒收只是缺了同一条信息通道。
+ *
+ * 只做**事实转述**：告诉模型"上一版哪里不合规"，不告诉它"该怎么画"——
+ * 画法是模型的事，本地质检只掌握几何事实，越界去猜画法只会把提示词变成另一套规则。
+ *
+ * @param reasons 本地质检给出的理由（如"有 44 个可见元素完全落在画布外"）
+ * @returns 非空提示；没有可用理由时返回 null（此时不附加，保持原样重发）
+ */
+export function qualityRetryHint(reasons: string[] | undefined): string | null {
+  const list = (reasons || []).map((r) => String(r).trim()).filter(Boolean)
+  if (!list.length) return null
+  // 上限 3 条：理由再多也只转述最靠前的几条，避免提示本身变成一串要求把画面描述淹没
+  return list.slice(0, 3).join('；')
 }
 
 /**
@@ -1439,6 +1474,7 @@ async function genOnce(
   kind: 'wide' | 'inline' | 'deco',
   desc: string,
   theme: string,
+  hint?: string | null,
 ): Promise<GenOnce> {
   const t0 = Date.now()
   try {
@@ -1446,6 +1482,7 @@ async function genOnce(
       kind,
       desc,
       theme: theme || null,
+      hint: hint || null,
       runId,
       slotId,
       attempt,
@@ -1468,7 +1505,13 @@ async function genOnce(
         qualityReasons: verdict.reasons.map((r) => clip(r, 80)),
         note: clip(desc, 80),
       })
-      return { svg: null, clarify: null, failure: 'quality', detail: `素材未达标：${verdict.reasons.slice(0, 2).join('；')}` }
+      return {
+        svg: null,
+        clarify: null,
+        failure: 'quality',
+        detail: `素材未达标：${verdict.reasons.slice(0, 2).join('；')}`,
+        reasons: verdict.reasons,
+      }
     }
     return { svg, clarify: null, failure: 'unknown', detail: '' }
   } catch (e) {
@@ -1512,6 +1555,10 @@ async function drawSlot(
   }
 
   let brief = desc
+  // 被质检拒收后带回去的修正提示（见 qualityRetryHint 的说明）。首画为空；
+  // 只在**上一次是质检拒收**时才有值——网络类失败重发同一 brief 才是对的。
+  // 名字不叫 `hint`：循环里已有一个 `const hint`（限流等待毫秒），同名会被它遮蔽。
+  let qualityHint: string | null = null
   let last: DrawResult = { svg: null, failure: 'unknown', detail: '未执行绘图' }
   let firstAttempt = entry.attempts === 0
 
@@ -1529,9 +1576,16 @@ async function drawSlot(
       await new Promise((r) => setTimeout(r, hint))
     }
     noteDraw(entry)
-    if (!firstAttempt) say({ phase: 'asset', text: '首版素材未达标，正在重画一次…' })
+    if (!firstAttempt) {
+      say({
+        phase: 'asset',
+        text: qualityHint
+          ? `上一版未通过质检（${clip(qualityHint, 40)}），带着这条修正重画一次…`
+          : '首版素材未达标，正在重画一次…',
+      })
+    }
     firstAttempt = false
-    const r = await genOnce(runId, slotId, entry.attempts, kind, brief, theme)
+    const r = await genOnce(runId, slotId, entry.attempts, kind, brief, theme, qualityHint)
     if (r.svg) return { svg: r.svg, failure: 'unknown', detail: '' }
     if (r.clarify) {
       last = { svg: null, failure: 'empty', detail: `素材智能体回问：${clip(r.clarify, 60)}` }
@@ -1546,8 +1600,11 @@ async function drawSlot(
           runId,
           slotId,
         })
-        if (refined && refined.trim()) brief = refined.trim()
-        else break
+        if (refined && refined.trim()) {
+          brief = refined.trim()
+          // brief 已被重写：上一条质检理由针对的是**旧的画面描述**，继续带着它会指错方向
+          qualityHint = null
+        } else break
       } catch (e) {
         last = { svg: null, failure: classifyGenError(e, null), detail: `补描述失败：${clip(String(e), 100)}` }
         break
@@ -1555,6 +1612,9 @@ async function drawSlot(
       continue
     }
     last = { svg: null, failure: r.failure, detail: r.detail }
+    // 被质检拒收：把**已确证的失败事实**交回模型，让下一次重画是"带着修正"的，
+    // 而不是重掷同一个骰子（实测重发同一 brief 会越画越差）。其它失败类不附加提示。
+    qualityHint = r.failure === 'quality' ? qualityRetryHint(r.reasons) : null
     // 取消是用户意图、鉴权/参数错重试无用：都不再消耗预算（其余失败在预算内再试一次）
     if (!retryable(r.failure)) break
   }
