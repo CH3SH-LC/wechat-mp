@@ -7,8 +7,8 @@ import { createJudge, guardCrashes, resolveOutDir } from './lib/run-result.mjs'
 import { analyzeSvg, checkSvgQuality, SLOT_PX } from '../src/lib/svg-quality.ts'
 const { mockArtSvg } = await import('../src/lib/image-agent.ts')
 
-// minChecks：2026-10-01 实测 20 条（无分场景前缀，靠条数下界证明执行完整）
-const judge = createJudge({ script: 'svg-quality-check', outDir: resolveOutDir('svg-quality-check'), minChecks: 20 })
+// minChecks：2026-10-01 实测 20 条 → 2026-10-08 加 4 条越界判定断言后为 24（靠条数下界证明执行完整）
+const judge = createJudge({ script: 'svg-quality-check', outDir: resolveOutDir('svg-quality-check'), minChecks: 24 })
 guardCrashes(judge)
 
 let failed = 0
@@ -85,6 +85,46 @@ const PHOTO_FRAME = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 20
 <circle cx="140" cy="140" r="6" fill="#8fb8a4"/>
 </svg>`
 
+// ---- 2026-10-08：越界判定（offCanvas）的三类已实证误判 + 一个对照 ----
+// 起因：真实模型画的图反复被「有 N 个可见元素完全落在画布外」拦下（BIG 大文章 14 张里 5 张、
+// G2A 单篇连画 2 次），而成簇的数字（11/21/44）指向**判定本身**有问题。下面是三类最小复现。
+
+// D1 贴边的零厚度元素：顶边横线（y=0，高 0）与 x=0 竖线（宽 0）。它们有一半在图内，本来就合格；
+// 旧口径用严格 `0 + 0 > 0` 判相交，于是把它们判成"完全落在画布外"——**挪 1 个单位就变合格**。
+const EDGE_ZERO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 500" fill="none">
+<rect x="60" y="60" width="630" height="380" fill="#e8b48a"/>
+<line x1="0" y1="0" x2="750" y2="0" stroke="#c96f4a" stroke-width="8"/>
+<line x1="0" y1="20" x2="0" y2="480" stroke="#8fb8a4" stroke-width="8"/>
+<circle cx="375" cy="250" r="60" fill="#f2c76e"/>
+</svg>`
+
+// D2 祖先 <g transform> 搬进画布：组内元素**变换前**在画布外（x 460..660 / y 340..460），
+// `translate(-400,-300)` 后落在 60..260 / 40..160，完全在 300×200 画布内。
+// 旧口径只看元素**自身**有没有 transform，于是整组被判越界。
+const ANCESTOR_TRANSFORM = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" fill="none">
+<g transform="translate(-400,-300)">
+<rect x="460" y="340" width="200" height="120" fill="#e8b48a"/>
+<circle cx="560" cy="400" r="40" fill="#c96f4a"/>
+</g>
+<circle cx="60" cy="60" r="20" fill="#f2c76e"/>
+</svg>`
+
+// D3 viewBox 的非零原点：画布实际是 [20,320]×[20,220]。底边横线 y=210 在画布内，
+// 旧口径把 min-x/min-y 丢掉后按 [0,300]×[0,200] 判，于是 y=210 被判"落在画布外"。
+const VIEWBOX_ORIGIN = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="20 20 300 200" fill="none">
+<rect x="40" y="40" width="260" height="160" fill="#e8b48a"/>
+<circle cx="170" cy="120" r="40" fill="#c96f4a"/>
+<path d="M30 210 h280" stroke="#5f8d8a" stroke-width="6" fill="none"/>
+</svg>`
+
+// 对照组：真的整块在画布之外、且没有任何 transform 可解释——必须**仍然**被判越界。
+// 没有这一条，上面三条就可能只是"把规则关掉了"。
+const GENUINELY_OUTSIDE = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 200" fill="none">
+<rect x="40" y="40" width="220" height="120" fill="#e8b48a"/>
+<circle cx="900" cy="900" r="30" fill="#c96f4a"/>
+<circle cx="150" cy="100" r="30" fill="#f2c76e"/>
+</svg>`
+
 console.log('[调查文档反例必须被拦下]')
 check('画布外 fill=none 的六个圆被拒', !checkSvgQuality(OFF_CANVAS, 'wide').ok, JSON.stringify(checkSvgQuality(OFF_CANVAS, 'wide').failures))
 check('六个圆都不计可见', analyzeSvg(OFF_CANVAS).visible === 0)
@@ -92,6 +132,13 @@ check('空白 SVG 被拒', !checkSvgQuality(BLANK, 'wide').ok)
 check('铺满画布的角饰被拒', !checkSvgQuality(FULL_BLEED_DECO, 'deco').ok, JSON.stringify(checkSvgQuality(FULL_BLEED_DECO, 'deco').failures))
 check('大画布上的小点被拒', !checkSvgQuality(SPECK, 'wide').ok, JSON.stringify(checkSvgQuality(SPECK, 'wide').failures))
 check('含 <text> 的素材被拒', !checkSvgQuality(WITH_TEXT, 'wide').ok, JSON.stringify(checkSvgQuality(WITH_TEXT, 'wide').failures))
+
+console.log('\n[2026-10-08 越界判定：三类误判不得再误杀 + 一个对照]')
+// 断言打的是 `offCanvas` 这个**具体指标**，不是整张图的 ok——避免与占画比/可见数等其它规则缠在一起。
+check('贴边的零厚度元素不算越界（顶边横线 + x=0 竖线）', analyzeSvg(EDGE_ZERO).offCanvas === 0, `offCanvas=${analyzeSvg(EDGE_ZERO).offCanvas}`)
+check('祖先 <g transform> 搬进画布的元素不算越界', analyzeSvg(ANCESTOR_TRANSFORM).offCanvas === 0, `offCanvas=${analyzeSvg(ANCESTOR_TRANSFORM).offCanvas}`)
+check('viewBox 的非零 min-x/min-y 被当作画布原点（不是画布外）', analyzeSvg(VIEWBOX_ORIGIN).offCanvas === 0, `offCanvas=${analyzeSvg(VIEWBOX_ORIGIN).offCanvas}`)
+check('对照组：真的落在画布外、无 transform 可解释的元素仍被判越界', analyzeSvg(GENUINELY_OUTSIDE).offCanvas > 0, `offCanvas=${analyzeSvg(GENUINELY_OUTSIDE).offCanvas}`)
 
 console.log('\n[不误杀：正常素材必须通过]')
 check('相对路径角饰可用（bbox 未算错）', checkSvgQuality(RELATIVE_PATH, 'deco').ok, JSON.stringify(checkSvgQuality(RELATIVE_PATH, 'deco').failures))

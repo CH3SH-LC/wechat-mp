@@ -95,7 +95,7 @@ const repoRoot = resolve(here, '..')
 // =====================================================================================
 
 const argv = process.argv.slice(2)
-const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3']
+const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3', 'BIG']
 const phase = String(argv.find((a) => PHASES.includes(a.toUpperCase())) || '').toUpperCase()
 const opt = (name, def = null) => {
   const i = argv.indexOf('--' + name)
@@ -350,6 +350,16 @@ const PROMPTS = {
   G3:
     '帮我写一篇馆内活动通知，直接写。材料如下：本活动免费参加；原预约自动顺延到下周一同一时段，不用重新预约；' +
     '现场 9:00–17:00 有人值守。标题“周末活动安排通知”，最后再附两句一般性的到场建议。',
+
+  // ---- BIG（2026-10-08 用户指令：攻大文章——数个章节、每章几张插图）----
+  // 目的：把"绘制并发上限 2 → 20"放到**真实链路**上验证。这篇要求约 10 张插画：
+  // 旧上限下它们是 5 波串行（每波 2 张），新上限下应当**同时在飞**。
+  // 峰值由 trace 的 gen_svg 请求区间**实测**（见 reconcile），不看配置常量。
+  BIG:
+    '请直接写一篇校园“秋季社团招新”介绍长文，采用默认校园风格，不再询问。要求：分成 5 个小节，' +
+    '每个小节标题下各配 2 张插画，全文共 10 张插画，每张都要有独立画面。固定测试情境：' +
+    '报名从 2026年10月20日周二开始；地点在大学生活动中心一楼；咨询电话010-55566666。' +
+    '标题“秋季社团招新指南”，正文 1500–2500 字。不要照片位。',
 }
 
 /** 每个 phase 的额度与写不写稿。maxDispatches 是本回合的**中止线**（超了就停手并 BLOCKED），不是目标值。 */
@@ -369,6 +379,14 @@ const PHASE_PLAN = {
   G2A: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: null },
   G2B: { writes: true, minDispatches: 2, maxDispatches: 4, maxGenSvg: 0, title: '图书馆开放时间调整通知' },
   G3: { writes: true, minDispatches: 2, maxDispatches: 5, maxGenSvg: 3, title: null },
+  // BIG 大文章（2026-10-08）：绘图预算按用户指令放到 20；派发上限要容得下 prep + 写作 + 约 10 张图 + 修订。
+  // `minObservedConcurrency` 是**实测要求**：绘图请求数够多时，trace 算出的并发峰值必须 ≥ 它，
+  // 否则说明并发上限没真的放开（仍是一波 2 个的串行）。
+  // 中止线要容得下：prep（最多 3）+ 写作 1 + 约 10 张图（含重试；首次实测用了 14）+ 自动修订若干轮。
+  // 2026-10-08 首次跑用 18 太紧：14 张图 + 写作 + 修订就把中止线烧光，还**主动拦掉了一次绘图**
+  // （`fail/unknown：预算门禁拒绝派发：本回合派发已达中止线 18`）——于是"没成稿"里混进了测试脚本
+  // 自己的限制，那不算产品结论。加大到 40，让中止线只作兜底、不参与判断。
+  BIG: { writes: true, minDispatches: 4, maxDispatches: 40, maxGenSvg: 20, title: '秋季社团招新指南', minObservedConcurrency: 4 },
 }
 
 // =====================================================================================
@@ -418,6 +436,21 @@ const GROUNDING = {
     // 过度阻断的失败形态是"把已给的规则也删了/写成待定"，用一个明确片段兜底；
     // 真正的"反复追问"由"本轮必须 accepted 提交"兜住（追问就没有提交）。
     forbidden: [['把已给的免费写成待定', '费用待定']],
+  },
+  // BIG（2026-10-08 大文章）。**不**复用 L1 的事实地图——那是"图书馆开放"那篇的固定事实，
+  // 套到这题上必然全红（2026-10-08 首次跑就是这么错的：BIG 没传 grounding，按代码默认走了 L1 的
+  // factChecks，于是"10月10日 9:00–17:00 开放 / 010-55556666"这些**本题根本没有**的事实被判 FAIL）。
+  // 按代码口径：`grounding` 存在且 `facts ≠ 'l1'` ⇒ 跳过 L1 factChecks，只核下面这组本題面的材料。
+  BIG: {
+    required: [
+      ['材料给的报名开始日期被保住', '10月20日'],
+      ['材料给的报名地点被保住', '活动中心'],
+      ['材料给的咨询电话被保住', '010-55566666'],
+      // 标题**不**在这里核：标题存在标题节点里（`titleNodeText`），已由「标题节点与源文」那条专门断言覆盖。
+      // 2026-10-08 首次跑把它写进 required、去**正文**里搜整串，正文按标题断句渲染（"秋季社团招新"+换行），
+      // 必然搜不到 —— 那是判据写错造成的假红，不是产品问题（同「名额」那一类）。
+    ],
+    forbidden: [],
   },
 }
 
@@ -762,7 +795,19 @@ async function warmUpProfile(ctx) {
   log(
     `  [预热] pid=${launch.pid} 首次初始化隔离 profile：${ready ? `已完成（标记 ${markerMs}ms + 沉降 15s，共 ${Date.now() - t0}ms）` : `45s 内未见 ${marker}`}`,
   )
-  if (!ready) fail('launch', `隔离 profile 预热 45s 仍未见 ${marker}——后续 CDP 大概率不可用`)
+  // 2026-10-08：这里原来是 `fail('launch', ...)`，可它自己的措辞就是"**大概率**不可用"——
+  // 一个**概率性**判断被当成硬失败，会把一次全绿的跑分整条判成 ERROR。
+  // 实测（BIG run3）：**全部检查通过、0 条 FAIL**，只因预热 45s 内没看到 `Local State` 就报 ERROR，
+  // 而**同一轮 CDP 随后正常连上、检查全部跑完、成稿 accepted**。
+  // 真正的门禁在下面 `openApp`：CDP 连不上会以**确定**的理由失败或阻塞。这里降级为观测——
+  // 如实留痕，但不拿"大概率"当结论去判死一次已经成功的运行。
+  if (!ready) {
+    observe(
+      '隔离 profile 预热超时',
+      `预热 45s 内未见 ${marker}（WebView2 首轮初始化的已知行为，不是脚本错）。` +
+        `**本轮能否驱动以下面的 CDP 连接结果为准**：连上则不影响结论，连不上则由 openApp 给出确定理由。`,
+    )
+  }
   if (!mine.closed) fail('cleanup', `预热实例未能关闭（${JSON.stringify(closeResult)}）`)
   return { skipped: false, ready, ms: Date.now() - t0, closeResult }
 }
@@ -1644,6 +1689,48 @@ function reconcile(budget, turn, traceInfo, plan) {
   const byCode = (c) => cmp.problems.find((p) => p.code === c) || null
   // 探针不在位时，"页面实际传输 0 次"是**没看见**而不是**没发生**——不能拿它去核对预算
   const probeMissing = turn.probeInstalled !== true
+  // ── 绘制并发峰值（2026-10-08，用户指令"限额设为 20 然后测试"）─────────────────────────────
+  // 并发上限到底有没有生效，**不看配置常量**：从 trace 里每条 gen_svg 请求的 [startedAt, startedAt+ms)
+  // 区间做扫描线，算"实际同时在飞"的峰值。旧上限 2 下这篇会呈现 5 波、峰值 2；新上限下应当接近素材位数。
+  const genIntervals = requests
+    .filter((r) => r.phase === 'gen_svg' && Number.isFinite(r.startedAt) && Number.isFinite(r.ms) && r.ms > 0)
+    .map((r) => [r.startedAt, r.startedAt + r.ms])
+  let peakDrawConc = 0
+  if (genIntervals.length) {
+    const evs = []
+    for (const [s, e] of genIntervals) {
+      evs.push([s, 1])
+      evs.push([e, -1])
+    }
+    // 同一时刻先减后加：相邻首尾相接不算重叠，避免把顺序执行误算成并发
+    evs.sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    let live = 0
+    for (const [, d] of evs) {
+      live += d
+      if (live > peakDrawConc) peakDrawConc = live
+    }
+  }
+  observe(
+    `${idTag()}绘制并发峰值（实测）`,
+    genIntervals.length
+      ? `从 ${genIntervals.length} 条 gen_svg 请求的区间扫描得出**真实并发峰值 = ${peakDrawConc}**（不是配置常量）。`
+      : `本轮无可算区间的 gen_svg 请求（绘图 ${genSvgDispatched} 条），并发峰值记 UNKNOWN，不按 0 记账。`,
+  )
+  const needConc = plan && Number.isFinite(plan.minObservedConcurrency) ? plan.minObservedConcurrency : 0
+  if (needConc > 0) {
+    if (genIntervals.length >= needConc) {
+      check(
+        `${idTag()}绘制并发放开生效（trace 实测峰值 ≥ ${needConc}，不是一波 2 个的串行）`,
+        peakDrawConc >= needConc,
+        `真实峰值=${peakDrawConc}（要求 ≥${needConc}）；绘图请求 ${genIntervals.length} 条`,
+      )
+    } else {
+      observe(
+        `${idTag()}绘制并发峰值无法判定`,
+        `绘图请求只有 ${genIntervals.length} 条（要求 ≥${needConc} 才够判定），本项记 UNKNOWN——**不**据此说并发已放开或未放开。`,
+      )
+    }
+  }
   check(
     `${idTag()}页面探针在回合期间在位（"实际传输 0 次"必须是观测结果，不是探针丢了的假象）`,
     !probeMissing,
@@ -2904,6 +2991,9 @@ async function main() {
     else if (phase === 'G2A') await runFirstPhase(ctx, app, plan, 'G2A', { wordLimit: 1200, grounding: GROUNDING.G2A, expectAssets: null })
     else if (phase === 'G3') await runFirstPhase(ctx, app, plan, 'G3', { wordLimit: 1200, grounding: GROUNDING.G3, expectAssets: null })
     else if (phase === 'G2B') await runWritePhase(ctx, app, 'G2B', plan, { wordLimit: null })
+    // BIG 大文章（2026-10-08，用户指令）：实测绘制并发峰值与限流表现
+    // 必须传 grounding：否则按默认走 L1 的 factChecks，用另一篇的固定事实判这篇（首次跑就栽在这）。
+    else if (phase === 'BIG') await runFirstPhase(ctx, app, plan, 'BIG', { wordLimit: 2500, minWords: 1500, grounding: GROUNDING.BIG, expectAssets: null })
     run.executedCases = [phase]
   } catch (e) {
     fail('phase', `${String(e && e.stack ? e.stack.split('\n').slice(0, 2).join(' | ') : e)}`)

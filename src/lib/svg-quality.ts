@@ -269,6 +269,39 @@ function boxOf(tag: string, a: Record<string, string>): SvgBox | null {
   }
 }
 
+/**
+ * 收集"位于带 transform 的 `<g>` 内部"的字符区间（2026-10-08）。
+ *
+ * 为什么需要：`analyzeSvg` 用正则平扫元素、**不建 DOM 树**，因此无法求祖先 `transform` 的位移。
+ * 原来只看元素自身有没有 `transform`，于是 `<g transform="translate(-40,-40)">` 里的子孙仍按
+ * **变换前**的坐标参与越界判定——一个分组整体被误判，"有 N 个可见元素完全落在画布外"里
+ * 成簇的数字（11 / 21 / 44）正是这个形态。
+ *
+ * 判不了就不判：落在这类区间里的元素只计可见数、不参与越界判定（与既有"宁可放过，不能误杀"一致）。
+ */
+function collectTransformedGroupRanges(body: string): Array<[number, number]> {
+  const out: Array<[number, number]> = []
+  const stack: Array<{ transformed: boolean; from: number }> = []
+  const tagRe = /<(\/?)(g)\b([^>]*?)(\/?)>/gi
+  let t: RegExpExecArray | null
+  while ((t = tagRe.exec(body)) !== null) {
+    if (t[1] === '/') {
+      const top = stack.pop()
+      if (top && top.transformed) out.push([top.from, t.index])
+      continue
+    }
+    const transformed = Object.prototype.hasOwnProperty.call(attrsOf(t[0]), 'transform')
+    if (t[4] === '/') {
+      if (transformed) out.push([t.index, t.index + t[0].length])
+      continue
+    }
+    stack.push({ transformed, from: t.index })
+  }
+  // 未闭合的 `<g>`（坏 SVG）：按"一直到结尾"处理，同样只放宽、不放宽到漏判真实越界
+  for (const s of stack) if (s.transformed) out.push([s.from, body.length])
+  return out
+}
+
 const EMOJI_RE = /[\p{Extended_Pictographic}]/u
 
 /**
@@ -280,11 +313,18 @@ export function analyzeSvg(svg: string, slotPx?: { w: number; h: number }): SvgM
   const raw = String(svg || '')
   const body = stripNonDrawing(raw)
   const vb = /viewBox\s*=\s*"([^"]*)"/i.exec(body)
-  let viewBox: { w: number; h: number } | null = null
+  let viewBox: { x: number; y: number; w: number; h: number } | null = null
   if (vb) {
     const p = nums(vb[1])
-    if (p.length === 4 && p[2] > 0 && p[3] > 0) viewBox = { w: p[2], h: p[3] }
+    // 2026-10-08：`min-x` / `min-y` 原来解析出来就被**丢掉**（只留宽高），于是非零原点的图
+    // （如 `viewBox="20 20 300 200"`）会把画布里本来正常的内容判成"落在画布外"。原点必须保留。
+    if (p.length === 4 && p[2] > 0 && p[3] > 0) viewBox = { x: p[0], y: p[1], w: p[2], h: p[3] }
   }
+  // 2026-10-08：祖先 `<g transform=...>` 的位移在本函数里**无法求值**（正则平扫，不建 DOM 树）。
+  // 原来只挡元素**自身**的 transform，子孙仍按变换前的原始坐标判越界——一个带 translate 的分组
+  // 会让**整组**被误判（实测成簇的 11 / 21 / 44 个正是这个形态）。判不了就不判：见下方用法。
+  const transformedRanges = collectTransformedGroupRanges(body)
+  const insideTransformedGroup = (idx: number) => transformedRanges.some(([a, b]) => idx > a && idx < b)
   const rootTag = /<svg\b[^>]*>/i.exec(body)?.[0] || ''
   const rootFill = attrsOf(rootTag)['fill']
 
@@ -310,14 +350,25 @@ export function analyzeSvg(svg: string, slotPx?: { w: number; h: number }): SvgM
     visible++
     // 带 transform 或几何无法解析的元素：不可判位置，只计可见数、不参与包围盒，
     // 也绝不算"越界"——宁可放过，不能误杀（好插画大量使用 transform 与相对路径）。
-    const box = a['transform'] ? null : boxOf(tag, a)
+    // 自身带 transform、或位于带 transform 的 `<g>` 内：位置不可判 → 只计可见数，不判越界
+    // （与既有口径一致：好插画大量使用 transform 与相对路径，宁可放过，不能误杀）
+    const box = a['transform'] || insideTransformedGroup(m.index) ? null : boxOf(tag, a)
     if (!box || !viewBox) continue
-    const inside = box.x + box.w > 0 && box.y + box.h > 0 && box.x < viewBox.w && box.y < viewBox.h
+    // 用**闭区间**相交（2026-10-08）：贴边的零厚度元素（顶边横线、`x=0` 竖线、`M0 0 H750`）原来因
+    // `0 + 0 > 0` 为假被判越界，可它们有一半在图内、本来就合格——实测"挪 1 个单位就从越界变合格"。
+    // 放开的只是"贴着边界"这一种情形：整体位于画布之外（如 `x` 全小于 min-x）仍会被判越界。
+    const inside =
+      box.x + box.w >= viewBox.x &&
+      box.y + box.h >= viewBox.y &&
+      box.x <= viewBox.x + viewBox.w &&
+      box.y <= viewBox.y + viewBox.h
     if (!inside) {
       offCanvas++
       continue
     }
-    visBoxes.push(box)
+    // 归一到画布局部坐标：下面的占画比/墨迹比都按 viewBox 的宽高算，原点非零时必须先减掉，
+    // 否则 `viewBox="20 20 ..."` 这类图会被算成正偏移、占画比虚高。
+    visBoxes.push({ ...box, x: box.x - viewBox.x, y: box.y - viewBox.y })
   }
 
   const slot = slotPx || { w: 300, h: 300 }
