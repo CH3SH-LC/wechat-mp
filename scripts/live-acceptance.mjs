@@ -56,7 +56,7 @@ import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
 import {
   closeOwnPid,
@@ -2489,6 +2489,55 @@ async function runL6(ctx, app) {
     /已导出/.test(htmlMsg) && htmlFileOk,
     `回执=「${clip(htmlMsg, 200)}」；文件存在=${htmlExists}；与基准逐字节一致=${htmlFileOk}；基准 htmlHash=${String(prev.htmlHash).slice(0, 12)}`,
   )
+  // 「导出的 .html 真的能打开、内容完整」——GOAL 验收表"导出交付"的**本地半边**（2026-10-08 R7）。
+  // 上面两条（逐字节等于成功版本 / 无外链资源）**都推不出**"用户双击打开后看得到东西"：
+  // 一个图全裂、正文缺失的 HTML 同样能逐字节一致、同样没有外链。
+  // 做法是**真的用浏览器打开那个文件**（file://），核"图片全部解码 + 标题可见 + 可见字数对得上预览"。
+  // 打不开页面（拿不到新 page）时如实记为**未核验**，不冒充通过、也不算失败。
+  let htmlRender = null
+  let htmlRenderErr = ''
+  try {
+    const ctx0 = htmlExists && app.browser && typeof app.browser.contexts === 'function' ? app.browser.contexts()[0] : null
+    const rp = ctx0 && typeof ctx0.newPage === 'function' ? await ctx0.newPage() : null
+    if (!rp) {
+      htmlRenderErr = '拿不到新的浏览器页面（无法打开导出文件）'
+    } else {
+      await rp.goto(pathToFileURL(htmlPath).href)
+      htmlRender = await rp.evaluate(() => {
+        const imgs = Array.from(document.images)
+        return {
+          charset: document.characterSet,
+          imgs: imgs.length,
+          broken: imgs.filter((i) => !i.naturalWidth).length,
+          widths: imgs.map((i) => i.naturalWidth).slice(0, 12),
+          chars: ((document.body && document.body.innerText) || '').replace(/\s+/g, '').length,
+          text: ((document.body && document.body.innerText) || '').slice(0, 300),
+        }
+      })
+      await rp.close()
+    }
+  } catch (e) {
+    htmlRenderErr = String(e).slice(0, 180)
+  }
+  {
+    const wantChars = state.ui.article ? state.ui.article.bodyChars : 0
+    const wantTitle = String(prev.titleNodeText || '').trim()
+    const titleSeen = wantTitle ? String((htmlRender && htmlRender.text) || '').includes(wantTitle) : true
+    if (htmlRenderErr) {
+      observe(`${idTag()}导出的 .html 用浏览器打开`, `**未核验**：${htmlRenderErr}——不冒充通过、也不据此判失败。`)
+    } else {
+      check(
+        `${idTag()}导出的 .html 用浏览器打开后**内容完整**（图片全部解码 + 标题可见 + 可见字数与预览一致）`,
+        htmlRender.imgs > 0 &&
+          htmlRender.broken === 0 &&
+          titleSeen &&
+          wantChars > 0 &&
+          Math.abs(htmlRender.chars - wantChars) <= wantChars * 0.1,
+        `图 ${htmlRender.imgs} 张（解码失败 ${htmlRender.broken}，宽度 ${JSON.stringify(htmlRender.widths)}）；` +
+          `渲染可见字数 ${htmlRender.chars}（预览读数 ${wantChars}）；标题「${wantTitle}」可见=${titleSeen}；字符集 ${htmlRender.charset}`,
+      )
+    }
+  }
   // 新文件必须**出现在本轮目录差分里**（不是"目录里本来就有个同名文件"），
   // 而且必须就是 UI 回执里写的**那一个**路径——只断言"目录里多了任意一个文件"太弱：
   // 回执指向 A、实际新增的是 B，也能过（指南 §0.0 R3 第 6 条）。
