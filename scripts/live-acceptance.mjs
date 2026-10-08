@@ -1878,6 +1878,8 @@ function reconcile(budget, turn, traceInfo, plan) {
 async function runFirstPhase(ctx, app, plan, promptKey, opts = {}) {
   const wordLimit = opts.wordLimit || 180
   const minWords = opts.minWords || null
+  // 题面**自己写了**字数上限的 phase 才传（见下面那条断言处的说明）；默认不核上限
+  const maxWords = opts.maxWords || null
   // 素材位数：L1/L7 的题面要求"恰好一张开篇横图"；F1 的 G2a/G3 题面**没有**配图要求，
   // 不能拿 L1 的口径去判它们（`null` = 跳过这两条）。默认仍是 1，L1/L7 行为不变。
   const expectAssets = opts.expectAssets === undefined ? 1 : opts.expectAssets
@@ -1965,6 +1967,16 @@ async function runFirstPhase(ctx, app, plan, promptKey, opts = {}) {
   if (minWords) {
     const chars = norm(state.ui.article ? state.ui.article.bodyText : '').length
     check(`${idTag()}正文不少于 ${minWords} 字（长文口径）`, chars >= minWords, `实际 ${chars} 字`)
+  }
+  // 题面自己写了**上限**的，才核上限（2026-10-08 R8）。
+  // 为什么单独一个 `maxWords` 而不是复用 `wordLimit`：`wordLimit` 在**带 grounding 的题面**上根本走不到
+  // ——factChecks 那一支被 `grounding.facts !== 'l1'` 跳过，`limit180` 也就没人看。于是 BIG 题面写的
+  // "1500–2500 字"里**上限从来没被核过**：模型写 4000 字也照样 PASS。
+  // 而 G2A/G3 的 `wordLimit: 1200` 是**驱动自己的默认值**、题面根本没提字数——拿它当上限会造出假红
+  // （与 T4 同类）。所以：**只有题面明确写了上限的 phase 才传 maxWords**。
+  if (maxWords) {
+    const chars = norm(state.ui.article ? state.ui.article.bodyText : '').length
+    check(`${idTag()}正文不超过 ${maxWords} 字（题面给的上限）`, chars <= maxWords, `实际 ${chars} 字`)
   }
   check(
     `${idTag()}quality 与回执一致（版本内 quality.ok=true、界面质量条为"通过"、阻断 0 条）`,
@@ -3140,7 +3152,9 @@ async function main() {
     else if (phase === 'G2B') await runWritePhase(ctx, app, 'G2B', plan, { wordLimit: null })
     // BIG 大文章（2026-10-08，用户指令）：实测绘制并发峰值与限流表现
     // 必须传 grounding：否则按默认走 L1 的 factChecks，用另一篇的固定事实判这篇（首次跑就栽在这）。
-    else if (phase === 'BIG') await runFirstPhase(ctx, app, plan, 'BIG', { wordLimit: 2500, minWords: 1500, grounding: GROUNDING.BIG, expectAssets: null })
+    // `maxWords` 是题面自己写的上限（"正文 1500–2500 字"）——此前只有 `wordLimit`，而它在带 grounding 的
+    // 题面上走不到（factChecks 那一支被跳过），于是**上限从来没被核过**：写 4000 字也 PASS。
+    else if (phase === 'BIG') await runFirstPhase(ctx, app, plan, 'BIG', { wordLimit: 2500, minWords: 1500, maxWords: 2500, grounding: GROUNDING.BIG, expectAssets: null })
     run.executedCases = [phase]
   } catch (e) {
     fail('phase', `${String(e && e.stack ? e.stack.split('\n').slice(0, 2).join(' | ') : e)}`)
