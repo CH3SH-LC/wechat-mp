@@ -700,6 +700,43 @@ const PAGE_SRC = {
     'return { firstHeadingText: art.firstHeadingText, titleNodeText: art.titleNodeText, titleNodeMatched: art.titleNodeMatched, bodyText: art.bodyText, bodyChars: art.bodyChars, counted: art.counted };',
   ].join('\n'),
 
+  /**
+   * 逐页与长图**对应条带**做逐像素比较（L6 分页断言的加强，2026-10-08，待办 T6 第一处盲点）。
+   *
+   * 为什么需要它：`Σ页高 = 长图高` 证明的是"覆盖面完整"，**证明不了"每页画的是它该画的那一段"**——
+   * 页序颠倒、或每页整体偏移 ±N 像素（只要页高之和仍等于长图高），旧断言一律通过。
+   *
+   * 口径：第 k 页的像素 vs 长图从 `top = Σ前 k-1 页高` 起的同尺寸条带，**逐像素、零容差**
+   * （容差等于把"画错了多少"藏起来）。差异像素数与首个差异行原样报出；页宽不一致、条带越界
+   * 单独标出，**不冒充"比过了"**（`diff:-1` 表示没比）。
+   */
+  comparePagesToLong: [
+    'var a = arg || {};',
+    'function load(u) { return new Promise(function (res, rej) { var i = new Image(); i.onload = function () { res(i) }; i.onerror = function () { rej("decode failed") }; i.src = u; }); }',
+    'function ctxOf(img) { var c = document.createElement("canvas"); c.width = img.naturalWidth; c.height = img.naturalHeight; var x = c.getContext("2d", { willReadFrequently: true }); x.drawImage(img, 0, 0); return x; }',
+    'return Promise.all([load(a.long)].concat(a.pages.map(function (p) { return load(p.dataUrl) }))).then(function (imgs) {',
+    '  var li = imgs[0]; var lw = li.naturalWidth, lh = li.naturalHeight; var lctx = ctxOf(li);',
+    '  var out = []; var top = 0;',
+    '  for (var k = 0; k < a.pages.length; k++) {',
+    '    var pi = imgs[k + 1]; var w = pi.naturalWidth, h = pi.naturalHeight; var n = Math.min(w, lw);',
+    '    var rec = { index: k, top: top, w: w, h: h, inRange: top + h <= lh, diff: -1, firstRow: -1, note: "" };',
+    '    if (w !== lw) { rec.note = "页宽与长图不一致"; }',
+    '    else if (!rec.inRange) { rec.note = "该页条带超出长图范围"; }',
+    '    else {',
+    '      var pd = ctxOf(pi).getImageData(0, 0, n, h).data;',
+    '      var ld = lctx.getImageData(0, top, n, h).data;',
+    '      var d = 0, fr = -1;',
+    '      for (var i = 0; i < pd.length; i += 4) {',
+    '        if (pd[i] !== ld[i] || pd[i + 1] !== ld[i + 1] || pd[i + 2] !== ld[i + 2] || pd[i + 3] !== ld[i + 3]) { d++; if (fr < 0) fr = Math.floor(i / 4 / n); }',
+    '      }',
+    '      rec.diff = d; rec.firstRow = fr;',
+    '    }',
+    '    out.push(rec); top += h;',
+    '  }',
+    '  return { longW: lw, longH: lh, coveredSum: top, pages: out };',
+    '});',
+  ].join('\n'),
+
   /** 浏览器真实解码一张 PNG（证明"可解码"，不是只看文件头） */
   decodePng: [
     'var dataUrl = arg.dataUrl;',
@@ -714,6 +751,12 @@ async function pageFn(page, name, arg = null) {
   const src = PAGE_SRC[name]
   return page.evaluate(({ src, arg }) => new Function('arg', src)(arg), { src, arg })
 }
+
+/**
+ * 逐页 × 长图逐像素比对（L6）单次可传的上限：长图 + 全部分页要一次性进页面，
+ * 超限就**如实记为"未比较"**，不做半截比较、也不冒充通过。
+ */
+const PIXEL_CMP_MAX_BYTES = 24 * 1024 * 1024
 
 // =====================================================================================
 // 第 8 节：应用启动 / 收尾（一律走 desktop-harness 的隔离设施）
@@ -2535,6 +2578,46 @@ async function runL6(ctx, app) {
       pageInfos.every(Boolean) && pageHeights.every((h) => h > 0) && pageSum === longInfo.height,
       `长图 ${longInfo.width}x${longInfo.height}；${pageNames.length} 页，页高=${JSON.stringify(pageHeights)}，合计=${pageSum}`,
     )
+    // 2026-10-08（T6 第一处盲点）：把"覆盖完整"升级为"每一页画的就是它该覆盖的那一段"。
+    // 页序颠倒、或每页整体偏移 ±N 像素（只要页高之和仍等于长图高）上面那条都不拦；逐像素比较才拦得住。
+    if (pageInfos.every(Boolean) && pageHeights.every((h) => Number.isFinite(h) && h > 0)) {
+      const b64 = (n) => readFileSync(join(imgDir, n)).toString('base64')
+      const longB64 = b64(longName)
+      const pageB64 = pageNames.map(b64)
+      const totalBytes = Buffer.byteLength(longB64, 'base64') + pageB64.reduce((s, b) => s + Buffer.byteLength(b, 'base64'), 0)
+      let cmp = null
+      if (totalBytes > PIXEL_CMP_MAX_BYTES) {
+        observe(
+          `${idTag()}逐页逐像素与长图比对`,
+          `跳过：长图 + 分页合计 ${(totalBytes / 1048576).toFixed(1)} MB，超过单次比对上限 ${PIXEL_CMP_MAX_BYTES / 1048576} MB——**如实记为未比较**，不冒充通过。`,
+        )
+      } else {
+        try {
+          cmp = await pageFn(app.page, 'comparePagesToLong', {
+            long: `data:image/png;base64,${longB64}`,
+            pages: pageB64.map((b) => ({ dataUrl: `data:image/png;base64,${b}` })),
+          })
+        } catch (e) {
+          observe(`${idTag()}逐页逐像素与长图比对`, `比对执行失败（${String(e).slice(0, 140)}）——**如实记为未比较**，不冒充通过。`)
+        }
+      }
+      if (cmp) {
+        const ps = cmp.pages || []
+        const notCompared = ps.filter((p) => p.diff !== 0)
+        check(
+          `${idTag()}分页每一页与长图对应条带**逐像素一致**（页序颠倒 / 整体偏移同样会被这条拦下）`,
+          ps.length === pageNames.length && notCompared.length === 0,
+          `长图 ${cmp.longW}x${cmp.longH}；` +
+            ps
+              .map(
+                (p) =>
+                  `第${p.index + 1}页(top=${p.top},h=${p.h})` +
+                  (p.diff === 0 ? '一致(0 像素差异)' : p.diff < 0 ? `未比较(${p.note})` : `差异 ${p.diff} 像素，首个差异行 ${p.firstRow}`),
+              )
+              .join('；'),
+        )
+      }
+    }
     observe(
       `${idTag()}分页切点与覆盖范围`,
       `页高由内容驱动的安全切点决定（不再是固定 2000 设备像素），本次页高=${JSON.stringify(pageHeights)}。` +
