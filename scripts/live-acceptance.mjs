@@ -95,7 +95,7 @@ const repoRoot = resolve(here, '..')
 // =====================================================================================
 
 const argv = process.argv.slice(2)
-const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3', 'BIG']
+const PHASES = ['L1', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8', 'G1', 'G2A', 'G2B', 'G3', 'BIG', 'LONG2']
 const phase = String(argv.find((a) => PHASES.includes(a.toUpperCase())) || '').toUpperCase()
 const opt = (name, def = null) => {
   const i = argv.indexOf('--' + name)
@@ -360,6 +360,17 @@ const PROMPTS = {
     '每个小节标题下各配 2 张插画，全文共 10 张插画，每张都要有独立画面。固定测试情境：' +
     '报名从 2026年10月20日周二开始；地点在大学生活动中心一楼；咨询电话010-55566666。' +
     '标题“秋季社团招新指南”，正文 1500–2500 字。不要照片位。',
+
+  // LONG2（2026-10-08，用户目标"商用级长短均可"）：**第二个、刻意不同体裁**的长文题面。
+  // 目的：T7（真机分页切穿文字行）修复后的验证目前只覆盖 BIG 一个题面；换一个体裁，
+  // 才能把"分页不再切穿文字行"从"一个题面成立"推到"两个不同体裁都成立"。
+  // 刻意处处与 BIG 不同：体裁（科普介绍 vs 活动指南）、结构（1 横图 + 3 小节各 1 图 = 4 张 vs 5×2=10 张）、
+  // 字数（1600–2200 vs 1500–2500）、材料（**另一天 / 另一地点 / 另一个电话**——跨题面串味会被断言抓到）。
+  LONG2:
+    '请直接写一篇介绍「图书馆自助借还系统」的科普长文，采用默认校园风格，不再询问。要求：' +
+    '开篇配 1 张横图；正文分成 3 个小节，每个小节各配 1 张插画，全文共 4 张插画。固定测试情境：' +
+    '系统从 2026年11月3日（周二）起启用；自助设备在图书馆二楼自助服务区；咨询电话 010-55577777。' +
+    '标题“自助借还系统使用指南”，正文 1600–2200 字。不要照片位。',
 }
 
 /** 每个 phase 的额度与写不写稿。maxDispatches 是本回合的**中止线**（超了就停手并 BLOCKED），不是目标值。 */
@@ -387,6 +398,10 @@ const PHASE_PLAN = {
   // （`fail/unknown：预算门禁拒绝派发：本回合派发已达中止线 18`）——于是"没成稿"里混进了测试脚本
   // 自己的限制，那不算产品结论。加大到 40，让中止线只作兜底、不参与判断。
   BIG: { writes: true, minDispatches: 4, maxDispatches: 40, maxGenSvg: 20, title: '秋季社团招新指南', minObservedConcurrency: 4 },
+  // LONG2（2026-10-08）：第二个不同体裁的长文。配图只有 4 张，`minObservedConcurrency` 相应降到 3
+  // （4 张一起派出去时峰值就该是 4；要求 3 是**可达且仍有意义**的下界——这一档的并发不是本题的重点，
+  // 重点是**分页缝合**，BIG 那档才承担"并发放开"的断言）。
+  LONG2: { writes: true, minDispatches: 4, maxDispatches: 40, maxGenSvg: 12, title: '自助借还系统使用指南', minObservedConcurrency: 3 },
 }
 
 // =====================================================================================
@@ -451,6 +466,17 @@ const GROUNDING = {
       // 标题**不**在这里核：标题存在标题节点里（`titleNodeText`），已由「标题节点与源文」那条专门断言覆盖。
       // 2026-10-08 首次跑把它写进 required、去**正文**里搜整串，正文按标题断句渲染（"秋季社团招新"+换行），
       // 必然搜不到 —— 那是判据写错造成的假红，不是产品问题（同「名额」那一类）。
+    ],
+    forbidden: [],
+  },
+  // LONG2（2026-10-08）：材料是**另一组**——11月3日 / 二楼 / 010-55577777。
+  // 与 BIG（10月20日 / 活动中心 / 010-55566666）逐项不同，所以一旦模型把别的题面的材料串进来，
+  // 这几条**必须**红。标题同样不进 required（标题在标题节点里，由专门断言覆盖，同 BIG 的理由）。
+  LONG2: {
+    required: [
+      ['材料给的启用日期被保住', '11月3日'],
+      ['材料给的地点被保住', '二楼'],
+      ['材料给的咨询电话被保住', '010-55577777'],
     ],
     forbidden: [],
   },
@@ -3350,6 +3376,10 @@ async function main() {
     // `maxWords` 是题面自己写的上限（"正文 1500–2500 字"）——此前只有 `wordLimit`，而它在带 grounding 的
     // 题面上走不到（factChecks 那一支被跳过），于是**上限从来没被核过**：写 4000 字也 PASS。
     else if (phase === 'BIG') await runFirstPhase(ctx, app, plan, 'BIG', { wordLimit: 2500, minWords: 1500, maxWords: 2500, grounding: GROUNDING.BIG, expectAssets: null })
+    // LONG2（2026-10-08）：第二个**不同体裁**的长文。字数上下限都由**题面自己**写明（1600–2200），所以两个都传；
+    // `expectAssets: null` 同 BIG——本题面要的是"开篇横图 1 + 3 小节各 1 = 4 张"，不是 L1 那种"恰好一张"，
+    // 用 L1 的口径去判会假红。
+    else if (phase === 'LONG2') await runFirstPhase(ctx, app, plan, 'LONG2', { wordLimit: 2200, minWords: 1600, maxWords: 2200, grounding: GROUNDING.LONG2, expectAssets: null })
     run.executedCases = [phase]
   } catch (e) {
     fail('phase', `${String(e && e.stack ? e.stack.split('\n').slice(0, 2).join(' | ') : e)}`)
