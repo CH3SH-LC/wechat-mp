@@ -1259,9 +1259,12 @@ export async function materializePlaceholders(
     // 这里在兜底直通**之前**拦一层：整行形如 `[[xxx:…]]` 且没人认领 → 按未知素材协议处理
     // （计 residue、给面向用户的错误、**产出与规范化源文都不收该行**）。
     // 只在"整行就是一个 [[xxx:…]]"时才判，不误伤正文里含方括号的普通句子。
-    // 白名单：`[[theme:…]]` `[[palette:…]]` `[[banner:…]]` `[[title:…]]` `[[badge:…]]`（以及无冒号的
-    // `[[lace]]`）是 v2 语法里**由 compose 处理**的行级声明，不是素材协议，绝不能被当成残留剔掉。
-    if (/^\s*\[\[\w+:[^\]]*\]\]\s*$/.test(line) && !/^\s*\[\[(?:theme|palette|banner|title|badge)\b/.test(line)) {
+    // 白名单：`[[theme:…]]` `[[palette:…]]` `[[boxes:…]]` `[[banner:…]]` `[[title:…]]` `[[badge:…]]`
+    // （以及无冒号的 `[[lace]]`）是 v2 语法里**由 compose 处理**的行级声明，不是素材协议，
+    // 绝不能被当成残留剔掉。
+    // R17：`[[boxes:…]]`（组件语言）漏登记过一次真实故障——它会被这一支剥掉并报"素材协议写法无法识别"，
+    // compose 根本收不到声明，**直接调 composeMarkdown 的断言却全绿**（典型"测试过了、真路径坏了"）。
+    if (/^\s*\[\[\w+:[^\]]*\]\]\s*$/.test(line) && !/^\s*\[\[(?:theme|palette|boxes|banner|title|badge)\b/.test(line)) {
       inf.residue++
       const why = `素材协议写法无法识别：${clip(line.trim(), 60)}`
       inf.errors.push(

@@ -35,7 +35,7 @@ const argOf = (n, d) => {
 const stamp = new Date()
 const pad = (n) => String(n).padStart(2, '0')
 const outDir = resolve(
-  argOf('--out', join(repoRoot, 'docs', 'artifacts', '2026-09-29-repair-integrity',
+  argOf('--out', join(repoRoot, '.local', 'runs', 'repair-integrity-check',
     `run-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}-${pad(stamp.getHours())}${pad(stamp.getMinutes())}${pad(stamp.getSeconds())}`)),
 )
 

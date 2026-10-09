@@ -287,7 +287,7 @@ const LEAK_PATTERNS: { re: RegExp; what: string }[] = [
   { re: /<svg\b/i, what: '转义的 SVG 源码' },
   { re: /<path\b|<circle\b|<rect\b/i, what: '转义的 SVG 图元源码' },
   { re: /:::\s*(?:art|photo|card|steps|cols|imgrow|imgcard|timeline|band|frame|deco)\b/, what: '内部块标记' },
-  { re: /\[\[(?:asset|img|deco|theme|palette|banner|title|lace|badge)\s*:/, what: '未解析的协议行' },
+  { re: /\[\[(?:asset|img|deco|theme|palette|boxes|banner|title|lace|badge)\s*:/, what: '未解析的协议行' },
 ]
 
 /** 行内代码 span（`compose.inline()` 产出）：先剔除再查泄漏——合法代码示例不能被全局字符串规则误杀 */

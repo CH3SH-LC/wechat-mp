@@ -2,7 +2,8 @@
 // 用法：node scripts/compose-check.mjs [outDir]
 //
 // 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
-import { buildAuthorUnits, composeMarkdown, projectionOf, svgElementCount } from '../src/lib/compose.ts'
+import { buildAuthorUnits, composeMarkdown, projectionOf, resolveBoxScheme, svgElementCount } from '../src/lib/compose.ts'
+import { checkHtml } from '../src/lib/quality.ts'
 import { buildReviseContent, fixableWarnings, locateIssues } from '../src/lib/revise.ts'
 import { createJudge, guardCrashes, parseRunnerArgs } from './lib/run-result.mjs'
 import { mkdirSync, writeFileSync } from 'fs'
@@ -108,7 +109,7 @@ let failed = 0
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
 // 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 98 })
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 138 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -128,8 +129,16 @@ check('band rgba pattern', r.html.includes('rgba(') && r.html.includes('band') =
 check('badge rendered', r.html.includes('border-radius:20px'))
 check('title box rendered (campus blue)', r.html.includes('border:2px solid #2f6fed'))
 // P0：气泡底部内边距改为按角饰实际高度预留（避免压字 / vivid 气泡 overflow:hidden 裁切），
-// 故断言语义而非固定像素值。
-check('key bubble rendered (campus vivid)', /padding:16px 18px \d+px;background:#2f6fed/.test(r.html))
+// R16 进一步改为"实色 + 内衬亮边"（嵌套 section），故断言**语义而非固定像素**：
+// 「宣传类 KEY 走实色反白、底色取主题主色、语义标签仍在场」。
+// R17 起具体形状随"组件语言"变（校园主题映射到 soft），故这里**不绑死形状**：
+// 断言"KEY 气泡确实以主题主色实色渲染、且文字是白色、语义标签在场"。
+const vividSegs = []
+for (let idx = r.html.indexOf('background:#2f6fed'); idx >= 0; idx = r.html.indexOf('background:#2f6fed', idx + 1)) {
+  const end = r.html.indexOf('</section>', idx)
+  vividSegs.push(r.html.slice(idx, end < 0 ? undefined : end))
+}
+check('key bubble rendered (campus vivid)', vividSegs.some((s) => s.includes('重点') && s.includes('#ffffff')), `segs=${vividSegs.length}`)
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
@@ -168,10 +177,143 @@ check('multi-alias deco renders both bubbles', (multiAlias.html.match(/@@ART0@@/
 // P0：角饰避让——气泡底部内边距随角饰高度变化（方角饰比扁角饰留得多）
 const tallDeco = '::: art deco t\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" fill="none"><circle cx="220" cy="220" r="40" fill="#c96f4a"/><circle cx="250" cy="200" r="18" fill="#e8b48a"/><path d="M170 260 q30 -30 80 -20" stroke="#5f8d8a" stroke-width="4" fill="none"/><circle cx="200" cy="250" r="10" fill="#8fb8a4"/></svg>\n:::\n\n> [!KEY|t] 标题\n> 内容'
 const flatDeco = '::: art deco f\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 160" fill="none"><circle cx="220" cy="80" r="30" fill="#c96f4a"/><circle cx="255" cy="60" r="14" fill="#e8b48a"/><path d="M170 130 q30 -20 80 -14" stroke="#5f8d8a" stroke-width="4" fill="none"/><circle cx="195" cy="110" r="9" fill="#8fb8a4"/></svg>\n:::\n\n> [!KEY|f] 标题\n> 内容'
-const tallPad = Number(/padding:16px 18px (\d+)px/.exec(composeMarkdown(tallDeco, { mode: 'auto' }).html)?.[1] ?? 0)
-const flatPad = Number(/padding:16px 18px (\d+)px/.exec(composeMarkdown(flatDeco, { mode: 'auto' }).html)?.[1] ?? 0)
-check('deco clearance grows with ornament height', tallPad > flatPad && flatPad > 14, `tall=${tallPad} flat=${flatPad}`)
-check('deco clearance capped', tallPad <= 76, `tall=${tallPad}`)
+// R16：断言语义——「角饰越高、承载它的气泡底部预留越多」，不绑死 padding 常量。
+// 取法：定位角饰 <img>，往前找**最近一处** `padding:` 声明，取第 3 个值（三段式）或第 1 个值（两段式）。
+// 两种模式都要成立（text 的 KEY 是夹线型、padding 为两段式，vivid 是嵌套 section）。
+const decoBottomPad = (html) => {
+  const i = html.indexOf('pointer-events:none')
+  if (i < 0) return -1
+  const m = [...html.slice(0, i).matchAll(/padding:([^;"]+)/g)].pop()
+  if (!m) return -1
+  const nums = m[1].split(/\s+/).map((v) => parseFloat(v)).filter((n) => !Number.isNaN(n))
+  return nums.length >= 3 ? nums[2] : (nums[0] ?? -1)
+}
+for (const mode of ['auto', 'text']) {
+  const tallPad = decoBottomPad(composeMarkdown(tallDeco, { mode }).html)
+  const flatPad = decoBottomPad(composeMarkdown(flatDeco, { mode }).html)
+  check(`deco clearance grows with ornament height (${mode})`, tallPad > flatPad && flatPad >= 12, `tall=${tallPad} flat=${flatPad}`)
+}
+const cappedPad = decoBottomPad(composeMarkdown(tallDeco, { mode: 'auto' }).html)
+check('deco clearance capped', cappedPad <= 76, `tall=${cappedPad}`)
+
+// ---- R16（2026-10-09）：气泡按语义分化容器语言 + 编辑感排版 ----
+// 判据是"五种语义各自产出**不同的容器语言**"，而不是"同一个圆角矩形换五种颜色"。
+const FIVE = ['NOTE', 'TIP', 'WARN', 'DANGER', 'KEY'].map((k) => `> [!${k}] 标签测试\n> 正文一句。`).join('\n\n')
+const five = composeMarkdown(FIVE, { mode: 'text' }).html
+check('R16 note=线型（3px 竖线）', five.includes('border-left:3px solid '))
+check('R16 tip=线型（4px 竖线）', five.includes('border-left:4px solid '))
+// R18 起圆角是**全局轴**（默认编辑感 = 0），不再是"框型 4px / 线型 0"的分语义硬编码——
+// 断言改成"框型 + 圆角取自轴"，不绑死某个像素值。
+check('R16 warn=框型（极浅底 + 整圈 1px 细边 + 圆角取自轴）', /background:rgba\([^)]+\);border:1px solid [^;]+;border-radius:\d+px/.test(five))
+check('R16 danger=框型 + 对角角括号（**只两个角**）', (five.match(/width:16px;height:16px;border-(?:left|right):2px solid/g) || []).length === 2)
+check('R16 key=夹线型（上下各一条 2px 夹线 + 大引号）', five.includes('border-top:2px solid ') && five.includes('border-bottom:2px solid ') && /font-size:46px;line-height:1;font-family:Georgia/.test(five))
+check('R16 warn/danger 同属框型、靠角括号区分（框型容器恰好两个）', (five.match(/;border:1px solid [^;]+;border-radius:\d+px;/g) || []).length === 2)
+check('R16 五种语义的文字标签都在场（微信端拿不到形状标记，语义靠文字辨认）',
+  ['提示', '技巧', '注意', '警示', '重点'].every((l) => five.includes('letter-spacing:2px;line-height:1.4;color:') && five.includes('>' + l + '</p>')))
+const titled = composeMarkdown('> [!NOTE] 有标题的气泡\n> 正文一句。', { mode: 'text' }).html
+check('R16 标题 15px/700 大于正文 14px（旧实现是 14 vs 15，层级倒挂）',
+  /font-size:15px;font-weight:700/.test(titled) && /font-size:14px;line-height:1.75/.test(titled))
+check('R16 标题与语义标签重复时不渲染两遍', (composeMarkdown('> [!NOTE] 提示\n> 正文一句。', { mode: 'text' }).html.match(/提示/g) || []).length === 1)
+// R16 回归：宣传类下 NOTE 曾吐 `border-left:4px solid undefined; color:undefined`，浏览器直接丢弃这两条声明。
+let leak = ''
+for (const mode of ['auto', 'promo', 'text']) {
+  for (const theme of ['', '[[theme:校园]]\n']) {
+    if (/(?:[a-z-]+:\s*|solid\s+)undefined/.test(composeMarkdown(theme + FIVE, { mode }).html)) leak += `${mode}/${theme ? '校园' : '无主题'} `
+  }
+}
+check('R16 三模式 × 两主题共六组合无 undefined 色键泄漏', leak === '', leak)
+// R16：引用不做"浅底 + 圆角 + 大引号"三件套；引用的竖线端点也不得被圆角连坐。
+const quoted = composeMarkdown('> 一句普通引用。\n\n正文。', { mode: 'text' }).html
+check('R16 引用=竖线 + 缩进，无底色无圆角', /border-left:3px solid [^;]+;padding:2px 0 2px 14px/.test(quoted) && !/blockquote[^>]*border-radius/.test(quoted))
+
+// ---- R17（2026-10-09）：组件语言层——文字框要能产出**多种方案**，不是又一次"一种标准设计" ----
+// 用户判词："拒绝一种标准设计，你需要有能设计多种方案的能力。"
+// 判据不是"配色换了"，而是**结构语言换了**：圆角/直角、有框/无框、实底/夹线、标签形态、标题字体。
+const SCHEME_NAMES = ['editorial', 'soft', 'magazine', 'sticker', 'tech']
+const schemeHtml = {}
+for (const s of SCHEME_NAMES) {
+  schemeHtml[s] = composeMarkdown(`[[theme:校园]]\n[[boxes:${s}]]\n\n${FIVE}`, { mode: 'text' }).html
+}
+check('R17 五套方案全部通过 checkHtml（零渐变/零阴影/零 emoji/无 ≥100px 固定宽度）',
+  SCHEME_NAMES.every((s) => checkHtml(schemeHtml[s]).ok),
+  SCHEME_NAMES.filter((s) => !checkHtml(schemeHtml[s]).ok).join(','))
+check('R17 五套产出彼此不同（HTML 两两不等）', new Set(SCHEME_NAMES.map((s) => schemeHtml[s])).size === 5)
+// 每套的**签名结构特征**必须在场——这是"换了语言"而不是"换了配色"的判据
+const SCHEME_SIG = {
+  editorial: (h) => h.includes('border-left:3px solid ') && h.includes('border-left:4px solid ') && h.includes('border-top:2px solid '),
+  soft: (h) => h.includes('border-radius:14px') && !h.includes('border-left:') && !h.includes('dashed'),
+  magazine: (h) => /border:1px solid [^;]+;padding:3px/.test(h) && /font-size:17px/.test(h),
+  sticker: (h) => h.includes('border:1px dashed ') && h.includes('rotate(-4deg)'),
+  tech: (h) => h.includes('font-family:Consolas') && h.includes('>// 提示<'),
+}
+for (const s of SCHEME_NAMES) check(`R17 ${s} 的签名结构特征在场`, SCHEME_SIG[s](schemeHtml[s]))
+// 选择规则：显式声明 > 主题映射 > 默认
+check('R17 [[boxes:名]] 优先于主题映射', resolveBoxScheme('[[theme:科技]]\n[[boxes:sticker]]', 'tech') === 'sticker')
+check('R17 主题映射：校园 → soft', resolveBoxScheme('', 'campus') === 'soft')
+check('R17 主题映射：科技 → tech', resolveBoxScheme('', 'tech') === 'tech')
+check('R17 主题映射：极简 → editorial', resolveBoxScheme('', 'minimal') === 'editorial')
+check('R17 中文方案名也认（与 [[theme:名称]] 同口径）', resolveBoxScheme('[[boxes:手账]]', undefined) === 'sticker' && resolveBoxScheme('[[boxes:杂志]]', undefined) === 'magazine')
+check('R17 未知方案名不生效、回退到主题映射', resolveBoxScheme('[[boxes:不存在的方案]]', 'campus') === 'soft')
+check('R17 无声明无主题 → editorial', resolveBoxScheme('', undefined) === 'editorial')
+check('R17 [[boxes:…]] 声明行不进正文', !composeMarkdown('[[boxes:soft]]\n\n正文一段。', { mode: 'text' }).html.includes('[[boxes'))
+
+// ---- R18（2026-10-09）：设计轴词汇表——模型给**意图**，引擎负责渲染成微信安全的样子 ----
+// 用户判词："你要做的不是补充几套固定语言，而是让模型能自主推断出这种风格的气泡应该怎么做。"
+const FIVE2 = ['NOTE', 'TIP', 'WARN', 'DANGER', 'KEY'].map((k) => `> [!${k}] 标签测试\n> 正文一句。`).join('\n\n')
+const hashHtml = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h }
+
+// ① 组合空间**抽样**必须全部可渲染：不是挑几个好看的例子，而是穷举轴 × 值的代表组合
+const AXIS_SAMPLES = []
+for (const frame of ['line', 'edge', 'plane', 'dash', 'rules', 'stack', 'none']) for (const radius of ['0', '4', '8', '14']) AXIS_SAMPLES.push(`frame=${frame};radius=${radius}`)
+for (const label of ['eyebrow', 'chip', 'mono', 'none']) for (const fill of ['none', 'tint', 'wash', 'paper']) AXIS_SAMPLES.push(`label=${label};fill=${fill}`)
+for (const deco of ['none', 'brackets', 'tape', 'quote', 'brackets,quote']) for (const title of ['sans', 'serif', 'mono']) AXIS_SAMPLES.push(`deco=${deco};title=${title};size=19`)
+for (const bar of ['2', '5']) for (const pad of ['tight', 'loose']) AXIS_SAMPLES.push(`bar=${bar};pad=${pad};radius=8`)
+const axisBad = []
+for (const spec of AXIS_SAMPLES) {
+  const html = composeMarkdown(`[[boxes:${spec}]]\n\n${FIVE2}`, { mode: 'text' }).html
+  const q = checkHtml(html)
+  if (!q.ok || /undefined/.test(html)) axisBad.push(spec + '→' + (q.issues.map((i) => i.kind).join('/') || 'undefined'))
+}
+check(`R18 轴组合抽样全部可渲染且过 checkHtml（${AXIS_SAMPLES.length} 组）`, axisBad.length === 0, axisBad.slice(0, 4).join(' | '))
+
+// ② 冲突消解留在引擎：模型说"要左竖线"，引擎自己把圆角夹到 0（圆角会连坐 border-left 端点）
+const lineFace = composeMarkdown('[[boxes:frame=line;radius=14]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' }).html
+check('R18 冲突消解：frame=line 强制圆角 0', /border-left:3px solid /.test(lineFace) && !/border-radius:14px/.test(lineFace), '')
+
+// ③ 未知轴/取值：出声且不生效；有效段照常生效；**整条都不认识时回退主题映射**（不静默变默认语言）
+const unk = composeMarkdown('[[boxes:半径=99;frane=line]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
+check('R18 未知轴名/取值 → 给警告', unk.warnings.some((w) => w.includes('组件设计轴')), JSON.stringify(unk.warnings))
+check('R18 未知段以外的有效段照常生效', composeMarkdown('[[boxes:soft;半径=99]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' }).html.includes('border-radius:14px'))
+check('R18 整条都不认识时回退主题映射（不静默变编辑感）', resolveBoxScheme('[[boxes:瞎写]]', 'campus') === 'soft')
+
+// ④ 组合自由：能产出**任何预置都没有**的长相——这才是"自主推断"的意义
+const COMBO = 'frame=stack;radius=14;label=chip;fill=paper;title=serif;deco=tape;pad=loose'
+const comboHtml = composeMarkdown(`[[boxes:${COMBO}]]\n\n> [!NOTE] 提示\n> 正文。`, { mode: 'text' }).html
+check('R18 组合自由：非预置组合自洽（双线 + 圆角 14 + 胶囊 + 胶带 + 衬线）',
+  comboHtml.includes('border:1px solid') && comboHtml.includes('border-radius:14px') && comboHtml.includes('border-radius:10px') &&
+  comboHtml.includes('rotate(-4deg)') && comboHtml.includes('serif'), '')
+check('R18 组合长相与五个预置都不同',
+  ['editorial', 'soft', 'magazine', 'sticker', 'tech'].every((p) => hashHtml(composeMarkdown(`[[boxes:${p}]]\n\n> [!NOTE] 提示\n> 正文。`, { mode: 'text' }).html) !== hashHtml(comboHtml)))
+
+// ⑤ 方案层已推到**其余容器**（R17 只覆盖气泡与引用）——同一份多容器正文在五套语言下必须五份不同
+const ALL_CONTAINERS = `> [!KEY] 重点\n> 正文。\n\n::: card 卡片标题\n- 条目一\n- 条目二\n:::\n\n::: frame\n- 框内一句\n:::\n\n::: cols\n- 左栏\n- 右栏\n:::\n\n::: band 波点\n- 色带内文\n:::\n\n::: steps\n- 第一步\n- 第二步\n:::\n\n::: timeline\n- 节点一\n:::\n\n- 列表项一\n\n> 引用一句。\n`
+const byScheme = ['editorial', 'soft', 'magazine', 'sticker', 'tech'].map((p) => composeMarkdown(`[[boxes:${p}]]\n\n${ALL_CONTAINERS}`, { mode: 'text' }).html)
+check('R18 全容器在五套语言下产出五份彼此不同的 HTML', new Set(byScheme.map(hashHtml)).size === 5)
+check('R18 全容器输出在所有语言下都过 checkHtml', byScheme.every((h) => checkHtml(h).ok), byScheme.map((h) => checkHtml(h).issues.map((i) => i.kind).join('/')).join(' | '))
+// 时间线曾经是**唯一**不走 `surface()` 的容器——虚线/双线语言在它身上整条不生效（重看整篇渲染时发现）
+check('R18 时间线节点也跟随 frame（dash → 虚线框）',
+  composeMarkdown('[[boxes:frame=dash]]\n\n::: timeline\n- 节点一\n:::\n', { mode: 'text' }).html.includes('border:1px dashed'))
+check('R18 容器跟随轴（卡片：plane→圆角无边框 / stack→双线）',
+  composeMarkdown('[[boxes:soft]]\n\n::: card 卡片\n- 一\n- 二\n:::\n', { mode: 'text' }).html.includes('border-radius:14px') &&
+  composeMarkdown('[[boxes:magazine]]\n\n::: card 卡片\n- 一\n- 二\n:::\n', { mode: 'text' }).html.includes('padding:3px'))
+check('R18 引用跟随轴（frame=rules → 上下夹线居中）',
+  composeMarkdown('[[boxes:frame=rules]]\n\n> 一句引用。\n', { mode: 'text' }).html.includes('text-align:center'))
+// 实色反白**只改底色与线条色、不改框架**——否则宣传类的 key/tip/danger 会把整篇的
+// 设计语言断掉（双线/虚线这些签名特征在 3/5 的语义上直接消失）。
+const solidFrames = ['edge', 'dash', 'stack'].map((f) => composeMarkdown(`[[boxes:frame=${f}]]\n\n> [!KEY] 重点\n> 正文。`, { mode: 'promo' }).html)
+check('R18 实色气泡保留框架语言（edge→白色左粗线 / dash→虚线 / stack→双线）',
+  solidFrames[0].includes('border-left:3px solid #ffffff') && solidFrames[1].includes('border:1px dashed') && solidFrames[2].includes('padding:3px'),
+  solidFrames.map((h) => (h.includes('#ffffff') ? 'white' : 'no-white')).join(','))
 
 // 1c) 主题：opts.theme（UI）优先于正文声明；日系底色/主色落地
 const uiTheme = composeMarkdown(SAMPLE, { mode: 'auto', theme: 'japanese' })

@@ -76,7 +76,7 @@ function statusOf() {
 const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 function uniqueDir(prefix) {
-  return join('docs', 'artifacts', `${localDate()}-${prefix}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+  return join(import.meta.dirname, '..', '.local', 'runs', `${prefix}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
 }
 const { outDir: outDirArg, base } = parseRunnerArgs()
 const outDir = outDirArg || uniqueDir('repair-flow')

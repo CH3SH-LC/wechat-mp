@@ -17,7 +17,7 @@ const { newRunId } = await import('../src/lib/trace.ts')
 const { judgeReuse, hasColorConflict, pairBubbleRefs, planDecoAliases, splitPolicy } = await import('../src/lib/asset-resolve.ts')
 
 // minChecks：2026-10-01 实测 86 条（无分场景前缀，靠条数下界证明执行完整）
-const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check'), minChecks: 86 })
+const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check'), minChecks: 89 })
 guardCrashes(judge)
 
 let failed = 0
@@ -415,6 +415,27 @@ console.log('\n[阶段 3：跨自动修订复用 + 失败预算不清零 + 取�
   )
   check('失败预算不因新轮次重置', L.order.length === 1, `slots=${L.order.length}`)
   void reuseEvents
+
+  // ---- R17（2026-10-09）：`[[boxes:…]]` 必须活着穿过素材层 ----
+  // 真实故障：素材层的"未识别协议行"兜底白名单漏登记 `boxes` 时，这一行会被**剥掉并报错**，
+  // compose 根本收不到声明——而只调 `composeMarkdown` 的断言**全绿**（典型"测试过了、真路径坏了"）。
+  // 所以这条断言必须走 `materializePlaceholders`（真路径），且刻意选一个**与主题映射不同**的方案，
+  // 才能证明"声明真的赢了主题映射"而不是"反正也是同一个结果"。
+  {
+    const v2 = `[[theme:校园]]\n[[boxes:tech]]\n\n## 小节\n\n${FILLER}\n\n> [!NOTE] 提示\n> 一句说明。\n`
+    const r = await run(v2, { persist: false })
+    check('R17 [[boxes:…]] 穿过素材层未被当成素材协议剥掉', r.out.includes('[[boxes:tech]]'), JSON.stringify(r.out.split('\n').slice(0, 4)))
+    check(
+      'R17 素材层不为 [[boxes:…]] 记残留、也不报错',
+      r.info.residue === 0 && !r.info.errors.some((e) => String(e).includes('boxes')),
+      `residue=${r.info.residue} errors=${JSON.stringify(r.info.errors)}`,
+    )
+    check(
+      'R17 声明在成品里真的生效（校园主题 → 被 boxes:tech 覆盖为等宽 // 标签）',
+      r.comp.html.includes('>// 提示<') && r.comp.html.includes('font-family:Consolas'),
+      '',
+    )
+  }
 }
 
 judge.finish({ label: 'ASSET-RESOLVE' })

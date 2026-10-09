@@ -18,7 +18,7 @@
 // 判定（DS 修复指南 §3.1）：本脚本自己也走唯一 RunResult 口径——零条检查是 ERROR（例如
 // RUNNERS 列表被清空时，`failed===0` 曾经会打印 OK），异常是 ERROR，都退出非 0。
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createJudge, guardCrashes, positionalArgs } from './lib/run-result.mjs'
@@ -31,7 +31,7 @@ const repoRoot = resolve(here, '..')
 // （实测在仓库根下真建了一个 `--out/`，里面还躺着子 runner 的证据——"结果看着有、其实放错地方"）。
 const { argv: rest, outDir: forcedOut } = positionalArgs()
 const deadPort = String(rest.find((a) => /^\d+$/.test(a)) || '59999')
-const outDir = resolve(forcedOut || rest.find((a) => !/^\d+$/.test(a)) || join(repoRoot, 'docs', 'artifacts', 'runner-negative'))
+const outDir = resolve(forcedOut || rest.find((a) => !/^\d+$/.test(a)) || join(repoRoot, '.local', 'runs', 'runner-negative-check'))
 const deadUrl = `http://127.0.0.1:${deadPort}`
 
 const RUNNERS = [
@@ -380,6 +380,10 @@ for (const [i, c] of PERSIST_CASES.entries()) {
   let ok = false
   let detail = ''
   try {
+    // 幂等：上一次运行留下的同名文件会让场景里的 `flag:'wx'` 直接 EEXIST，
+    // 场景还没开始就抛错，看起来像"被测模块坏了"。每个场景先清掉自己的目录。
+    // ⚠️ 不用 `force:true`（见 run-result.mjs 的注释：rmSync 对不存在的路径在 Windows 上会原生中止）。
+    if (existsSync(dir)) rmSync(dir, { recursive: true, maxRetries: 2 })
     c.setup(dir)
     const r = runJudgeProgram(c.program, dir, `case-${String(i + 1).padStart(2, '0')}`)
     writeFileSync(join(persistRoot, `${i + 1}-stdout.log`), r.stdout + '\n--- stderr ---\n' + r.stderr, 'utf8')

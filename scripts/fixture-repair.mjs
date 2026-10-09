@@ -24,7 +24,9 @@ const { splitAssistant } = await import('../src/lib/extract.ts')
 const { newRunId, clearTraceBuffer, traceBuffer, summarize, clip } = await import('../src/lib/trace.ts')
 
 const here = dirname(fileURLToPath(import.meta.url))
-const outDir = join(here, '..', 'docs', 'artifacts', '2026-09-28-repair')
+// 2026-10-09：默认落点收进项目内 `.local/`——以前默认写 `docs/artifacts/2026-09-28-repair/`，
+// 而那里是**受版本控制**的冻结样例，于是每跑一次就把两个已提交文件改脏（新运行 ID 流水）。
+const outDir = join(here, '..', '.local', 'runs', 'fixture-repair')
 mkdirSync(outDir, { recursive: true })
 
 // ---- 修复前（来自当时保存的告警与绑定，不重新解读、不修饰） ----

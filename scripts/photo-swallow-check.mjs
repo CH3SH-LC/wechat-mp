@@ -235,7 +235,11 @@ ${TINY_SVG}
     out.ambiguous = r
     check('⑤ 歧义输入按单行处理：照片位只有 1 处', photoCount(r.html) === 1, `照片位 ${photoCount(r.html)} 处`)
     check('⑤ 歧义输入按单行处理：后面段落留在正文', vis.includes('快门按下的瞬间，定格的不只是笑脸。'), '')
-    check('⑤ 歧义输入按单行处理：后续 steps 块仍被解析为组件且未被吸进照片位', /border-radius:50%/.test(r.html) && !photoNotes(r.html).some((n) => n.includes('站军姿')), `照片位说明 = ${JSON.stringify(photoNotes(r.html))}`)
+    // 判据是"steps 真的被当成组件渲染了"——**别拿具体形状当代理**：R18 起序号徽章的形状
+    // 跟随圆角轴（直角语言给方泡、圆润语言才给圆泡），`border-radius:50%` 不再恒真。
+    check('⑤ 歧义输入按单行处理：后续 steps 块仍被解析为组件且未被吸进照片位',
+      r.html.includes('width:24px;height:24px') && r.html.includes('站军姿') && !photoNotes(r.html).some((n) => n.includes('站军姿')),
+      `照片位说明 = ${JSON.stringify(photoNotes(r.html))}`)
     check('⑤ 歧义输入按单行处理：可见文本无协议泄漏', leakTotal(r.html) === 0, leakBreakdown(r.html))
   }
 
@@ -344,7 +348,8 @@ const label = (() => {
   return `run-${t.getFullYear()}${p(t.getMonth() + 1)}${p(t.getDate())}-${p(t.getHours())}${p(t.getMinutes())}${p(t.getSeconds())}`
 })()
 // 证据目录：默认仍写历史位置（docs 里引用了它）；需要换目录（例如本轮验证要写全新临时目录）用 --out 覆盖。
-const outRoot = argOf('--out', join(repoRoot, 'docs', 'artifacts', '2026-09-29-photo-swallow'))
+// 2026-10-09：默认落点收进项目内 `.local/`（见 docs/DEVELOPMENT.md「生成物放哪」）
+const outRoot = argOf('--out', join(repoRoot, '.local', 'runs', 'photo-swallow-check'))
 const outDirFor = (name) => join(outRoot, name)
 
 const judge = createJudge({

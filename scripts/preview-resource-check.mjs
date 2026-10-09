@@ -97,7 +97,7 @@ const localDate = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const { outDir: outDirArg, base } = parseRunnerArgs()
 const outDir =
-  outDirArg || join('docs', 'artifacts', `${localDate()}-preview-resource-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+  outDirArg || join(import.meta.dirname, '..', '.local', 'runs', `preview-resource-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
 if (outDirArg && existsSync(join(outDir, 'result.md'))) {
   fail('outDir', `输出目录已存在同名结果，拒绝覆盖：${outDir}（每次跑必须一个新目录）`)
   finalize()

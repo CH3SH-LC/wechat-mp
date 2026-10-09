@@ -19,11 +19,11 @@
 // 不联网、不调模型、不写真实工作区。
 import { createRequire } from 'node:module'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 
-import { parseRunnerArgs, writeFileAtomic } from './lib/run-result.mjs'
+import { parseRunnerArgs, tempOutDir, writeFileAtomic } from './lib/run-result.mjs'
 
 const require = createRequire(import.meta.url)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -122,7 +122,8 @@ function dieBlocked(msg) {
 }
 
 const { outDir: outDirArg, base } = parseRunnerArgs()
-const outDir = outDirArg || join(process.env.TEMP || '/tmp', `wxmp-f1-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+// 2026-10-09：默认输出走 tempOutDir（项目内 .local/runs/），不再散到系统临时目录
+const outDir = outDirArg || tempOutDir('f1')
 
 const { chromium } = resolvePlaywright()
 const chromiumExe = resolveChromium()

@@ -20,19 +20,68 @@
 //   现在：必需附件与主判定文件都**先写、后宣告**；任一写入失败 → 计入 persist 错误 →
 //   PASS/FAIL 一律降级 ERROR、退出非 0、不打印 PASS、不打印"已留档"。
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 /** 退出码：PASS=0；FAIL/ERROR 有判定结果但没通过=1；BLOCKED 连跑都没跑起来=2 */
 export const EXIT = { PASS: 0, FAIL: 1, ERROR: 1, BLOCKED: 2 }
 
-/** 每次运行一个新目录（不覆盖历史证据）；判定结果写在这里 */
-export function tempOutDir(script) {
-  return join(tmpdir(), `wxmp-oracle-${script}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+/**
+ * 生成物根目录：**默认落在项目文件夹内**（`.local/`，已 gitignore）。
+ *
+ * 2026-10-09 用户口径："未来新的生成文件不要出项目文件夹。" 之前默认写系统临时目录，
+ * 结果是产物散在一个跟项目无关的路径下（历次会话在 `%TEMP%` 里堆了 780 个目录 / 1.8 GB），
+ * 想看个对照图还得先问"产物在哪"。
+ *
+ * **唯一例外**：真机验收的隔离工作区（`desktop-harness`）仍在系统临时目录——它的存在意义
+ * 就是"不在项目里"（模拟另一个用户 profile），搬进来等于取消隔离；那部分由 `sweepStaleWorkdirs`
+ * 定期清扫，不留堆积。可用 `WXMP_LOCAL_DIR` 覆盖根目录。
+ */
+export function localRoot() {
+  return process.env.WXMP_LOCAL_DIR || resolve(process.cwd(), '.local')
 }
 
-/** 输出目录：`--out <dir>` > `WXMP_RUNNER_OUTDIR` > fallbackDir > 系统临时目录（每次新目录） */
+/** 每次运行一个新目录（不覆盖历史证据）；判定结果写在这里。默认在项目内 `.local/runs/`。 */
+export function tempOutDir(script) {
+  return join(localRoot(), 'runs', `${script}-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`)
+}
+
+/**
+ * 清扫系统临时目录里**过期的**工作目录（历史遗留 + 真机隔离用的那一类）。
+ * 只删比 `maxAgeMs` 更旧的、且名字以 `wxmp-` 开头的项；正在跑的这一次不会被动到。
+ * 静默失败：清理失败绝不能影响一次验收的判定。
+ */
+export function sweepStaleWorkdirs(maxAgeMs = 24 * 3600 * 1000) {
+  const now = Date.now()
+  /** 删掉一个过期条目；**不用 `force: true`**——本仓库实测（见 `writeFileAtomic` 的注释）
+   *  `rmSync` 对**不存在**的路径在 Windows 上会让进程**原生中止**（0xC0000409），try/catch 拦不住。
+   *  在一次验收里调用它，等于"清理动作本身把这次验收干掉"。先 existsSync 挡一道，
+   *  再用**不带 force** 的形态：路径真没了只会抛 ENOENT，那是可捕获的普通错误。 */
+  const drop = (p) => {
+    try {
+      if (now - statSync(p).mtimeMs < maxAgeMs) return
+      if (!existsSync(p)) return
+      rmSync(p, { recursive: true, maxRetries: 2 })
+    } catch { /* 单个条目删不掉不影响其它 */ }
+  }
+  // ① 项目内的运行产物（`.local/runs/`）——不清它只是把堆积从 TEMP 挪进了项目
+  try {
+    const runs = join(localRoot(), 'runs')
+    let names
+    try { names = readdirSync(runs) } catch { names = [] }
+    for (const n of names) drop(join(runs, n))
+  } catch { /* 尽力而为 */ }
+  // ② 系统临时目录里 `wxmp-` 开头的（历史遗留 + 真机隔离工作区那一类）
+  try {
+    const dir = tmpdir()
+    let names
+    try { names = readdirSync(dir) } catch { return }
+    for (const n of names) if (n.startsWith('wxmp-')) drop(join(dir, n))
+  } catch { /* 尽力而为 */ }
+}
+
+/** 输出目录：`--out <dir>` > `WXMP_RUNNER_OUTDIR` > fallbackDir > 项目内 `.local/runs/`（每次新目录） */
 export function resolveOutDir(script, fallbackDir) {
   const argv = process.argv.slice(2)
   const i = argv.indexOf('--out')
@@ -87,8 +136,13 @@ export function positionalArgs() {
 export function parseRunnerArgs(defaultBase = 'http://127.0.0.1:1420') {
   const { argv, outDir } = positionalArgs()
   const isUrl = (s) => /^https?:\/\//i.test(String(s || ''))
+  const named = outDir || argv.find((a) => !isUrl(a))
+  // 2026-10-09：**没给输出目录时不再回空串**。回空串会让调用方 `mkdirSync('')` 直接崩
+  // （实测 `node scripts/compose-check.mjs` 不带参数就是这个 ENOENT: mkdir ''），
+  // 而它是项目内默认目录，正是"产物留在项目里"的落点。与 `resolveOutDir` 同一口径。
+  const script = (process.argv[1] || 'runner').split(/[\\/]/).pop().replace(/\.mjs$/, '')
   return {
-    outDir: outDir || argv.find((a) => !isUrl(a)) || '',
+    outDir: named || tempOutDir(script),
     base: argv.find(isUrl) || defaultBase,
     rest: argv,
   }
@@ -264,6 +318,9 @@ function retireStalePass(dir, run) {
  *                  会立刻变红——这是**故意**的：检查被静默删掉正是它要防的事。
  */
 export function createJudge({ script, outDir, plannedCases = [], minChecks = 0, label, extra = {} }) {
+  // 顺手清扫系统临时目录里的**过期**工作目录（真机隔离那类只能在外面，改为不留堆积）。
+  // 只删 24h 以前的，正在跑的这一次不受影响；失败静默。
+  sweepStaleWorkdirs()
   const run = {
     script,
     label: label || script.toUpperCase(),

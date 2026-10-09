@@ -11,6 +11,8 @@ import { checkSvgQuality } from './svg-quality.ts'
 export interface ComposeDesign {
   key: 'text' | 'promo'
   label: string
+  /** 组件语言（R17）：由 `[[boxes:名]]` 或主题映射决定，见 `resolveBoxScheme` */
+  scheme: string
   [k: string]: string
 }
 
@@ -18,7 +20,7 @@ const FONT = "-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB',
 
 const DESIGNS: Record<'text' | 'promo', ComposeDesign> = {
   text: {
-    key: 'text', label: '文字类',
+    key: 'text', label: '文字类', scheme: 'editorial',
     accent: '#2f6fed', accentDark: '#1f4fc4',
     heading: '#1f2d3d', text: '#3f3f3f', sub: '#8a94a6',
     bg: '#ffffff', soft: '#eef3fb', soft2: '#f7f9fc', border: '#e3e8ef',
@@ -27,7 +29,7 @@ const DESIGNS: Record<'text' | 'promo', ComposeDesign> = {
     hl: '#fff3c4', codeBg: '#f6f8fa', codeText: '#24292e',
   },
   promo: {
-    key: 'promo', label: '宣传类',
+    key: 'promo', label: '宣传类', scheme: 'editorial',
     // v10 平面化色板：低饱和陶土橙/雾青/墨，去高饱和撞色；全部纯色，无渐变无阴影
     deep: '#2f3640', purple: '#5f8d8a', pink: '#b08d8d',
     orange: '#c96f4a', amber: '#d9a35f', teal: '#5f8d8a',
@@ -36,6 +38,12 @@ const DESIGNS: Record<'text' | 'promo', ComposeDesign> = {
     tip: '#3d8f74', tipBg: '#eef7f2', warn: '#a06a2c', warnBg: '#faf4e8',
     danger: '#b3453c', dangerBg: '#f9efed',
     hl: '#f2e3c2', codeBg: '#2f3640', codeText: '#f2ede6',
+    // R16（2026-10-09）：补齐与 text 模式同名的语义键。
+    // 缺失时消费方会写出 `border-left:4px solid undefined; color:undefined`——
+    // 浏览器直接丢弃这两条声明，NOTE 气泡退化成"没有竖条、标题没有颜色"的纯色块。
+    // 触发面很宽：`detectMode()` 只要见到 `> [!` 就判为宣传类，任何带气泡的文章都中招。
+    accent: '#c96f4a', accentDark: '#a85736', heading: '#2f3640',
+    soft2: '#fbf8f3',
   },
 }
 
@@ -117,20 +125,28 @@ function P(d: ComposeDesign, extra?: string): string {
   return '<p style="margin:0 0 16px;font-size:16px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px' + (extra || '') + '">'
 }
 
-// v10.1：宣传类普通段落也进"文字卡片"容器（消除裸文字），文字类保持裸段落（重内容轻装饰）
+// v10.1：宣传类普通段落也进"文字容器"（消除裸文字）；**容器长相跟随设计轴**（R18）
 function paraBlock(d: ComposeDesign, innerHtml: string): string {
-  if (d.key === 'promo') {
-    return '<section style="margin:0 0 16px;background:' + d.soft + ';border:1px solid ' + d.border + ';border-radius:12px;padding:14px 16px;font-size:16px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px">' + innerHtml + '</section>'
-  }
-  return P(d) + innerHtml + '</p>'
+  if (d.key !== 'promo') return P(d) + innerHtml + '</p>'
+  const t = faceOf(d)
+  const c = d.orange
+  const inner = '<p style="margin:0;font-size:16px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px">' + innerHtml + '</p>'
+  return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 15, decoImg: '', quote: false, inner })
 }
 
 function timelineBlock(d: ComposeDesign, items: string[]): string {
-  return '<section style="margin:0 0 16px;padding-left:22px;border-left:2px solid ' + (d.key === 'promo' ? d.orange : d.accent) + '">' + items.map((it, idx) => {
-    return '<section style="position:relative;margin:0 0 14px;background:' + (d.key === 'promo' ? d.soft : d.soft2) + ';border-radius:10px;padding:12px 14px">' +
-      '<span style="position:absolute;left:-27px;top:15px;width:10px;height:10px;border-radius:50%;background:' + (d.key === 'promo' ? d.orange : d.accent) + '"></span>' +
-      '<span style="display:inline-block;color:' + (d.key === 'promo' ? d.orange : d.accent) + ';font-size:13px;font-weight:700;margin-bottom:4px">' + (idx + 1) + '</span>' +
-      '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p></section>'
+  const t = faceOf(d)
+  const c = d.key === 'promo' ? d.orange : d.accent
+  const rail = t.frame === 'line' || t.frame === 'edge' ? t.barW : 2
+  // 节点也走 `surface()`——否则它是唯一"不跟随设计轴"的容器（虚线/双线语言在它身上不生效）
+  return '<section style="margin:0 0 16px;padding-left:22px;border-left:' + rail + 'px solid ' + c + '">' + items.map((it, idx) => {
+    const inner = '<span style="position:absolute;left:-27px;top:15px;width:10px;height:10px;border-radius:50%;background:' + c + '"></span>' +
+      '<span style="display:inline-block;color:' + c + ';font-size:13px;font-weight:700;margin-bottom:4px' + FACE_FONT_CSS[t.title] + '">' + (idx + 1) + '</span>' +
+      '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
+    return surface({
+      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d),
+      bottom: 11, decoImg: '', quote: false, inner, margin: '0 0 14px',
+    })
   }).join('') + '</section>'
 }
 
@@ -188,16 +204,18 @@ function titleBlock(d: ComposeDesign, text: string): string {
 }
 
 function colsBlock(d: ComposeDesign, items: string[]): string {
+  const t = faceOf(d)
   const n = items.length
   const pct = n >= 3 ? '33.3%' : '50%'
+  const c = d.key === 'promo' ? d.orange : d.accent
   return '<section style="margin:0 0 16px;display:flex;align-items:stretch">' + items.map((it, idx) => {
     const mr = idx === n - 1 ? '' : 'margin-right:12px;'
-    if (d.key === 'promo') {
-      return '<section style="flex:1;width:' + pct + ';' + mr + 'background:#ffffff;border:1px solid ' + d.border + ';border-radius:12px;overflow:hidden">' +
-        '<section style="height:5px;background:' + d.orange + '"></section>' +
-        '<section style="padding:12px 14px 10px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</section></section>'
-    }
-    return '<section style="flex:1;width:' + pct + ';' + mr + 'background:' + d.soft2 + ';border:1px solid ' + d.border + ';border-radius:10px;padding:12px 14px 10px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</section>'
+    const inner = '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
+    return surface({
+      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d),
+      bottom: 11, decoImg: '', quote: false, inner,
+      margin: '0', extraStyle: 'flex:1;width:' + pct + ';' + mr,
+    })
   }).join('') + '</section>'
 }
 
@@ -221,6 +239,175 @@ function imgcardBlock(d: ComposeDesign, img: { src: string; alt: string }, capti
 // v10 气泡：纯色底、无渐变、无 emoji 图标、无装饰圆；图案角饰走 art:// 资产（`> [!KEY|grass]`）
 // 第 21 轮：支持正文现场定义装饰素材（::: art deco 名称）并在此类气泡语法 `> [!KEY|名称]` 中引用角饰
 const DECO_MAP: Record<string, string> = { grass: 'sprig-grass', blossom: 'blossom-branch', leaf: 'leaf-corner' }
+
+/**
+ * R16（2026-10-09）：气泡的语义标签。
+ *
+ * 知识库（module-bubble）用"形状即情绪"表达语义——NOTE 空心圆 / TIP 实心圆 / WARN 旋转方块 /
+ * DANGER 方形边框 / KEY 菱形。但**微信端拿不到这些形状标记**：纯靠宽高 + 背景撑起的空元素
+ * 会被编辑器剥掉，`position:absolute` 官方列为"不推荐"（另有实测称整条被删）。
+ * 因此本项目的"形状即情绪"改由**文字语义标签**承担——11px 字距标签始终在场，
+ * 读者凭"这是哪一类提示"而不是凭形状辨认。
+ */
+export type BubbleKind = 'note' | 'tip' | 'warn' | 'danger' | 'key'
+
+const BUBBLE_LABEL: Record<BubbleKind, string> = {
+  note: '提示', tip: '技巧', warn: '注意', danger: '警示', key: '重点',
+}
+
+// ============ 设计轴（face tokens）—— "固定方案"升级为"可组合的设计词汇" ============
+//
+// 用户判词（R18）："你要做的不是补充几套固定语言，而是让模型能自主推断出这种风格的气泡应该怎么做。"
+//
+// R17 的形态是"引擎给菜单、模型挑一个"（`[[boxes:soft]]`）——能力上限就是菜单。这里**反过来**：
+// 模型给出一组**正交设计轴的取值**（它从风格推断出的**设计意图**），引擎负责把意图**确定性**地
+// 渲染成微信安全的 HTML。模型依旧不写 CSS / HTML / SVG（那是安全边界——写了会源码泄漏），
+// 但它能组合出引擎**从未内置过**的长相。R17 的五个方案因此降级为轴组合的**别名**：预置是示例，不是上限。
+//
+// 轴（11 个取值域都不大，组合空间足够表达"这种风格该长什么样"）：
+//   radius 圆角性格 0/4/8/14 ｜ frame 框架语言（见下）｜ bar 竖线粗细 2–5
+//   fill 底色 none/tint/wash/paper ｜ label 语义标签形态 eyebrow/chip/mono/none
+//   title 标题字体 sans/serif/mono ｜ size 标题字号 15/17/19
+//   deco 装饰词汇 brackets/tape/quote（可多选）｜ pad 内距 tight/normal/loose
+//
+// **冲突消解必须留在引擎里**：模型没有义务记住"圆角会连坐 border-left 端点"这类实现细节，
+// 它只需要说"我要左竖线"，引擎自己把圆角夹到 0。
+export type FaceFrame = 'line' | 'edge' | 'plane' | 'dash' | 'rules' | 'stack' | 'none'
+export type FaceFill = 'none' | 'tint' | 'wash' | 'paper'
+export type FaceLabel = 'eyebrow' | 'chip' | 'mono' | 'none'
+export type FaceFont = 'sans' | 'serif' | 'mono'
+export type FacePad = 'tight' | 'normal' | 'loose'
+export type FaceDeco = 'brackets' | 'tape' | 'quote'
+
+export interface FaceTokens {
+  radius: number
+  frame: FaceFrame
+  barW: number
+  fill: FaceFill
+  label: FaceLabel
+  title: FaceFont
+  size: number
+  deco: FaceDeco[]
+  pad: FacePad
+}
+
+const FACE_DEFAULT: FaceTokens = {
+  radius: 0, frame: 'line', barW: 3, fill: 'tint',
+  label: 'eyebrow', title: 'sans', size: 15, deco: ['brackets', 'quote'], pad: 'normal',
+}
+
+/** R17 的五个"固定语言"= 轴组合的**别名**（预置是示例，不是上限） */
+export const FACE_PRESETS: Record<string, FaceTokens> = {
+  editorial: FACE_DEFAULT,
+  soft: { ...FACE_DEFAULT, radius: 14, frame: 'plane', fill: 'wash', label: 'chip', deco: [] },
+  magazine: { ...FACE_DEFAULT, frame: 'stack', fill: 'none', title: 'serif', size: 17, deco: ['quote'] },
+  sticker: { ...FACE_DEFAULT, radius: 14, frame: 'dash', fill: 'tint', label: 'chip', deco: ['tape'] },
+  tech: { ...FACE_DEFAULT, frame: 'edge', fill: 'tint', label: 'mono', deco: [] },
+}
+
+/** 预置名（英文键 / 中文名 / 常见同义）→ 英文键 */
+const FACE_PRESET_ALIAS: Record<string, string> = {
+  editorial: 'editorial', 编辑感: 'editorial', 编辑: 'editorial', 杂志感: 'editorial',
+  soft: 'soft', 亲和: 'soft', 柔和: 'soft', 圆润: 'soft',
+  magazine: 'magazine', 杂志: 'magazine', 版式: 'magazine',
+  sticker: 'sticker', 手账: 'sticker', 手帳: 'sticker', 贴纸: 'sticker',
+  tech: 'tech', 科技: 'tech', 极客: 'tech',
+}
+
+/** 轴值的中文同义（模型用中文写值也认——与 [[theme:名称]] 同口径，避免静默落空） */
+const FACE_VALUE_ALIAS: Record<string, string> = {
+  直角: '0', 小圆角: '4', 圆角: '8', 大圆角: '14', 胶囊: '14',
+  竖线: 'line', 竖条: 'line', 线: 'line', 底色: 'plane', 面: 'plane',
+  虚线: 'dash', 夹线: 'rules', 双线: 'stack', 细边: 'edge', 无: 'none',
+  浅: 'tint', 更浅: 'tint', 淡: 'tint', 深: 'wash', 纸: 'paper',
+  字距标签: 'eyebrow', 小标签: 'eyebrow', 胶囊标签: 'chip', 等宽: 'mono',
+  衬线: 'serif', 无衬线: 'sans', 角括号: 'brackets', 胶带: 'tape', 引号: 'quote',
+  紧: 'tight', 常规: 'normal', 松: 'loose',
+}
+
+const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: string[]) => boolean }> = {
+  radius: { pick: ['0', '4', '8', '14'], apply: (t, v) => { t.radius = Number(v[0]); return true } },
+  frame: { pick: ['line', 'edge', 'plane', 'dash', 'rules', 'stack', 'none'], apply: (t, v) => { t.frame = v[0] as FaceFrame; return true } },
+  bar: { pick: ['2', '3', '4', '5'], apply: (t, v) => { t.barW = Number(v[0]); return true } },
+  fill: { pick: ['none', 'tint', 'wash', 'paper'], apply: (t, v) => { t.fill = v[0] as FaceFill; return true } },
+  label: { pick: ['eyebrow', 'chip', 'mono', 'none'], apply: (t, v) => { t.label = v[0] as FaceLabel; return true } },
+  title: { pick: ['sans', 'serif', 'mono'], apply: (t, v) => { t.title = v[0] as FaceFont; return true } },
+  size: { pick: ['15', '17', '19'], apply: (t, v) => { t.size = Number(v[0]); return true } },
+  pad: { pick: ['tight', 'normal', 'loose'], apply: (t, v) => { t.pad = v[0] as FacePad; return true } },
+  deco: { pick: ['none', 'brackets', 'tape', 'quote'], apply: (t, v) => { t.deco = (v[0] === 'none' ? [] : (v as FaceDeco[])); return true } },
+}
+
+/** 把 `[[boxes:]]` 的**载荷**解析成轴取值（载荷形如 `soft;radius=4;label=chip`） */
+export function faceFromSpec(spec: string): { tokens: FaceTokens; preset: string; unknown: string[]; applied: number } {
+  const tokens: FaceTokens = { ...FACE_DEFAULT, deco: [...FACE_DEFAULT.deco] }
+  const unknown: string[] = []
+  let preset = 'custom'
+  let applied = 0
+  const segs = String(spec || '').split(/[;；]/)
+  for (const raw of segs) {
+    const s0 = raw.trim()
+    if (!s0) continue
+    const eq = s0.indexOf('=')
+    if (eq < 0) {
+      const key = FACE_PRESET_ALIAS[s0] || FACE_PRESET_ALIAS[s0.toLowerCase()]
+      if (!key) { unknown.push(s0); continue }
+      Object.assign(tokens, FACE_PRESETS[key])
+      tokens.deco = [...FACE_PRESETS[key].deco]
+      preset = key
+      applied++
+      continue
+    }
+    const axis = s0.slice(0, eq).trim().toLowerCase()
+    const def = FACE_AXES[axis]
+    if (!def) { unknown.push(s0); continue }
+    const vals = s0.slice(eq + 1).split(/[,，]/).map((v) => v.trim()).filter(Boolean).map((v) => VALUE_ALIAS_LOOKUP(v))
+    if (!vals.length || !vals.every((v) => def.pick.includes(v))) { unknown.push(s0); continue }
+    def.apply(tokens, vals)
+    applied++
+  }
+  return { tokens, preset, unknown, applied }
+}
+
+function VALUE_ALIAS_LOOKUP(v: string): string {
+  return FACE_VALUE_ALIAS[v] || v.toLowerCase()
+}
+
+/** 主题（palettes key）→ 预置别名 的默认映射；正文 `[[boxes:]]` 显式声明优先于它 */
+const SCHEME_BY_THEME: Record<string, string> = {
+  minimal: 'editorial', business: 'editorial',
+  japanese: 'magazine', guochao: 'magazine',
+  campus: 'soft', forest: 'soft',
+  handbook: 'sticker', tech: 'tech',
+}
+
+/**
+ * 正文声明优先，其次主题映射，最后 editorial。返回的是"载荷"字符串，直接喂 `faceFromSpec`。
+ *
+ * **声明整条都不认识时不能静默降级到默认语言**——那会让主题映射白设：`[[boxes:typo]]`
+ * 应该"报错 + 用主题该有的语言"，而不是"报错 + 悄悄变成编辑感"。所以按 `applied` 计数判定：
+ * 一个有效段都没有 ⇒ 当作没声明，回退主题映射。
+ */
+export function resolveFaceSpec(md: string, themeKey?: string): { spec: string; unknown: string[] } {
+  const preset = (themeKey && SCHEME_BY_THEME[themeKey]) || 'editorial'
+  const m = /\[\[boxes:\s*([^\]]+?)\s*\]\]/.exec(String(md || ''))
+  if (m) {
+    const raw = m[1].trim()
+    const r = faceFromSpec(raw)
+    if (r.applied > 0) return { spec: raw, unknown: r.unknown }
+    return { spec: preset, unknown: r.unknown }
+  }
+  return { spec: preset, unknown: [] }
+}
+
+/** 兼容 R17 的断言口径：返回解析出来的**预置名**（纯轴组合时为 'custom'） */
+export function resolveBoxScheme(md: string, themeKey?: string): string {
+  return faceFromSpec(resolveFaceSpec(md, themeKey).spec).preset
+}
+
+/** 从设计对象取当前轴取值（`d.scheme` 存的是载荷字符串） */
+export function faceOf(d: ComposeDesign): FaceTokens {
+  return faceFromSpec(d.scheme || '').tokens
+}
 
 export interface DecoSpec {
   svg: string
@@ -251,6 +438,182 @@ function decoReserve(spec: DecoSpec | null | undefined): number {
   return Math.min(10 + h + 4, 76)
 }
 
+// ---------- 壳（shell）：**唯一**写圆角/边框/底色/内距的地方 ----------
+//
+// 各容器只声明"我要哪种壳 + 什么语义"，由这里合成 HTML。这样"容器 × 设计轴"不是乘法——
+// 加一个容器只要调一次 `surface()`，加一个轴只要改这里一处。
+
+type ShellKind = 'bar' | 'box' | 'edge' | 'rules' | 'stack' | 'dash' | 'none'
+interface Shell {
+  kind: ShellKind
+  barW: number
+  strong: boolean   // 竖线用满色（而非 55%）
+  bracket: boolean  // 对角两个 2px 角括号
+}
+
+/**
+ * 由「框架轴 + 语义档位」求出具体壳。**语义阶梯（越重越封闭）在这里落地**——
+ * 模型只需要说"frame=line"，不需要自己记得 warn 该用框、key 该用夹线。
+ */
+/**
+ * `flat` = 卡片 / 段落 / 分栏 / 时间线这类**非强调容器**用的壳。
+ * 它们不借"强调竖线"（否则每段一根竖线就成了噪音），而是取该框架语言里**中性的容器形态**：
+ * line→细框、edge→细框+左粗线、plane→只底色、dash→虚线、stack→双线、rules/none→无框。
+ */
+const FLAT_SHELL: Record<FaceFrame, ShellKind> = {
+  line: 'box', edge: 'edge', plane: 'none', dash: 'dash', rules: 'box', stack: 'stack', none: 'none',
+}
+
+function shellFor(t: FaceTokens, k: BubbleKind | 'flat'): Shell {
+  const brackets = t.deco.includes('brackets')
+  const heavy = k === 'warn' || k === 'danger'
+  if (k === 'flat') return { kind: FLAT_SHELL[t.frame], barW: t.barW, strong: true, bracket: false }
+  switch (t.frame) {
+    case 'line':
+      if (k === 'key') return { kind: 'rules', barW: t.barW, strong: false, bracket: false }
+      if (heavy) return { kind: 'box', barW: t.barW, strong: false, bracket: brackets && k === 'danger' }
+      return { kind: 'bar', barW: k === 'tip' ? t.barW + 1 : t.barW, strong: k === 'tip', bracket: false }
+    case 'edge': return { kind: 'edge', barW: t.barW, strong: true, bracket: brackets && k === 'danger' }
+    case 'dash': return { kind: 'dash', barW: t.barW, strong: false, bracket: false }
+    case 'rules': return { kind: 'rules', barW: t.barW, strong: false, bracket: false }
+    case 'stack': return { kind: 'stack', barW: t.barW, strong: false, bracket: brackets && k === 'danger' }
+    default: return { kind: 'none', barW: t.barW, strong: false, bracket: false }
+  }
+}
+
+/** 底色轴 → 实际颜色（实色反白由调用方另行给） */
+function fillOf(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): string {
+  switch (t.fill) {
+    case 'none': return ''
+    case 'paper': return d.soft2 || d.soft
+    case 'wash': return rgba(c, heavy ? 0.14 : 0.1)
+    default: return rgba(c, heavy ? 0.09 : 0.07)
+  }
+}
+
+const FACE_FONT_CSS: Record<FaceFont, string> = {
+  sans: '',
+  serif: ";font-family:Georgia,'Songti SC','SimSun',serif;letter-spacing:.5px",
+  mono: ';font-family:Consolas,Menlo,monospace',
+}
+
+/** 语义标签轴 → 实际形态 */
+function labelHtml(t: FaceTokens, text: string, c: string, solid: boolean): string {
+  if (!text || t.label === 'none') return ''
+  const col = solid ? rgba('#ffffff', 0.78) : c
+  if (t.label === 'chip') {
+    return '<p style="margin:0 0 7px;line-height:1.4"><span style="display:inline-block;background:' +
+      (solid ? rgba('#ffffff', 0.22) : rgba(c, 0.16)) + ';color:' + (solid ? '#ffffff' : c) +
+      ';border-radius:10px;padding:2px 10px;font-size:12px;font-weight:700">' + text + '</span></p>'
+  }
+  if (t.label === 'mono') {
+    return '<p style="margin:0 0 7px;font-size:11px;font-weight:700;letter-spacing:1px;line-height:1.4;font-family:Consolas,Menlo,monospace;color:' + col + '">// ' + text + '</p>'
+  }
+  return '<p style="margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:2px;line-height:1.4;color:' + col + '">' + text + '</p>'
+}
+
+function faceTitle(t: FaceTokens, ttl: string, color: string): string {
+  return ttl
+    ? '<p style="margin:0 0 6px;font-size:' + t.size + 'px;font-weight:700;line-height:1.5;color:' + color + FACE_FONT_CSS[t.title] + '">' + escapeHtml(ttl) + '</p>'
+    : ''
+}
+
+function faceBody(html: string, color: string): string {
+  return html ? '<p style="margin:0;font-size:14px;line-height:1.75;color:' + color + '">' + html + '</p>' : ''
+}
+
+interface SurfaceOpts {
+  t: FaceTokens
+  s: Shell
+  c: string            // 语义色（竖线 / 边框 / 标签 / 引号）
+  solid: boolean       // 实色反白（宣传类 key/tip/danger）
+  solidColor: string
+  fill: string
+  bottom: number       // 底部内距（角饰避让）
+  decoImg: string      // 绝对定位角饰图（气泡专用，其它容器传 ''）
+  quote: boolean       // KEY 的出血大引号
+  inner: string        // 标签 + 标题 + 正文
+  /** 覆盖默认块距（并排容器要在 flex 里用别的边距） */
+  margin?: string
+  /** 额外内联样式（并排容器的 flex 尺寸等） */
+  extraStyle?: string
+}
+
+function secBox(margin: string, style: string, inner: string): string {
+  return '<section style="' + (margin ? 'margin:' + margin + ';' : '') + style + '">' + inner + '</section>'
+}
+
+/**
+ * 把「壳 + 轴」合成一段微信安全 HTML。
+ *
+ * **冲突消解在这里，不在模型那边**——模型没有义务记住"圆角会连坐 border-left 端点"这类实现细节：
+ * 它说 `frame=line`（要左竖线），这里就把圆角夹到 0；它说实色反白，这里就换成嵌套 shell 加内衬亮边。
+ */
+function surface(o: SurfaceOpts): string {
+  const { t, s, c, solid, fill, bottom, decoImg, inner } = o
+  const minBottom = t.pad === 'tight' ? 12 : t.pad === 'loose' ? 18 : 15
+  const pad = (t.pad === 'tight' ? 11 : t.pad === 'loose' ? 17 : 13) + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
+  const tape = t.deco.includes('tape')
+    ? '<span style="position:absolute;left:20px;top:-8px;width:52px;height:15px;background:' +
+      (solid ? rgba('#ffffff', 0.4) : rgba(c, 0.5)) + ';transform:rotate(-4deg);border-radius:1px"></span>'
+    : ''
+  const brackets = s.bracket
+    ? '<span style="position:absolute;left:-1px;top:-1px;width:16px;height:16px;border-left:2px solid ' + c + ';border-top:2px solid ' + c + '"></span>' +
+      '<span style="position:absolute;right:-1px;bottom:-1px;width:16px;height:16px;border-right:2px solid ' + c + ';border-bottom:2px solid ' + c + '"></span>'
+    : ''
+  const quote = o.quote && t.deco.includes('quote')
+    ? '<p style="margin:0 0 -14px;font-size:46px;line-height:1;font-family:Georgia,serif;color:' + rgba(c, solid ? 0.5 : 0.3) + '">“</p>'
+    : ''
+  const body = tape + brackets + quote + inner + decoImg
+  const margin = o.margin !== undefined ? o.margin : (tape ? '14px 0 16px' : '0 0 16px')
+  const extra = o.extraStyle || ''
+
+  // 实色反白**只改底色与线条色，框架语言照常**——否则"整篇一套设计语言"会在宣传类的
+  // key/tip/danger 上断掉（双线、虚线这些签名特征会整条消失）。夹线在实色下退化为整圈框
+  // （夹线没有底色，撑不住一块实色）。
+  const bg = solid ? o.solidColor : fill
+  const kind: ShellKind = solid && s.kind === 'rules' ? 'box' : s.kind
+  const line = (a: number) => (solid ? rgba('#ffffff', a) : rgba(c, a))
+  const strong = solid ? '#ffffff' : c
+  if (solid && kind === 'none') {
+    // 实色 + 无框架 = 大面积死色，补一圈内衬亮边把它撑起来
+    const ring = secBox('', 'border:1px solid ' + rgba('#ffffff', 0.32) + ';border-radius:' + Math.max(0, t.radius - 2) +
+      'px;padding:' + pad + ';position:relative', body)
+    return secBox(margin, extra + 'border-radius:' + (t.radius ? t.radius + 'px' : '0') + ';background:' + o.solidColor + ';padding:2px;overflow:hidden', ring)
+  }
+
+  switch (kind) {
+    case 'bar':
+      // 左竖线必须直角——圆角会把竖条两头一起圆掉（"圆角与硬直竖线语言冲突"的具体形态）
+      return secBox(margin, extra + 'background:' + bg + ';border-left:' + s.barW + 'px solid ' + (s.strong ? strong : line(0.55)) +
+        ';padding:' + pad + ';position:relative', body)
+    case 'box':
+      return secBox(margin, extra + 'background:' + bg + ';border:1px solid ' + line(0.42) + ';border-radius:' + t.radius +
+        'px;padding:' + pad + ';position:relative', body)
+    case 'edge':
+      return secBox(margin, extra + 'background:' + bg + ';border:1px solid ' + line(0.4) + ';border-left:' + s.barW +
+        'px solid ' + strong + ';padding:' + pad + ';position:relative', body)
+    case 'dash':
+      return secBox(margin, extra + 'border:1px dashed ' + line(0.55) + ';border-radius:' + t.radius + 'px;background:' + bg +
+        ';padding:' + pad + ';position:relative', body)
+    case 'rules':
+      return secBox(margin, extra + 'border-top:2px solid ' + line(0.5) + ';border-bottom:2px solid ' + line(0.5) +
+        ';padding:' + pad + ';position:relative', body)
+    case 'stack': {
+      // 双线用嵌套 section（`border-style:double` 在 1–2px 下看不出，且不在微信白名单）。
+      // 外圈圆角 = 内圈 + 3px 的衬距，两层同心才不"别着"。
+      const rr = t.radius ? ';border-radius:' + t.radius + 'px' : ''
+      const innerBox = secBox('', 'border:1px solid ' + line(0.24) + ';background:' + bg + rr + ';padding:' + pad +
+        ';position:relative', body)
+      return secBox(margin, extra + 'border:1px solid ' + line(0.55) + (t.radius ? ';border-radius:' + (t.radius + 3) + 'px' : '') + ';padding:3px', innerBox)
+    }
+    default:
+      // 无边框的壳**更要带上圆角**——`plane`（靠底色成块）这一族语言里，圆角就是它的"形"
+      return secBox(margin, extra + (bg ? 'background:' + bg + ';' : '') + (t.radius ? 'border-radius:' + t.radius + 'px;' : '') +
+        'padding:' + pad + ';position:relative', body)
+  }
+}
+
 function bubble(
   d: ComposeDesign,
   kind: string,
@@ -260,35 +623,39 @@ function bubble(
   artUrls: Record<string, string>,
   decoMap: Record<string, DecoSpec>,
 ): string {
-  const meta = ({
-    note: { label: '提示', c: d.accent, bg: d.soft, bd: d.border },
-    tip: { label: '技巧', c: d.tip, bg: d.tipBg, bd: d.tipBg },
-    warn: { label: '注意', c: d.warn, bg: d.warnBg, bd: d.warnBg },
-    danger: { label: '警示', c: d.danger, bg: d.dangerBg, bd: d.dangerBg },
-    key: { label: '重点', c: d.accentDark, bg: d.soft, bd: d.soft },
-  } as Record<string, { label: string; c: string; bg: string; bd: string }>)[kind] || { label: '提示', c: d.accent, bg: d.soft, bd: d.border }
-  const ttl = title || meta.label
-  const bodyHtml = body.length ? body.map((l) => inline(l, d)).join('<br/>') : null
-  const vivid = d.key === 'promo' && (kind === 'key' || kind === 'tip' || kind === 'danger')
-  const bodyP = bodyHtml ? '<p style="margin:0;font-size:15px;line-height:1.75;color:' + (vivid ? '#ffffff' : d.text) + '">' + bodyHtml + '</p>' : ''
+  const t = faceOf(d)
+  const k: BubbleKind = (BUBBLE_LABEL as Record<string, string>)[kind] ? (kind as BubbleKind) : 'note'
+  const meta = {
+    note: { label: BUBBLE_LABEL.note, c: d.sub },
+    tip: { label: BUBBLE_LABEL.tip, c: d.tip },
+    warn: { label: BUBBLE_LABEL.warn, c: d.warn },
+    danger: { label: BUBBLE_LABEL.danger, c: d.danger },
+    key: { label: BUBBLE_LABEL.key, c: d.accentDark },
+  }[k]
+  const ttl = title && title !== meta.label ? title : ''
+  const bodyText = body.length ? body.map((l) => inline(l, d)).join('<br/>') : ''
+  const solid = d.key === 'promo' && (k === 'key' || k === 'tip' || k === 'danger')
+  const solidColor = k === 'danger' ? d.danger : k === 'tip' ? d.tip : d.orange
+  const heavy = k === 'warn' || k === 'danger'
   const artName = DECO_MAP[decoName] || decoName
   // 角饰来源：预置资产 URL（artUrls）> 现场装饰素材（::: art deco 定义，第 21 轮）
   let src = artName && artUrls && artUrls[artName] ? artUrls[artName] : null
   const spec = decoMap ? decoMap[decoName] : undefined
   if (!src && spec) src = '@@ART' + spec.idx + '@@'
-  // P0：角饰按实际高度预留底部内边距（vivid 气泡还有 overflow:hidden，不留就会裁切）
+  // P0：角饰按实际高度预留底部内边距（实色气泡还有 overflow:hidden，不留就会裁切）
   const reserve = decoReserve(spec)
   const decoImg = src
     ? '<img src="' + src + '" alt="" style="position:absolute;right:12px;bottom:10px;width:' + DECO_W + 'px;height:auto;max-height:' + DECO_MAX_H + 'px;pointer-events:none;opacity:.9;display:block" />' : ''
-  if (vivid) {
-    const bg = kind === 'danger' ? d.danger : kind === 'tip' ? d.tip : d.orange
-    return '<section style="margin:0 0 16px;border-radius:14px;padding:16px 18px ' + Math.max(14, reserve) + 'px;background:' + bg + ';position:relative;overflow:hidden">' +
-      '<p style="margin:0 0 6px;font-size:14px;font-weight:700;color:#ffffff">' + ttl + '</p>' +
-      bodyP + decoImg + '</section>'
-  }
-  return '<section style="margin:0 0 16px;background:' + meta.bg + ';border-left:4px solid ' + meta.c + ';border-radius:6px;padding:14px 16px ' + Math.max(14, reserve) + 'px;position:relative">' +
-    '<p style="margin:0 0 6px;font-size:14px;font-weight:700;color:' + meta.c + '">' + ttl + '</p>' +
-    bodyP + decoImg + '</section>'
+
+  const inner = labelHtml(t, meta.label, meta.c, solid) +
+    faceTitle(t, ttl, solid ? '#ffffff' : d.heading) +
+    faceBody(bodyText, solid ? rgba('#ffffff', 0.92) : d.text)
+  return surface({
+    t, s: shellFor(t, k), c: meta.c, solid, solidColor,
+    fill: fillOf(t, meta.c, heavy, d),
+    bottom: solid ? Math.max(12, reserve - 2) : reserve,
+    decoImg, quote: k === 'key', inner,
+  })
 }
 
 function divider(d: ComposeDesign, kind: string): string {
@@ -330,32 +697,55 @@ function heading(d: ComposeDesign, level: number, text: string, counter: number 
   return '<h' + level + ' style="margin:28px 0 12px;font-size:' + sizes[level] + 'px;font-weight:bold;line-height:1.5;color:' + d.heading + ';' + bar + '">' + h + '</h' + level + '>'
 }
 
+/**
+ * 普通引用——**跟随设计轴**（R18）。
+ *
+ * 引用的结构语言由 `frame` 决定：`line` 左竖线 + 缩进（编辑设计里最经典的引用手法）、
+ * `plane` 圆角色块、`dash` 虚线框、`stack` 双线、`rules` 上下夹线居中、`edge` 细框 + 左粗线。
+ * 圆角由 `radius` 给；左竖线分支**不带圆角**（圆角会把竖条两头一起圆掉）。
+ */
 function quoteBlock(d: ComposeDesign, lines: string[]): string {
+  const t = faceOf(d)
   const body = lines.map((l) => inline(l, d)).join('<br/>')
-  if (d.key === 'promo') {
-    return '<blockquote style="margin:0 0 16px;background:' + d.soft + ';border-radius:0 10px 10px 0;padding:12px 16px;border-left:5px solid ' + d.orange + ';color:' + d.sub + '">' +
-      '<span style="color:' + d.orange + ';font-size:22px;font-family:Georgia,serif;line-height:1">“</span>' + body + '</blockquote>'
+  const c = d.key === 'promo' ? d.orange : d.accent
+  const color = d.key === 'promo' ? d.text : '#5a6472' // 白底上 5.99:1，守住 ≥4.5:1
+  const base = 'margin:0 0 16px;line-height:1.75;color:' + color
+  const fill = rgba(c, 0.06)
+  switch (t.frame) {
+    case 'plane':
+      return '<blockquote style="' + base + ';background:' + fill + ';border-radius:' + t.radius + 'px;padding:14px 16px;font-size:15px">' + body + '</blockquote>'
+    case 'dash':
+      return '<blockquote style="' + base + ';border:1px dashed ' + rgba(c, 0.55) + ';border-radius:' + t.radius + 'px;background:' + fill + ';padding:13px 15px;font-size:15px">' + body + '</blockquote>'
+    case 'stack':
+      return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.5) + ';padding:3px"><blockquote style="margin:0;border:1px solid ' + rgba(c, 0.22) + ';background:' + fill + ';padding:12px 14px;font-size:15px">' + body + '</blockquote></blockquote>'
+    case 'rules':
+      return '<blockquote style="' + base + ';border-top:1px solid ' + rgba(c, 0.5) + ';border-bottom:1px solid ' + rgba(c, 0.5) + ';padding:12px 4px;text-align:center;font-size:16px">' + body + '</blockquote>'
+    case 'edge':
+      return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.4) + ';border-left:' + t.barW + 'px solid ' + c + ';background:' + fill + ';padding:12px 14px;font-size:15px">' + body + '</blockquote>'
+    case 'none':
+      return '<blockquote style="' + base + ';padding:2px 0 2px 14px;font-size:15px">' + body + '</blockquote>'
+    default:
+      return '<blockquote style="' + base + ';border-left:' + t.barW + 'px solid ' + rgba(c, 0.55) +
+        ';padding:2px 0 2px 14px;font-size:15px' + (t.title === 'mono' ? ';font-family:Consolas,Menlo,monospace' : '') + '">' + body + '</blockquote>'
   }
-  return '<blockquote style="margin:0 0 16px;border-left:4px solid ' + d.accent + ';background:' + d.soft2 + ';border-radius:0 6px 6px 0;padding:12px 16px;color:#5a6472">' + body + '</blockquote>'
 }
 
 function card(d: ComposeDesign, title: string, lines: string[]): string {
+  const t = faceOf(d)
+  const c = d.key === 'promo' ? d.orange : d.accent
   const body = lines.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
-  if (d.key === 'promo') {
-    return '<section style="margin:0 0 16px;background:#ffffff;border:1px solid ' + d.border + ';border-radius:12px;overflow:hidden">' +
-      '<section style="height:6px;background:' + d.orange + '"></section>' +
-      '<section style="padding:14px 16px 12px"><p style="margin:0 0 8px;font-size:16px;font-weight:700;color:' + d.ink + '">' + inline(escapeHtml(title), d) + '</p>' + body + '</section></section>'
-  }
-  return '<section style="margin:0 0 16px;border:1px solid ' + d.border + ';border-radius:10px;overflow:hidden">' +
-    '<section style="padding:8px 16px;background:' + d.soft2 + ';font-size:15px;font-weight:700;color:' + d.heading + ';border-bottom:1px solid ' + d.border + '">' + inline(escapeHtml(title), d) + '</section>' +
-    '<section style="padding:14px 16px 12px">' + body + '</section></section>'
+  const head = '<p style="margin:0 0 9px;font-size:' + t.size + 'px;font-weight:700;line-height:1.5;color:' + d.heading + FACE_FONT_CSS[t.title] + '">' + inline(escapeHtml(title), d) + '</p>'
+  return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 12, decoImg: '', quote: false, inner: head + body })
 }
 
 function steps(d: ComposeDesign, items: string[]): string {
+  const t = faceOf(d)
+  const bg = d.key === 'promo' ? d.orange : d.accent
+  // 序号徽章的形状跟随圆角轴：圆润语言给圆泡，直角语言给方泡
+  const badgeR = t.radius >= 8 ? '50%' : t.radius + 'px'
   return items.map((it, idx) => {
-    const bg = d.key === 'promo' ? d.orange : d.accent
     return '<section style="margin:0 0 16px;display:flex;align-items:flex-start">' +
-      '<span style="display:inline-block;width:24px;height:24px;border-radius:50%;background:' + bg + ';color:#ffffff;font-size:14px;font-weight:700;text-align:center;line-height:24px;flex-shrink:0;margin-right:10px">' + (idx + 1) + '</span>' +
+      '<span style="display:inline-block;width:24px;height:24px;border-radius:' + badgeR + ';background:' + bg + ';color:#ffffff;font-size:14px;font-weight:700;text-align:center;line-height:24px;flex-shrink:0;margin-right:10px' + FACE_FONT_CSS[t.title] + '">' + (idx + 1) + '</span>' +
       '<span style="font-size:16px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</span></section>'
   }).join('')
 }
@@ -373,6 +763,7 @@ function banner(d: ComposeDesign, title: string, sub: string): string {
 }
 
 function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
+  const t = faceOf(d)
   const body = items.map((l) => inline(l, d)).join('<br/>')
   const c = d.key === 'promo' ? d.orange : d.accent
   // v10：band 花纹全部用纯色几何 span 拼装（零渐变零阴影），花纹种类只影响装饰形状
@@ -387,26 +778,34 @@ function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
   for (let k = 0; k < 10; k++) {
     deco += '<span style="display:inline-block;margin:0 5px 6px 0;' + unitStyle + '"></span>'
   }
-  return '<section style="margin:0 0 16px;border-radius:12px;padding:14px 16px;background:' + rgba(c, 0.06) + ';border:1px solid ' + rgba(c, 0.25) + ';font-size:15px;line-height:1.75;color:' + d.text + '">' +
-    '<section style="margin:0 0 8px;line-height:0">' + deco + '</section>' + body + '</section>'
+  const inner = '<section style="margin:0 0 8px;line-height:0">' + deco + '</section>' +
+    '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + body + '</p>'
+  return surface({
+    t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '',
+    fill: fillOf(t, c, false, d) || rgba(c, 0.06), bottom: 13, decoImg: '', quote: false, inner,
+  })
 }
 
 function frameBlock(d: ComposeDesign, items: string[]): string {
+  const t = faceOf(d)
+  const c = d.key === 'promo' ? d.orange : d.accent
   const body = items.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
-  if (d.key === 'promo') {
-    return '<section style="margin:0 0 16px;padding:3px;border:2px solid ' + d.orange + ';border-radius:14px"><section style="background:#ffffff;border:1px solid ' + d.border + ';border-radius:10px;padding:13px 15px">' + body + '</section></section>'
-  }
-  return '<section style="margin:0 0 16px;border:1px solid ' + d.accent + ';border-radius:12px;padding:13px 15px;position:relative"><span style="position:absolute;top:-1px;left:-1px;width:26px;height:4px;background:' + d.accent + ';border-radius:12px 0 0 0"></span><span style="position:absolute;bottom:-1px;right:-1px;width:26px;height:4px;background:' + d.accent + ';border-radius:0 0 12px 0"></span>' + body + '</section>'
+  // 边框容器额外允许角括号装饰（`deco` 里有 brackets 就挂对角两个）
+  const s: Shell = { ...shellFor(t, 'flat'), bracket: t.deco.includes('brackets') }
+  return surface({ t, s, c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner: body })
 }
 
 function listBlock(d: ComposeDesign, ordered: boolean, items: string[]): string {
   if (d.key === 'promo') {
+    const t = faceOf(d)
+    const c = d.orange
+    const bulletR = t.radius >= 8 ? '50%' : '1px'
     const rows = items.map((it) => {
       return '<section style="margin:0 0 10px;display:flex;align-items:flex-start">' +
-        '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + d.orange + ';margin:9px 10px 0 0;flex-shrink:0"></span>' +
+        '<span style="display:inline-block;width:8px;height:8px;border-radius:' + bulletR + ';background:' + c + ';margin:9px 10px 0 0;flex-shrink:0"></span>' +
         '<span style="font-size:16px;line-height:1.75;color:' + d.text + '">' + it + '</span></section>'
     }).join('')
-    return '<section style="margin:0 0 16px;background:' + d.soft + ';border:1px solid ' + d.border + ';border-radius:12px;padding:12px 16px">' + rows + '</section>'
+    return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 11, decoImg: '', quote: false, inner: rows })
   }
   const tag = ordered ? 'ol' : 'ul'
   const ls = ordered ? 'decimal' : 'disc'
@@ -630,8 +1029,18 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const custom = parsePaletteDirective(md)
   const themeName = themeDeclaration(md)
   const d = makeDesign(modeKey, pal, custom)
+  // R17/R18：设计轴——正文 [[boxes:…]] 优先，其次主题映射，最后 editorial
+  const faceSpec = resolveFaceSpec(md, pal && pal.key)
+  d.scheme = faceSpec.spec
   const artUrls: Record<string, string> = {}
   const warnings: string[] = []
+  // R18：轴名/取值不认识时**不生效并出声**——走既有修订回路让模型自己纠正，
+  // 而不是静默按默认渲染（静默是"模型写了没效果、谁也不知道"的温床）。
+  if (faceSpec.unknown.length) {
+    warnings.push(
+      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad，或预置名 编辑感/亲和/杂志/手账/科技',
+    )
+  }
   const images: ComposeImage[] = []
   const arts: ArtSpec[] = []
   const decoMap: Record<string, DecoSpec> = {}
@@ -782,6 +1191,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 风格声明 [[theme:名称]] 与自定义色板 [[palette:...]]（第 23 轮：只影响配色，不产生输出）
     if (/^\[\[theme:[^\]]+\]\]$/.test(line)) { i++; continue }
     if (/^\[\[palette:[^\]]+\]\]$/.test(line)) { i++; continue }
+    // R17：组件语言声明（同样只影响渲染，不产生输出）
+    if (/^\[\[boxes:[^\]]+\]\]$/.test(line)) { i++; continue }
 
     // 横幅 [[banner:主|副]]
     const bn = line.match(/^\[\[banner:([^|\]]+)(?:\|([^\]]+))?\]\]$/)

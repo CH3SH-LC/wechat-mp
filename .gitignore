@@ -27,14 +27,31 @@ dist-ssr
 src-tauri/target/
 src-tauri/gen/schemas/
 
-# 运行证据（截图与 JSON 判定数据只留本地，不进仓库）
-# 报告类文件（.md/.html/.txt）仍提交，它们是可读的结论，不随每次运行重新生成。
-# 注意 `docs/artifacts/tuiwen-*.png` 只匹配顶层，按日期归档的子目录匹配不到，故用 ** 递归。
-docs/artifacts/**/*.png
-docs/artifacts/**/*.json
-docs/artifacts/**/*.jsonl
-docs/artifacts/tuiwen-*.png
-# 研究目录同理：结论（.md/.html）提交，机器判定数据（JSON/JSONL）与截图只留本地。
-docs/research/**/*.json
-docs/research/**/*.jsonl
-docs/research/**/*.png
+# 本地生成物（**不进仓库，但一律留在项目文件夹内**，2026-10-09 起）
+#   .local/runs/  各验收/回归脚本的判定输出（run-result.json + 附件）
+#   .local/shots/ 375px 对照图与 compose 产物（人工复查用）
+#   .local/tools/ 出图与对照用的一次性脚本
+# 规矩：新生成的产物写到这里，不要写到项目外的目录；只有"真机隔离工作区"例外
+# （它的意义就是"不在项目里"，搬进来等于取消隔离），那部分用完即清。
+.local/
+
+# 文档不进版本控制（2026-10-09 用户口径："未来的 git 需要忽略所有我的 docs"）
+# **文件保留在磁盘上**，只是不再被 git 跟踪；`git rm -r --cached` 一次之后由此规则兜住。
+/docs/
+/GOAL.md
+/PROGRESS.md
+/PROGRESS-LITE.md
+/REQUIREMENTS.md
+/STRUCTURE.md
+/README.md
+/RELEASE-NOTES.md
+/CLAUDE.md
+# ⚠️ 刻意**不写**全局 `*.md` —— 下面这两类 markdown 不是"文档"，是**代码的一部分**：
+#   src/knowledge/**/*.md     应用运行时加载的知识语料（删了应用就没有知识库）
+#   scripts/fixtures/**/*.md  回归夹具（删了脚本就跑不起来）
+
+# 测试/运行生成物一律忽略
+docs/                    # 兜底：即使哪天 docs/ 重新进仓库，其下产物也不跟
+*.tmp-*                  # writeFileAtomic 的中间文件（`.tmp-<pid>-<ts>-<rand>`）
+**/run-result.json
+**/*.jsonl
