@@ -7,6 +7,7 @@
 import { parsePaletteDirective, resolveTheme, themeDeclaration } from './palettes.ts'
 import type { StylePalette } from './palettes.ts'
 import { checkSvgQuality } from './svg-quality.ts'
+import { MARK_KEYS, MARK_ALIAS, SEMANTIC_MARK, markDataUrl, resolveMark, themeMark } from './marks.ts'
 
 export interface ComposeDesign {
   key: 'text' | 'promo'
@@ -90,6 +91,36 @@ function rgba(hex: string, a: number): string {
   return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')'
 }
 
+/** 对白底的对比度（WCAG 相对亮度比）。角标是 15px 小图形，用低对比色会发灰、认不出。 */
+function contrastOnWhite(hex: string): number {
+  const h = String(hex || '').replace('#', '')
+  if (h.length !== 6) return 21
+  const lin = (c: number) => { const s = c / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4) }
+  const n = parseInt(h, 16)
+  const L = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255)
+  return 1.05 / (L + 0.05)
+}
+
+/**
+ * 角标芯片色：**必须与白底 ≥4.5:1**。
+ *
+ * 2026-10-10 读图实测：NOTE 的芯片原先直接用语义色 `d.sub`（#8a94a6 石板灰）——
+ * 那个色是给"浅底上的次要文字"用的，做成实色块只有 3.06:1，15px 的白色图形糊在灰块上认不出。
+ * 这里按需把颜色压暗到 4.5:1（白图标压在它上面同样 ≥4.5:1），**只动亮度不动色相**。
+ */
+function chipColor(hex: string): string {
+  if (contrastOnWhite(hex) >= 4.5) return hex
+  const h = String(hex || '').replace('#', '')
+  if (h.length !== 6) return hex
+  let r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16)
+  for (let i = 0; i < 24; i++) {
+    r = Math.round(r * 0.88); g = Math.round(g * 0.88); b = Math.round(b * 0.88)
+    const cand = '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')
+    if (contrastOnWhite(cand) >= 4.5) return cand
+  }
+  return '#3a3a3a'
+}
+
 function escapeHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
@@ -101,10 +132,21 @@ function inline(s: string, d: ComposeDesign): string {
     return '<span style="background-color:' + d.codeBg + ';border-radius:3px;padding:1px 5px;font-family:Consolas,Menlo,monospace;font-size:14px;color:' + d.accent + '">' + c + '</span>'
   })
   t = t.replace(/\[\[badge:([^\]]+)\]\]/g, (_m, text: string) => {
-    if (d.key === 'promo') {
-      return '<span style="display:inline-block;background:' + d.orange + ';color:#ffffff;border-radius:20px;padding:2px 12px;font-size:13px;font-weight:700;margin:0 2px">' + text + '</span>'
+    // R20：徽章形态复用**语义标签词汇** `label` 轴（eyebrow 字距标签 / chip 胶囊 / mono 等宽 /
+    // none 纯文字），底色与圆角取 `fill`/`radius`——与气泡里的语义标签是同一套词汇，不再各写各的。
+    const ft = faceOf(d)
+    const bc = d.key === 'promo' ? d.orange : d.accentDark
+    const solid = d.key === 'promo'
+    const mono = ft.label === 'mono' ? 'font-family:Consolas,Menlo,monospace' : ''
+    if (ft.label === 'none') {
+      return '<span style="' + styleOf('font-weight:700', 'color:' + bc, mono) + '">' + text + '</span>'
     }
-    return '<span style="display:inline-block;background:' + d.soft + ';color:' + d.accentDark + ';border-radius:4px;padding:2px 9px;font-size:13px;font-weight:600;margin:0 2px">' + text + '</span>'
+    const rad = ft.radius >= 10 ? '20px' : ft.radius ? ft.radius + 'px' : '2px'
+    const pad = ft.radius >= 10 ? '2px 12px' : '2px 9px'
+    const label = ft.label === 'mono' ? '// ' + text : text
+    return '<span style="' + styleOf('display:inline-block', 'background:' + (solid ? bc : rgba(bc, 0.14)),
+      'color:' + (solid ? '#ffffff' : bc), 'border-radius:' + rad, 'padding:' + pad, 'font-size:13px',
+      'font-weight:700', 'margin:0 2px', mono, ft.label === 'eyebrow' ? 'letter-spacing:1px' : '') + '">' + label + '</span>'
   })
   t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (_m, alt: string, src: string) => {
     // v10.2：art:// 装饰图统一居中收窄（≤56% 宽、小尺寸），本地/外链内容图保持全宽
@@ -125,14 +167,8 @@ function P(d: ComposeDesign, extra?: string): string {
   return '<p style="margin:0 0 16px;font-size:16px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px' + (extra || '') + '">'
 }
 
-// v10.1：宣传类普通段落也进"文字容器"（消除裸文字）；**容器长相跟随设计轴**（R18）
-function paraBlock(d: ComposeDesign, innerHtml: string): string {
-  if (d.key !== 'promo') return P(d) + innerHtml + '</p>'
-  const t = faceOf(d)
-  const c = d.orange
-  const inner = '<p style="margin:0;font-size:16px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px">' + innerHtml + '</p>'
-  return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 15, decoImg: '', quote: false, inner })
-}
+// v10.1 起宣传类普通段落也进"文字容器"（消除裸文字）；**R21 起撤回**——每段套一层浅色面板
+// 正是被点名要消掉的"全包裹圆角矩形纯浅色背景"，见下方 emit 处的说明。
 
 function timelineBlock(d: ComposeDesign, items: string[]): string {
   const t = faceOf(d)
@@ -144,7 +180,7 @@ function timelineBlock(d: ComposeDesign, items: string[]): string {
       '<span style="display:inline-block;color:' + c + ';font-size:13px;font-weight:700;margin-bottom:4px' + FACE_FONT_CSS[t.title] + '">' + (idx + 1) + '</span>' +
       '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
     return surface({
-      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d),
+      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d),
       bottom: 11, decoImg: '', quote: false, inner, margin: '0 0 14px',
     })
   }).join('') + '</section>'
@@ -158,49 +194,44 @@ function laceDivider(d: ComposeDesign): string {
     '<span style="flex:1;height:1px;background:' + c + ';opacity:.5"></span></section>'
 }
 
+/**
+ * `[[title:文字|样式]]` 装饰标题（R20：默认形态改为跟随设计轴）。
+ *
+ * `box` / `vine` 是**显式覆盖**（模型点名要框盒 / 藤蔓花边），保留；不带样式时与横幅同构——
+ * 即"一个没有副标题的横幅"，同样服从当前语言。这样"标题"和"横幅"不会一个手账风一个编辑风。
+ */
 function titleBlockStyled(d: ComposeDesign, text: string, style: string, artUrls: Record<string, string>): string {
+  const t = faceOf(d)
   const h = escapeHtml(text)
+  const c = decoColor(d)
+  const ink = decoInk(d)
+  const font = FACE_FONT_CSS[t.title]
+  const fs = 20 + (t.size - 15)
+  const span = (color: string) => '<span style="' + styleOf('font-size:' + fs + 'px', 'font-weight:700', 'letter-spacing:2px', 'color:' + color, font) + '">' + h + '</span>'
   if (style === 'box') {
-    if (d.key === 'promo') {
-      return '<section style="margin:28px 0 16px;padding:2px;border:2px solid ' + d.orange + ';border-radius:14px;text-align:center"><section style="background:#ffffff;border-radius:12px;padding:12px 22px"><span style="font-size:20px;font-weight:700;color:' + d.ink + ';letter-spacing:2px">' + h + '</span></section></section>'
-    }
-    return '<section style="margin:28px 0 16px;text-align:center;padding:12px 22px;border:2px solid ' + d.accent + ';border-radius:12px;background:' + d.soft2 + '"><span style="font-size:20px;font-weight:700;color:' + d.heading + ';letter-spacing:2px">' + h + '</span></section>'
+    return '<section style="' + styleOf('margin:28px 0 16px', 'text-align:center', 'border:2px solid ' + c,
+      'border-radius:' + (t.radius || 12) + 'px', d.soft2 ? 'background:' + d.soft2 : '', 'padding:12px 22px') + '">' + span(ink) + '</section>'
   }
   if (style === 'vine') {
-    // v10.2：藤蔓编织边框改为「标题上下各一条 vine-divider 花边」（窄、不高），不再用整幅 vine-frame 背景图
-    const c = d.key === 'promo' ? d.orange : '#2f6fed'
     if (artUrls && artUrls['vine-divider']) {
       const vd = artUrls['vine-divider']
-      return '<section style="margin:28px 0 16px;text-align:center">' +
+      return '<section style="' + styleOf('margin:28px 0 16px', 'text-align:center') + '">' +
         '<img src="' + vd + '" alt="" style="width:46%;height:auto;display:block;margin:0 auto 4px" />' +
-        '<span style="display:inline-block;font-size:20px;font-weight:700;color:' + (d.key === 'promo' ? d.ink : d.heading) + ';letter-spacing:2px">' + h + '</span>' +
+        span(ink) +
         '<img src="' + vd + '" alt="" style="width:46%;height:auto;display:block;margin:4px auto 0" /></section>'
     }
-    return '<section style="margin:28px 0 16px;text-align:center"><span style="display:inline-block;width:8px;height:8px;background:' + c + ';transform:rotate(45deg);margin:0 8px;border-radius:1px"></span>' +
+    return '<section style="' + styleOf('margin:28px 0 16px', 'text-align:center') + '"><span style="display:inline-block;width:8px;height:8px;background:' + c + ';transform:rotate(45deg);margin:0 8px;border-radius:1px"></span>' +
       '<span style="display:inline-block;height:2px;width:56px;background:' + c + ';vertical-align:4px"></span>' +
-      '<span style="font-size:20px;font-weight:700;color:' + (d.key === 'promo' ? d.ink : d.heading) + ';letter-spacing:2px;margin:0 6px">' + h + '</span>' +
+      '<span style="margin:0 6px">' + span(ink) + '</span>' +
       '<span style="display:inline-block;height:2px;width:56px;background:' + c + ';vertical-align:4px"></span>' +
       '<span style="display:inline-block;width:8px;height:8px;background:' + c + ';transform:rotate(45deg);margin:0 8px;border-radius:1px"></span></section>'
   }
   return titleBlock(d, text)
 }
 
+/** 无样式装饰标题 = 一个没有副标题的横幅（共用同一套 `frame` 壳） */
 function titleBlock(d: ComposeDesign, text: string): string {
-  const h = escapeHtml(text)
-  if (d.key === 'promo') {
-    return '<section style="margin:28px 0 16px;display:flex;align-items:center;justify-content:center">' +
-      '<span style="flex:0 0 52px;height:2px;background:' + d.border + '"></span>' +
-      '<span style="display:inline-block;width:8px;height:8px;background:' + d.orange + ';transform:rotate(45deg);margin:0 10px;border-radius:1px"></span>' +
-      '<span style="font-size:20px;font-weight:700;color:' + d.ink + ';letter-spacing:2px">' + h + '</span>' +
-      '<span style="display:inline-block;width:8px;height:8px;background:' + d.orange + ';transform:rotate(45deg);margin:0 10px;border-radius:1px"></span>' +
-      '<span style="flex:0 0 52px;height:2px;background:' + d.border + '"></span></section>'
-  }
-  return '<section style="margin:28px 0 16px;display:flex;align-items:center;justify-content:center">' +
-    '<span style="flex:0 0 52px;height:2px;background:#e3e8ef"></span>' +
-    '<span style="display:inline-block;width:8px;height:8px;background:#2f6fed;transform:rotate(45deg);margin:0 10px;border-radius:1px"></span>' +
-    '<span style="font-size:20px;font-weight:700;color:' + d.heading + ';letter-spacing:2px">' + h + '</span>' +
-    '<span style="display:inline-block;width:8px;height:8px;background:#2f6fed;transform:rotate(45deg);margin:0 10px;border-radius:1px"></span>' +
-    '<span style="flex:0 0 52px;height:2px;background:#e3e8ef"></span></section>'
+  return banner(d, text, '')
 }
 
 function colsBlock(d: ComposeDesign, items: string[]): string {
@@ -212,7 +243,7 @@ function colsBlock(d: ComposeDesign, items: string[]): string {
     const mr = idx === n - 1 ? '' : 'margin-right:12px;'
     const inner = '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
     return surface({
-      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d),
+      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d),
       bottom: 11, decoImg: '', quote: false, inner,
       margin: '0', extraStyle: 'flex:1;width:' + pct + ';' + mr,
     })
@@ -278,6 +309,8 @@ export type FaceLabel = 'eyebrow' | 'chip' | 'mono' | 'none'
 export type FaceFont = 'sans' | 'serif' | 'mono'
 export type FacePad = 'tight' | 'normal' | 'loose'
 export type FaceDeco = 'brackets' | 'tape' | 'quote'
+/** 角标落点：tl 左上 / tr 右上 / bl 左下 / br 右下（R22） */
+export type FaceMarkAt = 'tl' | 'tr' | 'bl' | 'br'
 
 export interface FaceTokens {
   radius: number
@@ -289,11 +322,27 @@ export interface FaceTokens {
   size: number
   deco: FaceDeco[]
   pad: FacePad
+  /** 角标图案（R22）：规范键 / 中文名 / 空串=语义默认 / `none`=不画 */
+  mark: string
+  /** 角标落点（R22）：默认左上 */
+  markat: FaceMarkAt
 }
 
+/**
+ * 默认语言（编辑感）：**无底色 + 规则承担语义**。
+ *
+ * `fill: 'none'` 是关键决定——"一层面板铺满整段"正是被点名的"AI 味"长相：
+ * 全包裹 + 圆角 + 纯浅色底，三者凑齐就成模板腔。默认语言里气泡**不铺底**，
+ * 靠**左侧规则的粗细/颜色**与**标签的形态**表达轻重，文字直接落在纸面上。
+ * 需要面板的语言（`soft` 的浅底、`sticker` 的手账底）由预置或 `fill=` 显式声明。
+ *
+ * `deco` 去掉 `brackets`：对角角括号是模板工具最常见的"加戏"，默认不该有；
+ * 轴仍然留着，模型点名要才画。
+ */
 const FACE_DEFAULT: FaceTokens = {
-  radius: 0, frame: 'line', barW: 3, fill: 'tint',
-  label: 'eyebrow', title: 'sans', size: 15, deco: ['brackets', 'quote'], pad: 'normal',
+  radius: 0, frame: 'line', barW: 3, fill: 'none',
+  label: 'eyebrow', title: 'sans', size: 15, deco: ['quote'], pad: 'normal',
+  mark: '', markat: 'tl',
 }
 
 /** R17 的五个"固定语言"= 轴组合的**别名**（预置是示例，不是上限） */
@@ -323,6 +372,11 @@ const FACE_VALUE_ALIAS: Record<string, string> = {
   字距标签: 'eyebrow', 小标签: 'eyebrow', 胶囊标签: 'chip', 等宽: 'mono',
   衬线: 'serif', 无衬线: 'sans', 角括号: 'brackets', 胶带: 'tape', 引号: 'quote',
   紧: 'tight', 常规: 'normal', 松: 'loose',
+  // R22 角标：图案名（中文/英文/口语）与落点
+  ...MARK_ALIAS,
+  不画: 'none', 无角标: 'none', 不要: 'none',
+  左上: 'tl', 右上: 'tr', 左下: 'bl', 右下: 'br',
+  左上角: 'tl', 右上角: 'tr', 左下角: 'bl', 右下角: 'br',
 }
 
 const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: string[]) => boolean }> = {
@@ -335,6 +389,9 @@ const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: s
   size: { pick: ['15', '17', '19'], apply: (t, v) => { t.size = Number(v[0]); return true } },
   pad: { pick: ['tight', 'normal', 'loose'], apply: (t, v) => { t.pad = v[0] as FacePad; return true } },
   deco: { pick: ['none', 'brackets', 'tape', 'quote'], apply: (t, v) => { t.deco = (v[0] === 'none' ? [] : (v as FaceDeco[])); return true } },
+  // R22：角标图案（引擎内置词汇表，见 marks.ts）+ 落点。`none` 是"不画"。
+  mark: { pick: [...MARK_KEYS, 'none'], apply: (t, v) => { t.mark = v[0]; return true } },
+  markat: { pick: ['tl', 'tr', 'bl', 'br'], apply: (t, v) => { t.markat = v[0] as FaceMarkAt; return true } },
 }
 
 /** 把 `[[boxes:]]` 的**载荷**解析成轴取值（载荷形如 `soft;radius=4;label=chip`） */
@@ -449,6 +506,7 @@ interface Shell {
   barW: number
   strong: boolean   // 竖线用满色（而非 55%）
   bracket: boolean  // 对角两个 2px 角括号
+  rail: boolean     // 竖线之外**再夹上下两条细线**（半包围，比纯竖线重一档）
 }
 
 /**
@@ -467,17 +525,20 @@ const FLAT_SHELL: Record<FaceFrame, ShellKind> = {
 function shellFor(t: FaceTokens, k: BubbleKind | 'flat'): Shell {
   const brackets = t.deco.includes('brackets')
   const heavy = k === 'warn' || k === 'danger'
-  if (k === 'flat') return { kind: FLAT_SHELL[t.frame], barW: t.barW, strong: true, bracket: false }
+  if (k === 'flat') return { kind: FLAT_SHELL[t.frame], barW: t.barW, strong: true, bracket: false, rail: false }
   switch (t.frame) {
     case 'line':
-      if (k === 'key') return { kind: 'rules', barW: t.barW, strong: false, bracket: false }
-      if (heavy) return { kind: 'box', barW: t.barW, strong: false, bracket: brackets && k === 'danger' }
-      return { kind: 'bar', barW: k === 'tip' ? t.barW + 1 : t.barW, strong: k === 'tip', bracket: false }
-    case 'edge': return { kind: 'edge', barW: t.barW, strong: true, bracket: brackets && k === 'danger' }
-    case 'dash': return { kind: 'dash', barW: t.barW, strong: false, bracket: false }
-    case 'rules': return { kind: 'rules', barW: t.barW, strong: false, bracket: false }
-    case 'stack': return { kind: 'stack', barW: t.barW, strong: false, bracket: brackets && k === 'danger' }
-    default: return { kind: 'none', barW: t.barW, strong: false, bracket: false }
+      // 编辑感的轻重阶梯：**竖线越来越粗、越来越实，重语义再夹上下细线**——
+      // 而不是"轻语义铺浅底、重语义套整圈框"。全包裹的框正是被点名的模板腔。
+      if (k === 'key') return { kind: 'rules', barW: t.barW, strong: false, bracket: false, rail: false }
+      if (heavy) return { kind: 'bar', barW: t.barW + 2, strong: true, bracket: brackets && k === 'danger', rail: true }
+      if (k === 'tip') return { kind: 'bar', barW: t.barW + 1, strong: true, bracket: false, rail: false }
+      return { kind: 'bar', barW: Math.max(3, t.barW), strong: true, bracket: false, rail: false }
+    case 'edge': return { kind: 'edge', barW: t.barW, strong: true, bracket: brackets && k === 'danger', rail: false }
+    case 'dash': return { kind: 'dash', barW: t.barW, strong: false, bracket: false, rail: false }
+    case 'rules': return { kind: 'rules', barW: t.barW, strong: false, bracket: false, rail: false }
+    case 'stack': return { kind: 'stack', barW: t.barW, strong: false, bracket: brackets && k === 'danger', rail: false }
+    default: return { kind: 'none', barW: t.barW, strong: false, bracket: false, rail: false }
   }
 }
 
@@ -491,16 +552,43 @@ function fillOf(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): str
   }
 }
 
+/**
+ * **非强调容器**（卡片 / 段落 / 分栏 / 时间线 / 列表 / 色带）的底色。
+ *
+ * 默认语言 `fill: 'none'` 是给**气泡**定的（见 `FACE_DEFAULT` 注释）；容器不一样——
+ * 它们本来就靠"成块"与正文区分，`plane` 语言更是只靠底色、连边框都没有，
+ * 真给成透明就会整块消失。所以轴说 `none` 时，容器仍补一层极浅的底（约 5.5%）。
+ */
+function flatFill(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): string {
+  return t.fill === 'none' ? rgba(c, 0.055) : fillOf(t, c, heavy, d)
+}
+
 const FACE_FONT_CSS: Record<FaceFont, string> = {
   sans: '',
   serif: ";font-family:Georgia,'Songti SC','SimSun',serif;letter-spacing:.5px",
   mono: ';font-family:Consolas,Menlo,monospace',
 }
 
-/** 语义标签轴 → 实际形态 */
-function labelHtml(t: FaceTokens, text: string, c: string, solid: boolean): string {
+/**
+ * 语义标签轴 → 实际形态。
+ *
+ * R21（2026-10-09 二轮）：**去掉字距**。`提 示` 这种"小号 + 大字距"的标签是模板工具最脸熟的一笔，
+ * 也是"AI 味"的一部分；改成紧排的 12px/700 语义色，像编辑设计里的**栏目标签**而不是装饰题字。
+ *
+ * 另一个决定：**重语义（注意/警示）的标签改用 chip**——把"警报"集中在一枚小色块上
+ * （warn 描边 / danger 实心），而不是给整段铺一层浅色底。这样页面底色始终是纸，只在小构件上落色。
+ */
+function labelHtml(t: FaceTokens, text: string, c: string, solid: boolean, kind: BubbleKind | 'flat' = 'note'): string {
   if (!text || t.label === 'none') return ''
   const col = solid ? rgba('#ffffff', 0.78) : c
+  if (!solid && t.label === 'eyebrow' && (kind === 'warn' || kind === 'danger')) {
+    const filled = kind === 'danger'
+    const chip = filled
+      ? 'background:' + c + ';color:#ffffff'
+      : 'border:1px solid ' + rgba(c, 0.55) + ';color:' + c
+    return '<p style="margin:0 0 7px;line-height:1.4"><span style="display:inline-block;' + chip +
+      ';border-radius:2px;padding:1px 8px;font-size:11px;font-weight:700">' + text + '</span></p>'
+  }
   if (t.label === 'chip') {
     return '<p style="margin:0 0 7px;line-height:1.4"><span style="display:inline-block;background:' +
       (solid ? rgba('#ffffff', 0.22) : rgba(c, 0.16)) + ';color:' + (solid ? '#ffffff' : c) +
@@ -509,7 +597,7 @@ function labelHtml(t: FaceTokens, text: string, c: string, solid: boolean): stri
   if (t.label === 'mono') {
     return '<p style="margin:0 0 7px;font-size:11px;font-weight:700;letter-spacing:1px;line-height:1.4;font-family:Consolas,Menlo,monospace;color:' + col + '">// ' + text + '</p>'
   }
-  return '<p style="margin:0 0 4px;font-size:11px;font-weight:600;letter-spacing:2px;line-height:1.4;color:' + col + '">' + text + '</p>'
+  return '<p style="margin:0 0 5px;font-size:12px;font-weight:700;line-height:1.4;color:' + col + '">' + text + '</p>'
 }
 
 function faceTitle(t: FaceTokens, ttl: string, color: string): string {
@@ -520,6 +608,55 @@ function faceTitle(t: FaceTokens, ttl: string, color: string): string {
 
 function faceBody(html: string, color: string): string {
   return html ? '<p style="margin:0;font-size:14px;line-height:1.75;color:' + color + '">' + html + '</p>' : ''
+}
+
+// ---------- 装饰件（标题 / 横幅 / 分割线 / 徽章）也读**同一套**设计轴 ----------
+//
+// R20（2026-10-09）：R18 已把"模型给意图、引擎确定性渲染"落到气泡与全部容器，但装饰件——`##` 标题、
+// `[[title:]]`、`[[banner:]]`、`---`/`***`/`___`/`~~~`、`[[badge:]]`——仍各写各的，于是同一篇文章会
+// 出现"容器是手账风、标题还是编辑风"的**语言断裂**。这里让它们读同一套 `FaceTokens`（`faceOf(d)`），
+// 也就是把 R18 消掉的那种不一致，**从容器层推到全文**——这本身就是一条设计规则："一套语言贯穿全文"。
+// 冲突消解和容器一样留在引擎：模型说 `frame=line`，引擎自己决定标题是"左竖条"、分割线是"细线"。
+
+/** 装饰件的语义色（按模式取：宣传类用主色，文字类用强调色） */
+function decoColor(d: ComposeDesign): string {
+  return d.key === 'promo' ? d.orange : d.accent
+}
+/** 装饰件的文字色 */
+function decoInk(d: ComposeDesign): string {
+  return d.key === 'promo' ? d.ink : d.heading
+}
+/** 装饰件的**辅助**色（双条分割线/双色记号用；两种模式都必须有定义，否则会写出 `undefined`） */
+function decoColor2(d: ComposeDesign): string {
+  return d.key === 'promo' ? d.amber : d.accentDark
+}
+/** 装饰件的内距（走 `pad` 轴，与 `surface()` 同口径） */
+function decoPad(t: FaceTokens): string {
+  const p = t.pad === 'tight' ? 10 : t.pad === 'loose' ? 16 : 13
+  return p + 'px 14px'
+}
+/**
+ * 标题的内距：比其它容器**更紧**——知识库 `module-heading` 的纯色块变体是 `padding:10px 16px`，
+ * 标题是"分节锚点"，上下堆 13px 内距会让每个章节凭空长高、破坏 `上 28 / 下 12` 的节奏。
+ */
+function headPad(t: FaceTokens): string {
+  const v = t.pad === 'tight' ? 8 : t.pad === 'loose' ? 12 : 10
+  return v + 'px 14px'
+}
+/** 装饰件字号：等级基础值 + 字号轴档差（`size` 15/17/19 → 0/+2/+4），仍在正文之上 */
+function headSize(level: number, t: FaceTokens): number {
+  const base: Record<number, number> = { 1: 22, 2: 20, 3: 18, 4: 17, 5: 16, 6: 15 }
+  return (base[level] || 18) + (t.size - 15)
+}
+/** 序号徽章的圆角跟随 `radius` 轴（与 `steps()` 同口径：圆润语言给圆泡，直角语言给方泡） */
+function counterBadge(n: number, t: FaceTokens, c: string): string {
+  const r = t.radius >= 8 ? '50%' : t.radius + 'px'
+  return '<span style="display:inline-block;min-width:24px;height:24px;border-radius:' + r + ';background:' + c +
+    ';color:#ffffff;font-size:14px;font-weight:700;text-align:center;line-height:24px;margin-right:8px;flex-shrink:0' + FACE_FONT_CSS[t.title] + '">' + n + '</span>'
+}
+/** 非空样式片段拼接（自动分号，避免手写 `;;` 与 `;undefined`） */
+function styleOf(...parts: (string | false | undefined | null)[]): string {
+  return parts.filter((p): p is string => !!p).join(';')
 }
 
 interface SurfaceOpts {
@@ -537,6 +674,13 @@ interface SurfaceOpts {
   margin?: string
   /** 额外内联样式（并排容器的 flex 尺寸等） */
   extraStyle?: string
+  /**
+   * 角标（R22）：`key` 是 marks.ts 的规范键（null = 不画）。
+   * 角标是**不透明**徽章，骑在框线上、把该处框线盖住 ⇒ 框线**天然"略去一部分"**，
+   * 断口由角标收口（这正是"一条边为什么必须围满"的反面）。**只有气泡带角标**——
+   * 卡片/引用这类非强调容器每块挂一枚就是噪音，强调记号要稀缺才有意义。
+   */
+  mark?: { key: string | null; at: FaceMarkAt } | null
 }
 
 function secBox(margin: string, style: string, inner: string): string {
@@ -552,7 +696,43 @@ function secBox(margin: string, style: string, inner: string): string {
 function surface(o: SurfaceOpts): string {
   const { t, s, c, solid, fill, bottom, decoImg, inner } = o
   const minBottom = t.pad === 'tight' ? 12 : t.pad === 'loose' ? 18 : 15
-  const pad = (t.pad === 'tight' ? 11 : t.pad === 'loose' ? 17 : 13) + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
+  // 角标在不透明底上骑线：**左/右落点各留出 32px 内距**，避免图案压到文字。
+  // 未启用角标时保持原本的三值内距（不惊动既有断言与既有长相）。
+  const markKey = o.mark && o.mark.key ? o.mark.key : null
+  const markAt: FaceMarkAt = (o.mark && o.mark.at) || 'tl'
+  const padTop = t.pad === 'tight' ? 11 : t.pad === 'loose' ? 17 : 13
+  const padBottom = Math.max(minBottom, bottom)
+  const pad = markKey
+    ? padTop + 'px ' + (markAt === 'tr' || markAt === 'br' ? 32 : 16) + 'px ' + padBottom + 'px ' + (markAt === 'tl' || markAt === 'bl' ? 32 : 16) + 'px'
+    : padTop + 'px 16px ' + padBottom + 'px'
+  // 实色反白会把 `rules` 退化成整圈框（夹线撑不住实色），角标要按**实际画出来的壳**算偏移。
+  const effKind: ShellKind = solid && s.kind === 'rules' ? 'box' : s.kind
+  // **角标必须骑在框线上**：`position:absolute` 的包含块是**内边距盒**，`left:0` 落在框线**内侧**——
+  // 那样徽章只是"贴在框内角上"，盖不到线，"断口"根本不存在（2026-10-10 读图子智能体逐像素抓到：
+  // 虚线的左竖边一路没断、上下横线通栏无缺口）。所以按当前壳的框线宽度给**负偏移**，让徽章压住那一截线。
+  const lineL = effKind === 'bar' || effKind === 'edge' ? s.barW : (effKind === 'box' || effKind === 'dash' || effKind === 'stack' ? 1 : 0)
+  const lineR = effKind === 'box' || effKind === 'dash' || effKind === 'edge' || effKind === 'stack' ? 1 : 0
+  const railT = effKind === 'rules' ? 2 : (effKind === 'box' || effKind === 'dash' || effKind === 'edge' || effKind === 'stack' ? 1 : (effKind === 'bar' && s.rail ? 1 : 0))
+  const railB = effKind === 'rules' ? 2 : (effKind === 'box' || effKind === 'dash' || effKind === 'edge' || effKind === 'stack' ? 1 : (effKind === 'bar' && s.rail ? 1 : 0))
+  const off = (v: number) => (v ? '-' + v + 'px' : '0')
+  const corner = markAt === 'tl'
+    ? 'left:' + off(lineL) + ';top:' + off(railT)
+    : markAt === 'tr'
+      ? 'right:' + off(lineR) + ';top:' + off(railT)
+      : markAt === 'bl'
+        ? 'left:' + off(lineL) + ';bottom:' + off(railB)
+        : 'right:' + off(lineR) + ';bottom:' + off(railB)
+  // 角标徽章：不透明实色块 + 白色图案（实色反白气泡上反过来：白底 + 语义色图案）。
+  // 芯片色经 `chipColor()` 压到与白底 ≥4.5:1——语义里的 NOTE 用的是"浅底上的次要文字色"（石板灰），
+  // 直接做实色块只有 3.05:1，15px 的白图形糊在灰块上认不出（读图实测）。
+  const chipBg = solid ? '#ffffff' : chipColor(c)
+  const iconCol = solid ? chipColor(o.solidColor) : '#ffffff'
+  const badgeR = t.radius >= 10 ? '50%' : (t.radius ? t.radius + 'px' : '2px')
+  const badge = markKey
+    ? '<span style="position:absolute;' + corner + ';width:22px;height:22px;border-radius:' + badgeR +
+      ';background:' + chipBg + ';display:flex;align-items:center;justify-content:center;overflow:hidden">' +
+      '<img src="' + markDataUrl(markKey, iconCol) + '" alt="" style="width:15px;height:15px;display:block" /></span>'
+    : ''
   const tape = t.deco.includes('tape')
     ? '<span style="position:absolute;left:20px;top:-8px;width:52px;height:15px;background:' +
       (solid ? rgba('#ffffff', 0.4) : rgba(c, 0.5)) + ';transform:rotate(-4deg);border-radius:1px"></span>'
@@ -564,7 +744,7 @@ function surface(o: SurfaceOpts): string {
   const quote = o.quote && t.deco.includes('quote')
     ? '<p style="margin:0 0 -14px;font-size:46px;line-height:1;font-family:Georgia,serif;color:' + rgba(c, solid ? 0.5 : 0.3) + '">“</p>'
     : ''
-  const body = tape + brackets + quote + inner + decoImg
+  const body = tape + brackets + quote + inner + decoImg + badge
   const margin = o.margin !== undefined ? o.margin : (tape ? '14px 0 16px' : '0 0 16px')
   const extra = o.extraStyle || ''
 
@@ -572,7 +752,7 @@ function surface(o: SurfaceOpts): string {
   // key/tip/danger 上断掉（双线、虚线这些签名特征会整条消失）。夹线在实色下退化为整圈框
   // （夹线没有底色，撑不住一块实色）。
   const bg = solid ? o.solidColor : fill
-  const kind: ShellKind = solid && s.kind === 'rules' ? 'box' : s.kind
+  const kind: ShellKind = effKind
   const line = (a: number) => (solid ? rgba('#ffffff', a) : rgba(c, a))
   const strong = solid ? '#ffffff' : c
   if (solid && kind === 'none') {
@@ -583,28 +763,35 @@ function surface(o: SurfaceOpts): string {
   }
 
   switch (kind) {
-    case 'bar':
+    case 'bar': {
       // 左竖线必须直角——圆角会把竖条两头一起圆掉（"圆角与硬直竖线语言冲突"的具体形态）
-      return secBox(margin, extra + 'background:' + bg + ';border-left:' + s.barW + 'px solid ' + (s.strong ? strong : line(0.55)) +
-        ';padding:' + pad + ';position:relative', body)
+      const ruleCol = s.strong ? strong : line(0.55)
+      // `rail`：竖线之外再夹上下两条细线（半包围）。重语义（注意/警示）靠它加重，
+      // 而不是靠"把整块包起来"——全包裹的框是模板腔，半包围仍留着纸面。
+      const rails = s.rail
+        ? styleOf('border-top:1px solid ' + line(0.45), 'border-bottom:1px solid ' + line(0.45))
+        : ''
+      return secBox(margin, styleOf(extra, bg ? 'background:' + bg : '', 'border-left:' + s.barW + 'px solid ' + ruleCol,
+        rails, 'padding:' + pad, 'position:relative'), body)
+    }
     case 'box':
-      return secBox(margin, extra + 'background:' + bg + ';border:1px solid ' + line(0.42) + ';border-radius:' + t.radius +
-        'px;padding:' + pad + ';position:relative', body)
+      return secBox(margin, styleOf(extra, bg ? 'background:' + bg : '', 'border:1px solid ' + line(0.42),
+        'border-radius:' + t.radius + 'px', 'padding:' + pad, 'position:relative'), body)
     case 'edge':
-      return secBox(margin, extra + 'background:' + bg + ';border:1px solid ' + line(0.4) + ';border-left:' + s.barW +
-        'px solid ' + strong + ';padding:' + pad + ';position:relative', body)
+      return secBox(margin, styleOf(extra, bg ? 'background:' + bg : '', 'border:1px solid ' + line(0.4),
+        'border-left:' + s.barW + 'px solid ' + strong, 'padding:' + pad, 'position:relative'), body)
     case 'dash':
-      return secBox(margin, extra + 'border:1px dashed ' + line(0.55) + ';border-radius:' + t.radius + 'px;background:' + bg +
-        ';padding:' + pad + ';position:relative', body)
+      return secBox(margin, styleOf(extra, 'border:1px dashed ' + line(0.55), 'border-radius:' + t.radius + 'px',
+        bg ? 'background:' + bg : '', 'padding:' + pad, 'position:relative'), body)
     case 'rules':
-      return secBox(margin, extra + 'border-top:2px solid ' + line(0.5) + ';border-bottom:2px solid ' + line(0.5) +
-        ';padding:' + pad + ';position:relative', body)
+      return secBox(margin, styleOf(extra, 'border-top:2px solid ' + line(0.5), 'border-bottom:2px solid ' + line(0.5),
+        'padding:' + pad, 'position:relative'), body)
     case 'stack': {
       // 双线用嵌套 section（`border-style:double` 在 1–2px 下看不出，且不在微信白名单）。
       // 外圈圆角 = 内圈 + 3px 的衬距，两层同心才不"别着"。
-      const rr = t.radius ? ';border-radius:' + t.radius + 'px' : ''
-      const innerBox = secBox('', 'border:1px solid ' + line(0.24) + ';background:' + bg + rr + ';padding:' + pad +
-        ';position:relative', body)
+      const rr = t.radius ? 'border-radius:' + t.radius + 'px' : ''
+      const innerBox = secBox('', styleOf('border:1px solid ' + line(0.24), bg ? 'background:' + bg : '', rr,
+        'padding:' + pad, 'position:relative'), body)
       return secBox(margin, extra + 'border:1px solid ' + line(0.55) + (t.radius ? ';border-radius:' + (t.radius + 3) + 'px' : '') + ';padding:3px', innerBox)
     }
     default:
@@ -647,54 +834,113 @@ function bubble(
   const decoImg = src
     ? '<img src="' + src + '" alt="" style="position:absolute;right:12px;bottom:10px;width:' + DECO_W + 'px;height:auto;max-height:' + DECO_MAX_H + 'px;pointer-events:none;opacity:.9;display:block" />' : ''
 
-  const inner = labelHtml(t, meta.label, meta.c, solid) +
+  const inner = labelHtml(t, meta.label, meta.c, solid, k) +
     faceTitle(t, ttl, solid ? '#ffffff' : d.heading) +
     faceBody(bodyText, solid ? rgba('#ffffff', 0.92) : d.text)
+  // R22 角标：轴显式指定 > 语义默认（"形状即情绪"契约）；`mark=none` 明确不画。
+  // 角标解析：显式 `mark=` > 主题（风格）词汇 > 语义默认（"形状即情绪"）。
+  // 主题词汇只覆盖 note/tip（见 marks.ts::THEME_MARKS），警报与结论的形状不动。
+  const markKey = t.mark === 'none'
+    ? null
+    : t.mark
+      ? (resolveMark(t.mark) || themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
+      : (themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
+  // `frame=plane` 的气泡**只靠底色成块**（没有边框），若底色也空就整块消失、只剩一坨文字——
+  // 与 R21 给容器补 `flatFill` 的口径一致，这里对 plane 语言补一层浅底（`frame=none` 才是真的裸文字）。
+  // 浓度取 12%：7% 时实测只有 1.07:1，在截图/普通屏上"是不是一块卡片"处在临界（读图复核指出）。
+  const bubbleFill = t.frame === 'plane' && t.fill === 'none' ? rgba(meta.c, 0.12) : fillOf(t, meta.c, heavy, d)
   return surface({
     t, s: shellFor(t, k), c: meta.c, solid, solidColor,
-    fill: fillOf(t, meta.c, heavy, d),
+    fill: bubbleFill,
     bottom: solid ? Math.max(12, reserve - 2) : reserve,
     decoImg, quote: k === 'key', inner,
+    mark: markKey ? { key: markKey, at: t.markat } : null,
   })
 }
 
+/**
+ * 分割线——**跟随设计轴**（R20）。
+ *
+ * 骨架由 `frame` 决定，对应知识库 `module-divider` 的"组合方式"：
+ * `line` 细线式 / `dash` 虚线式 / `plane` 短横条式 / `edge` 色带式 / `stack` 双条拼色式 /
+ * `rules` 夹线+圆点 / `none` 留白圆点组。四种写法（`---` 细线 / `***` 圆点 / `___` 色条 /
+ * `~~~` 双色条）保留为**端点与局部风格**的输入（模块的"类型 × 风格"里的"风格"）。
+ * 间距仍是 24px 硬规范（`module-divider` 必守项）。
+ */
 function divider(d: ComposeDesign, kind: string): string {
-  if (d.key === 'promo') {
-    if (kind === '***') {
-      return '<section style="text-align:center;margin:24px 0"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + d.orange + ';margin:0 4px"></span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + d.amber + ';margin:0 4px"></span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + d.teal + ';margin:0 4px"></span></section>'
-    }
-    if (kind === '___') {
-      return '<section style="margin:24px 0;display:flex;align-items:center"><span style="flex:1;height:2px;background:' + d.border + '"></span><span style="display:inline-block;width:8px;height:8px;background:' + d.orange + ';transform:rotate(45deg);margin:0 10px;border-radius:1px"></span><span style="flex:1;height:2px;background:' + d.border + '"></span></section>'
-    }
-    if (kind === '~~~') {
-      return '<section style="margin:24px 0"><section style="height:6px;border-radius:3px;background:' + d.orange + '"></section><section style="height:3px;border-radius:2px;background:' + d.amber + ';margin-top:3px;opacity:.7"></section></section>'
-    }
-    return '<section style="height:1px;background:' + d.border + ';margin:24px 0"></section>'
+  const t = faceOf(d)
+  const c = decoColor(d)
+  const m = 'margin:24px 0'
+  const diamond = (color: string) => '<span style="display:inline-block;width:8px;height:8px;background:' + color + ';transform:rotate(45deg);border-radius:1px"></span>'
+  const dots = (color: string) => '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';margin:0 4px"></span>'
+  const bar = (h: string, color: string, extra = '') => '<section style="height:' + h + ';border-radius:' + (t.radius ? Math.min(t.radius, 3) + 'px' : '0') + ';background:' + color + extra + '"></section>'
+  // 端点/中心风格：`kind` 是模型写下的记号，决定"用什么装饰"（圆点 / 菱形 / 色条）
+  const deco = kind === '***' ? () => dots(c) : kind === '___' ? () => diamond(c) : kind === '~~~' ? () => diamond(decoColor2(d)) : null
+  switch (t.frame) {
+    case 'plane':
+      return '<section style="' + m + 'text-align:center">' + bar('6px', c, ';width:64px;display:inline-block') + '</section>'
+    case 'dash':
+      return '<section style="' + m + ';border-top:2px dashed ' + rgba(c, 0.55) + '"></section>'
+    case 'edge':
+      return '<section style="' + m + ';background:' + rgba(c, 0.14) + ';border-top:1px solid ' + rgba(c, 0.4) + ';border-bottom:1px solid ' + rgba(c, 0.4) + ';height:8px"></section>'
+    case 'stack':
+      return '<section style="' + m + ';text-align:center">' + bar('6px', c, ';width:44%;display:inline-block;vertical-align:middle') +
+        '<span style="display:inline-block;width:8px"></span>' + bar('6px', decoColor2(d), ';width:44%;display:inline-block;vertical-align:middle;opacity:.75') + '</section>'
+    case 'rules':
+      return '<section style="' + m + ';display:flex;align-items:center"><span style="flex:1;height:1px;background:' + rgba(c, 0.5) + '"></span>' +
+        '<span style="display:inline-block;margin:0 10px">' + dots(c) + '</span><span style="flex:1;height:1px;background:' + rgba(c, 0.5) + '"></span></section>'
+    case 'none':
+      return '<section style="' + m + ';text-align:center">' + dots(c) + dots(c) + dots(c) + '</section>'
+    default:
+      // line：细线式为主款；`kind` 记号决定线中/线端的装饰
+      if (deco) return '<section style="' + m + ';display:flex;align-items:center;justify-content:center"><span style="flex:1;height:1px;background:' + rgba(c, 0.45) + '"></span>' +
+        '<span style="display:inline-block;margin:0 10px">' + deco() + '</span><span style="flex:1;height:1px;background:' + rgba(c, 0.45) + '"></span></section>'
+      return '<section style="' + m + ';height:1px;background:' + rgba(c, 0.45) + '"></section>'
   }
-  if (kind === '***') {
-    return '<section style="text-align:center;margin:24px 0"><span style="display:inline-block;color:#c3ccd8;letter-spacing:8px;font-size:14px">· · ·</span></section>'
-  }
-  if (kind === '___') {
-    return '<section style="height:3px;border-radius:2px;background:#c9d8ef;margin:24px 0"></section>'
-  }
-  return '<section style="height:1px;background:#e8edf3;margin:24px 0"></section>'
 }
 
+/**
+ * 章节标题——**跟随设计轴**（R20）。
+ *
+ * 结构由 `frame` 决定：`line` 左竖条（编辑设计里最经典的标题手法）、`plane` 色块、
+ * `dash` 虚线框、`stack` 双线框、`rules` 上下夹线居中、`edge` 细框 + 左粗线、`none` 无框居中。
+ * 字体取 `title` 轴、字号取 `size` 轴（等级基础值 + 档差），序号徽章形状随 `radius`。
+ * 宣传类的自动编号（`counter`）不变，只是外面套上当前语言该有的壳。
+ */
 function heading(d: ComposeDesign, level: number, text: string, counter: number | null): string {
+  const t = faceOf(d)
   const h = escapeHtml(text)
-  if (d.key === 'promo') {
-    if (level === 1) {
-      return '<section style="margin:28px 0 16px;text-align:center"><span style="display:inline-block;font-size:22px;font-weight:800;color:' + d.ink + ';border-bottom:4px solid ' + d.hl + ';padding:0 6px 2px">' + h + '</span></section>'
-    }
-    if (level === 2) {
-      const n = typeof counter === 'number' ? counter : ''
-      return '<section style="margin:28px 0 12px;display:flex;align-items:center"><span style="display:inline-block;min-width:26px;height:26px;border-radius:8px 8px 8px 2px;background:' + d.orange + ';color:#ffffff;font-size:15px;font-weight:800;text-align:center;line-height:26px;margin-right:8px">' + n + '</span><span style="font-size:20px;font-weight:700;color:' + d.ink + '">' + h + '</span></section>'
-    }
-    return '<section style="margin:24px 0 10px;font-size:17px;font-weight:700;color:' + d.purple + ';border-left:4px solid ' + d.orange + ';padding-left:10px">' + h + '</section>'
+  const c = decoColor(d)
+  const ink = decoInk(d)
+  const fs = headSize(level, t)
+  const font = FACE_FONT_CSS[t.title]
+  const tag = 'h' + level
+  // 标题正文仍是 `<hN>`（语义 + 与既有断言/微信口径一致），结构壳在外层 section
+  const hEl = '<' + tag + ' style="margin:0;font-size:' + fs + 'px;font-weight:700;line-height:1.5;color:' + ink + font + '">' + h + '</' + tag + '>'
+  const num = counter != null ? counterBadge(counter, t, c) : ''
+  const radius = t.radius ? 'border-radius:' + t.radius + 'px' : ''
+  const fill = flatFill(t, c, false, d)
+  const base = 'margin:28px 0 ' + (level <= 2 ? 12 : 10) + 'px'
+  switch (t.frame) {
+    case 'plane':
+      return '<section style="' + styleOf(base, fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
+    case 'dash':
+      return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
+    case 'stack':
+      return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.55), t.radius ? 'border-radius:' + (t.radius + 3) + 'px' : '', 'padding:3px') +
+        '"><section style="' + styleOf('border:1px solid ' + rgba(c, 0.24), fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section></section>'
+    case 'rules':
+      return '<section style="' + styleOf(base, 'border-top:2px solid ' + rgba(c, 0.5), 'border-bottom:2px solid ' + rgba(c, 0.5), 'padding:10px 4px', 'text-align:center') + '">' + num + hEl + '</section>'
+    case 'edge':
+      return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.4), 'border-left:' + t.barW + 'px solid ' + c, fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
+    case 'none':
+      return '<section style="' + styleOf(base, 'text-align:center') + '">' + num + hEl + '</section>'
+    default:
+      // line：左竖条必须直角（与 `surface()` 的 bar 分支同一条冲突消解）
+      return '<section style="' + styleOf(base, 'display:flex', 'align-items:center') + '">' +
+        '<span style="display:inline-block;width:' + t.barW + 'px;height:' + Math.round(fs * 0.9) + 'px;background:' + c + ';margin-right:10px;flex-shrink:0"></span>' +
+        num + hEl + '</section>'
   }
-  const sizes: Record<number, number> = { 1: 22, 2: 20, 3: 18, 4: 17, 5: 16, 6: 15 }
-  const bar = level <= 2 ? 'border-left:4px solid ' + d.accent + ';padding-left:10px;' : ''
-  return '<h' + level + ' style="margin:28px 0 12px;font-size:' + sizes[level] + 'px;font-weight:bold;line-height:1.5;color:' + d.heading + ';' + bar + '">' + h + '</h' + level + '>'
 }
 
 /**
@@ -735,7 +981,7 @@ function card(d: ComposeDesign, title: string, lines: string[]): string {
   const c = d.key === 'promo' ? d.orange : d.accent
   const body = lines.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
   const head = '<p style="margin:0 0 9px;font-size:' + t.size + 'px;font-weight:700;line-height:1.5;color:' + d.heading + FACE_FONT_CSS[t.title] + '">' + inline(escapeHtml(title), d) + '</p>'
-  return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 12, decoImg: '', quote: false, inner: head + body })
+  return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d), bottom: 12, decoImg: '', quote: false, inner: head + body })
 }
 
 function steps(d: ComposeDesign, items: string[]): string {
@@ -750,16 +996,51 @@ function steps(d: ComposeDesign, items: string[]): string {
   }).join('')
 }
 
+/**
+ * 横幅（`[[banner:主|副]]`）——**跟随设计轴**（R20）。
+ *
+ * 宣传类保留"实色整块"（双模式策略的一部分，R16 明确不动），但圆角/内距/字体/字号全部取轴；
+ * 文字类走与标题同一套 `frame` 壳，只是居中 + 带副标题、字号更大。这样"整篇一套语言"在横幅上也成立。
+ */
 function banner(d: ComposeDesign, title: string, sub: string): string {
-  const t = escapeHtml(title)
-  const s = escapeHtml(sub || '')
-  if (d.key === 'promo') {
-    return '<section style="margin:0 0 16px;border-radius:14px;background:' + d.orange + ';padding:24px 18px;text-align:center">' +
-      '<p style="margin:0 0 4px;font-size:20px;font-weight:800;color:#ffffff;letter-spacing:1px">' + t + '</p>' +
-      (s ? '<p style="margin:0;font-size:14px;color:rgba(255,255,255,.92)">' + s + '</p>' : '') + '</section>'
+  const t = faceOf(d)
+  const c = decoColor(d)
+  const T = escapeHtml(title)
+  const S = escapeHtml(sub || '')
+  const fs = 20 + (t.size - 15)
+  const font = FACE_FONT_CSS[t.title]
+  const promo = d.key === 'promo'
+  const titleColor = promo ? '#ffffff' : decoInk(d)
+  const subColor = promo ? rgba('#ffffff', 0.9) : d.sub
+  const inner = '<p style="margin:' + (S ? '0 0 4px' : '0') + ';font-size:' + fs + 'px;font-weight:800;color:' + titleColor + font + ';letter-spacing:1px">' + T + '</p>' +
+    (S ? '<p style="margin:0;font-size:14px;color:' + subColor + '">' + S + '</p>' : '')
+  const centered = '<section style="text-align:center">' + inner + '</section>'
+  const radius = t.radius ? 'border-radius:' + t.radius + 'px' : ''
+  const fill = flatFill(t, c, false, d)
+  if (promo) {
+    const pad = t.pad === 'tight' ? '18px 16px' : t.pad === 'loose' ? '28px 20px' : '24px 18px'
+    return '<section style="' + styleOf('margin:0 0 16px', radius, 'background:' + c, 'padding:' + pad) + '">' + centered + '</section>'
   }
-  return '<section style="margin:28px 0 16px;text-align:center"><span style="display:inline-block;font-size:20px;font-weight:700;color:' + d.heading + ';border-bottom:2px solid ' + d.accent + ';padding-bottom:4px">' + t + '</span>' +
-    (s ? '<p style="margin:6px 0 0;font-size:14px;color:' + d.sub + '">' + s + '</p>' : '') + '</section>'
+  const base = 'margin:28px 0 16px'
+  switch (t.frame) {
+    case 'plane':
+      return '<section style="' + styleOf(base, fill ? 'background:' + fill : '', radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
+    case 'dash':
+      return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
+    case 'stack':
+      return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.55), t.radius ? 'border-radius:' + (t.radius + 3) + 'px' : '', 'padding:3px') +
+        '"><section style="' + styleOf('border:1px solid ' + rgba(c, 0.24), fill ? 'background:' + fill : '', radius, 'padding:' + decoPad(t)) + '">' + centered + '</section></section>'
+    case 'rules':
+      return '<section style="' + styleOf(base, 'border-top:2px solid ' + rgba(c, 0.5), 'border-bottom:2px solid ' + rgba(c, 0.5), 'padding:12px 4px') + '">' + centered + '</section>'
+    case 'edge':
+      return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.4), 'border-left:' + t.barW + 'px solid ' + c, fill ? 'background:' + fill : '', radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
+    case 'none':
+      return '<section style="' + styleOf(base, 'text-align:center') + '">' + inner + '</section>'
+    default:
+      // line：标题 + 下划线强调（用 bar 轴给粗细）
+      return '<section style="' + styleOf(base, 'text-align:center') + '"><section style="' +
+        styleOf('display:inline-block', 'border-bottom:' + t.barW + 'px solid ' + c, 'padding:0 6px 4px') + '">' + inner + '</section></section>'
+  }
 }
 
 function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
@@ -782,7 +1063,7 @@ function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
     '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + body + '</p>'
   return surface({
     t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '',
-    fill: fillOf(t, c, false, d) || rgba(c, 0.06), bottom: 13, decoImg: '', quote: false, inner,
+    fill: flatFill(t, c, false, d) || rgba(c, 0.06), bottom: 13, decoImg: '', quote: false, inner,
   })
 }
 
@@ -792,7 +1073,7 @@ function frameBlock(d: ComposeDesign, items: string[]): string {
   const body = items.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
   // 边框容器额外允许角括号装饰（`deco` 里有 brackets 就挂对角两个）
   const s: Shell = { ...shellFor(t, 'flat'), bracket: t.deco.includes('brackets') }
-  return surface({ t, s, c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner: body })
+  return surface({ t, s, c, solid: false, solidColor: '', fill: flatFill(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner: body })
 }
 
 function listBlock(d: ComposeDesign, ordered: boolean, items: string[]): string {
@@ -805,7 +1086,7 @@ function listBlock(d: ComposeDesign, ordered: boolean, items: string[]): string 
         '<span style="display:inline-block;width:8px;height:8px;border-radius:' + bulletR + ';background:' + c + ';margin:9px 10px 0 0;flex-shrink:0"></span>' +
         '<span style="font-size:16px;line-height:1.75;color:' + d.text + '">' + it + '</span></section>'
     }).join('')
-    return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: fillOf(t, c, false, d), bottom: 11, decoImg: '', quote: false, inner: rows })
+    return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d), bottom: 11, decoImg: '', quote: false, inner: rows })
   }
   const tag = ordered ? 'ol' : 'ul'
   const ls = ordered ? 'decimal' : 'disc'
@@ -1032,13 +1313,15 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // R17/R18：设计轴——正文 [[boxes:…]] 优先，其次主题映射，最后 editorial
   const faceSpec = resolveFaceSpec(md, pal && pal.key)
   d.scheme = faceSpec.spec
+  // R22：主题键留给角标用（主题词汇 = 知识库说的"每个风格提供自己的图案词汇表"）
+  d.themeKey = (pal && pal.key) || ''
   const artUrls: Record<string, string> = {}
   const warnings: string[] = []
   // R18：轴名/取值不认识时**不生效并出声**——走既有修订回路让模型自己纠正，
   // 而不是静默按默认渲染（静默是"模型写了没效果、谁也不知道"的温床）。
   if (faceSpec.unknown.length) {
     warnings.push(
-      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad，或预置名 编辑感/亲和/杂志/手账/科技',
+      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat，或预置名 编辑感/亲和/杂志/手账/科技',
     )
   }
   const images: ComposeImage[] = []
@@ -1473,7 +1756,10 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       para.push(inline(escapeHtml(l), d))
       i++
     }
-    emit(paraBlock(d, para.join('<br/>')), paraLine)
+    // R21：宣传类普通段落**不再套"文字容器"**。v10.1 曾让宣传类每段都进一层浅色面板
+    // （当时的口径是"消除裸文字"），但"每段一层浅色块"正是被点名的"全包裹圆角矩形纯浅色背景"，
+    // 而且**整页都是块**会把真正的强调（横幅/气泡/分割线/徽章）淹掉。宣传类的身份改由这些**组件**承担。
+    emit(P(d) + para.join('<br/>') + '</p>', paraLine)
   }
 
   // 美术资产占位 art:// 替换（桌面版无微信资产库 → 一律移除并警告）

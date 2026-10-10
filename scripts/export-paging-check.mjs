@@ -227,19 +227,29 @@ async function runFixture({ src, targetCssH }) {
    * 这里用"三通道之和 < 600（均值 < 200）"识别真正的字形/图形笔画，并要求 alpha 非零
    * （画布未绘制处是透明像素，其 RGB 读出来是 0，不加 alpha 判定会被当成纯黑）。
    */
-  const seamInk = (cv, cutPx) => {
+  const seamCols = (cv, cutPx, pred) => {
     if (!cv || cutPx <= 0 || cutPx >= cv.height) return null
     const ctx = ctxOf(cv)
     const a = ctx.getImageData(0, cutPx - 1, cv.width, 1).data
     const b = ctx.getImageData(0, cutPx, cv.width, 1).data
-    const dark = (d, i) => d[i + 3] > 8 && d[i] + d[i + 1] + d[i + 2] < 600
     let cols = 0
     for (let x = 0; x < cv.width; x++) {
       const i = x * 4
-      if (dark(a, i) && dark(b, i)) cols++
+      if (pred(a, i) && pred(b, i)) cols++
     }
     return cols
   }
+  /** 深墨：产品自己的接缝判据（三通道和 < 600）——只认文字与深色图形，浅色插画不算 */
+  const isInk = (d, i) => d[i + 3] > 8 && d[i] + d[i + 1] + d[i + 2] < 600
+  /**
+   * 有内容：只要不是纯纸白就算被切到（浅色插画也算）。**只给"旧固定切法"对照组用**。
+   * 理由：夹具的既定不变式是"切点不得落在图片内部"（与颜色无关），而深墨判据对浅色插画是**故意失明**的
+   * （见 R12：浅色插画/块不参与吸附判定）。所以证明"旧切法把图切了"必须用与颜色无关的口径；
+   * 用深墨口径去证明，会在夹具几何一变（例如 R21 取消宣传类段落面板后整篇变矮）时**静默失效**。
+   */
+  const isContent = (d, i) => d[i + 3] > 8 && d[i] + d[i + 1] + d[i + 2] < 752
+  const seamInk = (cv, cutPx) => seamCols(cv, cutPx, isInk)
+  const seamContent = (cv, cutPx) => seamCols(cv, cutPx, isContent)
   /**
    * 放大接缝图（人工目视用）：把长图上切线**两侧各 30 CSS px** 放大 2 倍，中间留一道红色缝。
    * 上下两块就是"切完之后上一页底 / 下一页顶"的真实像素：如果某一刀切穿了字形或图形，
@@ -379,6 +389,8 @@ async function runFixture({ src, targetCssH }) {
   const innerCutsCss = newCutsCss.slice(1, -1)
   const seamInkNew = innerCutsCss.map((c) => ({ cutCss: c, cols: seamInk(longCv, Math.round(c * SCALE)) }))
   const seamInkOld = oldCutsCss.map((c) => ({ cutCss: c, cols: seamInk(longCv, Math.round(c * SCALE)) }))
+  // 对照组的**与颜色无关**口径：旧固定切法是否切到了"任何内容"（浅色插画也算）
+  const seamContentOld = oldCutsCss.map((c) => ({ cutCss: c, cols: seamContent(longCv, Math.round(c * SCALE)) }))
   const zoomNew = longCv ? innerCutsCss.map((c) => zoomShot(longCv, Math.round(c * SCALE))) : []
   const zoomOld = longCv ? oldCutsCss.map((c) => zoomShot(longCv, Math.round(c * SCALE))) : []
 
@@ -418,6 +430,7 @@ async function runFixture({ src, targetCssH }) {
     oldPages,
     seamInkNew,
     seamInkOld,
+    seamContentOld,
     zoomNew,
     zoomOld,
   }
@@ -724,17 +737,24 @@ for (const f of fixtureInfo) {
   // ── 逐像素证红/证绿：切线上下各取一行，"同列两行都有墨"的列数就是被切穿的笔画宽度 ──────────
   const inkNew = r.seamInkNew || []
   const inkOld = r.seamInkOld || []
+  const contentOld = r.seamContentOld || []
   check(
     `${K} **新切点逐像素未切穿墨迹**（跨缝列数 = 0）`,
     inkNew.every((x) => x.cols === 0),
     inkNew.map((x) => `${x.cutCss}px:${x.cols}列`).join(' ') || '(没有内部切点)',
   )
-  if (inkOld.length) {
-    const worst = Math.max(...inkOld.map((x) => x.cols || 0))
+  // 旧固定切法的**证红**用"有内容"口径（与颜色无关）：夹具的不变式是"切点不得落在图片内部"，
+  // 而深墨判据对浅色插画故意失明——用深墨口径证明会在夹具几何变化时静默失效（R21 就是这么踩到的）。
+  if (contentOld.length) {
+    const worstContent = Math.max(...contentOld.map((x) => x.cols || 0), 0)
     check(
-      `${K} **旧固定切法逐像素切穿墨迹**（最严重一刀跨缝有墨 ${worst} 列，证红）`,
-      worst > 0,
-      inkOld.map((x) => `${x.cutCss}px:${x.cols}列`).join(' '),
+      `${K} **旧固定切法逐像素切穿内容**（最严重一刀跨缝有内容 ${worstContent} 列，证红）`,
+      worstContent > 0,
+      contentOld.map((x) => `${x.cutCss}px:${x.cols}列`).join(' '),
+    )
+    observe(
+      `${K} 旧固定切法跨缝**深墨**列数（参考，浅色插画不计入）`,
+      inkOld.map((x) => `${x.cutCss}px:${x.cols}列`).join(' ') || '(无)',
     )
   }
 
