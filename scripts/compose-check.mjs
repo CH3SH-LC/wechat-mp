@@ -1,9 +1,12 @@
+// R26：样例显式声明版式——`[[theme:]]` 不再顺带决定版式，样例该有的长相要自己写出来。
+
 ﻿// compose-check.mjs —— composeMarkdown 转换器校验（第 14/15 轮）
 // 用法：node scripts/compose-check.mjs [outDir]
 //
 // 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
-import { buildAuthorUnits, composeMarkdown, projectionOf, resolveBoxScheme, svgElementCount } from '../src/lib/compose.ts'
+import { buildAuthorUnits, composeMarkdown, projectionOf, resolveBoxScheme, resolveFaceSpec, svgElementCount } from '../src/lib/compose.ts'
 import { checkHtml } from '../src/lib/quality.ts'
+import { PALETTES, resolveTheme } from '../src/lib/palettes.ts'
 import { MARK_KEYS, MARK_LABEL, THEME_MARKS, markDataUrl } from '../src/lib/marks.ts'
 import { buildReviseContent, fixableWarnings, locateIssues } from '../src/lib/revise.ts'
 import { createJudge, guardCrashes, parseRunnerArgs } from './lib/run-result.mjs'
@@ -35,6 +38,7 @@ const FLOWER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260
 </svg>`
 
 const SAMPLE = `[[theme:校园]]
+[[boxes:亲和;radius=14]]
 
 [[banner:新生开学典礼|9 月 1 日上午 8 点 · 东区操场]]
 
@@ -110,7 +114,7 @@ let failed = 0
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
 // 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-11 R23 实测 215 条（+4：宣传类"纯色气泡"禁令）。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 231 })
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 237 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -329,6 +333,46 @@ check('R24 分栏列数**按内容长度**决定：项短才 3 列，整句退�
   '短项→' + (/width:33\.3%/.test(composeMarkdown('::: cols\n- 甲\n- 乙\n- 丙\n:::\n', { mode: 'text' }).html) ? '3列' : '?') + '；长项→' + (/width:calc\(50% - 6px\)/.test(composeMarkdown('::: cols\n- 这是很长的一句话，用来验证整句时长分栏会退到两列排列\n- 第二句同样很长，也需要退到两列才读得舒服一些\n- 第三句也不短，一起验证这条规则确实生效了\n:::\n', { mode: 'text' }).html) ? '2列' : '?'))
 check('R24 三项短分栏仍走并排（没把正常用法一起废掉）', 
   /display:flex;align-items:stretch/.test(composeMarkdown('::: cols\n- 甲项\n- 乙项\n- 丙项\n:::\n', { mode: 'text' }).html))
+// ---- R26：**配色风格 与 版式 解耦** ----
+//
+// 用户判词："原来的格式是格式，配色被绑定到格式上了，现在要把配色风格和板式分开"。
+// 解耦的判据必须是**可证伪的结构事实**：同一版式换配色后，去掉颜色两版**逐字相同**；
+// 以及"只写主题"不再顺带套上某个版式（否则又有耦合）。
+// 注：除了颜色，还要剥掉**角标图案的 data-URI**——图案词汇属于**风格层**（`THEME_MARKS`：
+// 森系长叶子、校园长星星），它是「风格」的一部分，不是版式。这条断言只证「**版式**不受配色影响」。
+const stripColor = (h) => String(h)
+  .replace(/src="data:[^"]*"/g, 'src="data:C"')
+  .replace(/#[0-9a-fA-F]{3,8}/g, '#C')
+  .replace(/rgba?\([^)]*\)/g, 'rgba(C)')
+const mixDoc = (theme, boxes) => composeMarkdown(`[[theme:${theme}]]\n[[boxes:${boxes}]]\n\n## 小标题\n\n正文一句。\n\n> [!TIP] 技巧\n> 一句。\n`, { mode: 'text' }).html
+check('R26 **解耦证据**：同一版式换配色，去掉颜色后逐字相同（配色不动结构）',
+  stripColor(mixDoc('校园', '杂志')) === stripColor(mixDoc('薄荷', '杂志')),
+  stripColor(mixDoc('校园', '杂志')) === stripColor(mixDoc('薄荷', '杂志')) ? '两份去色后一致' : '去色后仍不同 ⇒ 配色还在影响结构')
+check('R26 **解耦证据**：同一配色换版式，结构确实不同（版式独立生效）',
+  stripColor(mixDoc('校园', '杂志')) !== stripColor(mixDoc('校园', '编辑感')),
+  '')
+check('R26 风格化扩充：色板表 ≥14 个，且新增的 6 个风格都能按中文名解析',
+  PALETTES.length >= 14 && ['杂志', '报纸', '奶油', '薄荷', '赤陶', '靛蓝'].every((l) => Boolean(resolveTheme('[[theme:' + l + ']]'))),
+  PALETTES.map((x) => x.label).join(','))
+check('R26 配色 × 版式 任意组合都过 checkHtml（16 组抽样）',
+  ['校园', '薄荷', '赤陶', '靛蓝'].every((th) => ['编辑感', '杂志', '手账', '科技'].every((bx) => checkHtml(mixDoc(th, bx)).ok)),
+  '')
+// R26 续：**配色要真的到达气泡**。此前气泡的语义色是 DESIGNS 里的固定常量、与主题无关，
+// "换个风格"气泡颜色几乎不变——那等于配色没落到最显眼的组件上。
+const tipCard = (th) => composeMarkdown(`[[theme:${th}]]\n[[boxes:frame=line]]\n\n> [!TIP] 技巧\n> 一句。\n`, { mode: 'text' }).html
+const railOf = (h) => (h.match(/border-left:\d+px solid (#[0-9a-fA-F]{6})/) || [])[1]
+check('R26 配色确实到达气泡：两种风格的 TIP 语义色不同（不再是固定常量）',
+  Boolean(railOf(tipCard('校园'))) && railOf(tipCard('校园')) !== railOf(tipCard('靛蓝')),
+  `校园=${railOf(tipCard('校园'))} 靛蓝=${railOf(tipCard('靛蓝'))}`)
+const lumOf = (hex) => {
+  const n = parseInt(hex.slice(1), 16)
+  const f = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4) }
+  return 0.2126 * f((n >> 16) & 255) + 0.7152 * f((n >> 8) & 255) + 0.0722 * f(n & 255)
+}
+const cwOf = (hex) => 1.05 / (lumOf(hex) + 0.05)
+const semBad = PALETTES.filter((p) => [p.sub, p.tip, p.warn, p.danger].some((c) => !/^#[0-9a-fA-F]{6}$/.test(c) || cwOf(c) < 3))
+check('R26 每种风格的四个语义色都与白底 ≥3:1（大字/图形下限；15 个风格全过）',
+  semBad.length === 0, semBad.length ? semBad.map((x) => x.key).join(',') : `${PALETTES.length} 个风格全过`)
 // 未知名不生效、不崩（走既有"未知轴"口径）
 const badShape = composeMarkdown('[[boxes:shape=弯曲的样式]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
 check('R24 认不出的骨架名 → 出声且回退默认（不静默变形）', badShape.warnings.some((w) => w.includes('组件设计轴')) && /border-left:\d+px solid #/.test(badShape.html), badShape.warnings.slice(0, 1).join('|'))
@@ -619,12 +663,17 @@ const SCHEME_SIG = {
 for (const s of SCHEME_NAMES) check(`R17 ${s} 的签名结构特征在场`, SCHEME_SIG[s](schemeHtml[s]))
 // 选择规则：显式声明 > 主题映射 > 默认
 check('R17 [[boxes:名]] 优先于主题映射', resolveBoxScheme('[[theme:科技]]\n[[boxes:sticker]]', 'tech') === 'sticker')
-check('R17 主题映射：校园 → soft', resolveBoxScheme('', 'campus') === 'soft')
-check('R17 主题映射：科技 → tech', resolveBoxScheme('', 'tech') === 'tech')
-check('R17 主题映射：极简 → editorial', resolveBoxScheme('', 'minimal') === 'editorial')
+check('R26 配色不再决定版式：8 个主题解析出的版式载荷**全都相同且为空**（= 中性默认）',
+  ['campus', 'tech', 'minimal', 'japanese', 'guochao', 'forest', 'handbook', 'business'].every((k) => resolveFaceSpec('', k).spec === ''),
+  ['campus', 'tech', 'minimal', 'japanese'].map((k) => k + ':' + JSON.stringify(resolveFaceSpec('', k).spec)).join(' '))
+check('R26 版式与配色可任意组合：同一份轴换任何主题，解析出的轴载荷逐字不变',
+  resolveFaceSpec('[[boxes:杂志]]', 'campus').spec === '杂志' && resolveFaceSpec('[[boxes:杂志]]', 'japanese').spec === '杂志' && resolveFaceSpec('[[boxes:frame=line;shape=index]]', 'forest').spec === 'frame=line;shape=index',
+  resolveFaceSpec('[[boxes:杂志]]', 'campus').spec + ' / ' + resolveFaceSpec('[[boxes:frame=line;shape=index]]', 'forest').spec)
+check('R26 只写主题、不写轴 → 版式载荷为空（不再顺带套上某主题的版式）',
+  resolveFaceSpec('[[theme:校园]]', 'campus').spec === '' && resolveFaceSpec('[[theme:日系]]', 'japanese').spec === '', '')
 check('R17 中文方案名也认（与 [[theme:名称]] 同口径）', resolveBoxScheme('[[boxes:手账]]', undefined) === 'sticker' && resolveBoxScheme('[[boxes:杂志]]', undefined) === 'magazine')
-check('R17 未知方案名不生效、回退到主题映射', resolveBoxScheme('[[boxes:不存在的方案]]', 'campus') === 'soft')
-check('R17 无声明无主题 → editorial', resolveBoxScheme('', undefined) === 'editorial')
+check('R26 未知方案名不生效、回退中性默认（不再回退到主题的版式）', resolveFaceSpec('[[boxes:不存在的方案]]', 'campus').spec === '' && resolveFaceSpec('[[boxes:不存在的方案]]', 'campus').unknown.length === 1)
+check('R26 无声明无主题 → 中性默认（兼容口径 `resolveBoxScheme` 仍可用）', resolveFaceSpec('', undefined).spec === '' && resolveBoxScheme('', undefined) === 'custom')
 check('R17 [[boxes:…]] 声明行不进正文', !composeMarkdown('[[boxes:soft]]\n\n正文一段。', { mode: 'text' }).html.includes('[[boxes'))
 
 // ---- R18（2026-10-09）：设计轴词汇表——模型给**意图**，引擎负责渲染成微信安全的样子 ----
@@ -654,7 +703,7 @@ check('R18 冲突消解：frame=line 强制圆角 0', /border-left:3px solid /.t
 const unk = composeMarkdown('[[boxes:半径=99;frane=line]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
 check('R18 未知轴名/取值 → 给警告', unk.warnings.some((w) => w.includes('组件设计轴')), JSON.stringify(unk.warnings))
 check('R18 未知段以外的有效段照常生效', composeMarkdown('[[boxes:soft;半径=99]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' }).html.includes('border-radius:10px'))
-check('R18 整条都不认识时回退主题映射（不静默变编辑感）', resolveBoxScheme('[[boxes:瞎写]]', 'campus') === 'soft')
+check('R26 整条都不认识时回退中性默认（不静默变成某个主题的版式）', resolveFaceSpec('[[boxes:瞎写]]', 'campus').spec === '' && resolveFaceSpec('[[boxes:瞎写]]', 'campus').unknown.length > 0)
 
 // ④ 组合自由：能产出**任何预置都没有**的长相——这才是"自主推断"的意义
 const COMBO = 'frame=stack;radius=14;label=chip;fill=paper;title=serif;deco=tape;pad=loose'

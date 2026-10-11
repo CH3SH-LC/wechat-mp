@@ -68,6 +68,11 @@ export const THEME_MARKS: Record<string, { note?: string; tip?: string }> = {
   illustration: { note: 'heart', tip: 'star' },
   anime: { note: 'star', tip: 'heart' },
   'hk-retro': { note: 'seal', tip: 'star' },
+  // R26：风格化解耦后新增的配色风格，各自补一组图案词汇（只覆盖 note/tip，警报与结论的形状不换）
+  cream: { note: 'book', tip: 'heart' },
+  mint: { note: 'drop', tip: 'sprout' },
+  terracotta: { note: 'sprout', tip: 'maple' },
+  indigo: { note: 'gear', tip: 'star' },
   cyberpunk: { note: 'bolt', tip: 'gear' },
 }
 

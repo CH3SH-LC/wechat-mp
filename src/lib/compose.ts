@@ -58,6 +58,12 @@ function makeDesign(modeKey: 'text' | 'promo', pal?: StylePalette, custom?: Reco
   const d: ComposeDesign = { ...base }
   if (pal) {
     d.bg = pal.bg
+    // R26：语义色**也归配色**——否则"换个风格"气泡颜色几乎不变（它们原本是 `DESIGNS` 里的固定常量）。
+    // 两种模式都覆盖：气泡在文字类与宣传类里都会出现。
+    d.sub = pal.sub
+    d.tip = pal.tip
+    d.warn = pal.warn
+    d.danger = pal.danger
     if (modeKey === 'text') {
       d.accent = pal.accent
       d.accentDark = pal.accentDark
@@ -485,31 +491,24 @@ function VALUE_ALIAS_LOOKUP(v: string): string {
   return FACE_VALUE_ALIAS[v] || v.toLowerCase()
 }
 
-/** 主题（palettes key）→ 预置别名 的默认映射；正文 `[[boxes:]]` 显式声明优先于它 */
-const SCHEME_BY_THEME: Record<string, string> = {
-  minimal: 'editorial', business: 'editorial',
-  japanese: 'magazine', guochao: 'magazine',
-  campus: 'soft', forest: 'soft',
-  handbook: 'sticker', tech: 'tech',
-}
-
 /**
- * 正文声明优先，其次主题映射，最后 editorial。返回的是"载荷"字符串，直接喂 `faceFromSpec`。
+ * 取本篇的**版式载荷**（喂 `faceFromSpec`）。
  *
- * **声明整条都不认识时不能静默降级到默认语言**——那会让主题映射白设：`[[boxes:typo]]`
- * 应该"报错 + 用主题该有的语言"，而不是"报错 + 悄悄变成编辑感"。所以按 `applied` 计数判定：
- * 一个有效段都没有 ⇒ 当作没声明，回退主题映射。
+ * **R26：与配色彻底解耦。** 此前这里有一张 `SCHEME_BY_THEME`（校园→亲和、日系/国潮→杂志…），
+ * 于是"选一个配色风格"会**顺带把版式也定了**——用户判词："原来的格式是格式，配色被绑定到格式上了，
+ * 现在要把配色风格和板式分开"。现在：
+ *   · `[[theme:名称]]` **只决定配色**（见 `palettes.ts`），不再影响任何版式轴；
+ *   · 版式**只**来自正文的 `[[boxes:…]]`；不写就是中性默认（编辑感）。
+ * 两者可以任意组合：任何配色 × 任何版式。`themeKey` 参数保留只为不破坏调用方签名。
  */
-export function resolveFaceSpec(md: string, themeKey?: string): { spec: string; unknown: string[] } {
-  const preset = (themeKey && SCHEME_BY_THEME[themeKey]) || 'editorial'
+export function resolveFaceSpec(md: string, _themeKey?: string): { spec: string; unknown: string[] } {
   const m = /\[\[boxes:\s*([^\]]+?)\s*\]\]/.exec(String(md || ''))
-  if (m) {
-    const raw = m[1].trim()
-    const r = faceFromSpec(raw)
-    if (r.applied > 0) return { spec: raw, unknown: r.unknown }
-    return { spec: preset, unknown: r.unknown }
-  }
-  return { spec: preset, unknown: [] }
+  if (!m) return { spec: '', unknown: [] }
+  const raw = m[1].trim()
+  const r = faceFromSpec(raw)
+  // 声明整条都不认识时不能静默降级——报错并回退默认语言（此时就是中性默认）
+  if (r.applied > 0) return { spec: raw, unknown: r.unknown }
+  return { spec: '', unknown: r.unknown }
 }
 
 /** 兼容 R17 的断言口径：返回解析出来的**预置名**（纯轴组合时为 'custom'） */
