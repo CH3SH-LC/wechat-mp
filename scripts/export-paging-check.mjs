@@ -38,7 +38,9 @@ const judge = createJudge({
   outDir: resolveOutDir('export-paging-check', args.outDir),
   plannedCases: ['①', '②', '③', '④'],
   // 2026-10-08 实测 59 条（①16 + ②17 + ③21 + ④5）；静默少跑一条就变红
-  minChecks: 59,
+  // 2026-10-11：59 → 57。把两条「旧固定切法必须切到内容」（每场景）换成了
+  // 一条与夹具几何无关的「探针有效性（证红）」。净减 2 条是**刻意**的判据升级，不是丢断言。
+  minChecks: 57,
 })
 guardCrashes(judge)
 let failed = 0
@@ -378,6 +380,15 @@ async function runFixture({ src, targetCssH }) {
     probe.oversizeGuard = { found: false, detail: '(夹具里没有图片/SVG 对象)' }
   }
 
+  // ⑥-0 探针有效性（证红）：**必然命中**的一刀——取最高受保护矩形的竖直中点。
+  // 与夹具几何无关；只有探针失效时才会绿（旧判据依赖"1000px 整数倍恰好落在内容上"，夹具一变就假红）。
+  const probeRect = rects.slice().sort((a, b) => (b.bottom - b.top) - (a.bottom - a.top))[0] || rects[0]
+  const probeCutCss = probeRect ? (probeRect.top + probeRect.bottom) / 2 : null
+  const probeHits = probeCutCss == null ? [] : rects
+    .filter((x) => x.top + 0.5 < probeCutCss && probeCutCss < x.bottom - 0.5)
+    .map((x) => ({ kind: x.kind, height: Math.round(x.bottom - x.top), crossPx: Math.round(x.bottom - probeCutCss) }))
+  const probeContentCols = probeCutCss == null || !longCv ? null : seamContent(longCv, Math.round(probeCutCss * SCALE))
+
   // ⑥ 旧固定切法的对照页 + 新切法的接缝图（人工目视用）
   const oldPages = longCv && oldCutsCss.length ? sliceAtCss(longCv, oldCutsCss) : []
   const oldPagesCv = []
@@ -424,6 +435,11 @@ async function runFixture({ src, targetCssH }) {
     oldCutsCss,
     oldCross,
     newCross,
+    probeCutCss,
+    probeHits,
+    probeContentCols,
+    // 受保护矩形的完整清单（只有 top/bottom/kind，供外层做"必然命中"的探针有效性断言）
+    rects: rects.map((x) => ({ top: x.top, bottom: x.bottom, kind: x.kind })),
     stitch,
     seams,
     oldSeams,
@@ -720,18 +736,27 @@ for (const f of fixtureInfo) {
     check(`${K} 落盘 PNG 独立核对通过（签名 + IHDR + IEND 齐全）`, false, '没有写出任何 PNG')
   }
 
-  // ── 旧切法证红：独立探针在"每 1000 CSS px 一刀"的旧切点上必须报出切口 ──────────────
+  // ── 探针有效性（证红）：用**必然命中**的一刀证明"探针真能报出切口" ─────────────
+  //
+  // 原来这条证红是"1000px 整数倍的旧切点必须切到内容"。那是个**夹具几何的隐含依赖**：
+  // 2026-10-11 去掉块级底色后正文变矮、对象整体上移，四个旧切点恰好全落在空隙——
+  // 于是它变成"夹具变了就报红"，而不是"探针坏了才报红"（R21 已在同类判据上踩过一次）。
+  // 改成一刀切在**最高受保护矩形的竖直中点**（在页面内算好、与几何无关），只有探针失效才绿。
+  check(
+    `${K} 探针有效性（证红）：一刀切在最高受保护对象的中点，**必须报出切口**`,
+    r.probeCutCss != null && (r.probeHits || []).length >= 1 && r.probeContentCols != null && r.probeContentCols > 0,
+    r.probeCutCss == null
+      ? '(夹具里没有任何受保护对象)'
+      : `切点 ${Math.round(r.probeCutCss)}px；对象级命中 ${(r.probeHits || []).length} 处（${(r.probeHits || []).map((h) => '<' + h.kind + '>').join(',')}）；逐像素跨缝 ${r.probeContentCols} 列`,
+  )
+
+  // 旧固定切法的统计**降为观测**：它落在不在内容上取决于夹具几何，不适合当硬判据。
   const oldHits = r.oldCross.reduce((a, x) => a + x.hits.length, 0)
   observe(
-    `${K} 旧固定切法切口统计（证红依据）`,
+    `${K} 旧固定切法切口统计（参考：夹具几何变过，可能恰好落在空隙）`,
     r.oldCross.length
       ? r.oldCross.map((x) => `${x.c}px: ${x.hits.length ? x.hits.map((h) => `<${h.kind}>${h.text ? '「' + h.text + '」' : ''}被切 ${h.crossPx}px（对象高 ${h.height}）`).join('；') : '落在空隙（未切穿）'}`).join(' ｜ ')
       : '(正文不足 1000 CSS px，旧切法没有内部切点)',
-  )
-  check(
-    `${K} 旧固定切法**确实切穿内容**（${oldHits} 处，证红）≥ ${f.minOldCross}`,
-    oldHits >= f.minOldCross,
-    `旧切点 ${JSON.stringify(r.oldCutsCss)}；切口 ${oldHits} 处`,
   )
 
   // ── 逐像素证红/证绿：切线上下各取一行，"同列两行都有墨"的列数就是被切穿的笔画宽度 ──────────
@@ -743,13 +768,9 @@ for (const f of fixtureInfo) {
     inkNew.every((x) => x.cols === 0),
     inkNew.map((x) => `${x.cutCss}px:${x.cols}列`).join(' ') || '(没有内部切点)',
   )
-  // 旧固定切法的**证红**用"有内容"口径（与颜色无关）：夹具的不变式是"切点不得落在图片内部"，
-  // 而深墨判据对浅色插画故意失明——用深墨口径证明会在夹具几何变化时静默失效（R21 就是这么踩到的）。
   if (contentOld.length) {
-    const worstContent = Math.max(...contentOld.map((x) => x.cols || 0), 0)
-    check(
-      `${K} **旧固定切法逐像素切穿内容**（最严重一刀跨缝有内容 ${worstContent} 列，证红）`,
-      worstContent > 0,
+    observe(
+      `${K} 旧固定切法跨缝**有内容**列数（参考；证红改由上面的"必然命中"探针承担）`,
       contentOld.map((x) => `${x.cutCss}px:${x.cols}列`).join(' '),
     )
     observe(

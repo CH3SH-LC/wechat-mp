@@ -180,7 +180,7 @@ function timelineBlock(d: ComposeDesign, items: string[]): string {
       '<span style="display:inline-block;color:' + c + ';font-size:13px;font-weight:700;margin-bottom:4px' + FACE_FONT_CSS[t.title] + '">' + (idx + 1) + '</span>' +
       '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
     return surface({
-      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d),
+      t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
       bottom: 11, decoImg: '', quote: false, inner, margin: '0 0 14px',
     })
   }).join('') + '</section>'
@@ -243,7 +243,7 @@ function colsBlock(d: ComposeDesign, items: string[]): string {
     const mr = idx === n - 1 ? '' : 'margin-right:12px;'
     const inner = '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
     return surface({
-      t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d),
+      t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
       bottom: 11, decoImg: '', quote: false, inner,
       margin: '0', extraStyle: 'flex:1;width:' + pct + ';' + mr,
     })
@@ -532,6 +532,11 @@ function shellFor(t: FaceTokens, k: BubbleKind | 'flat'): Shell {
   const heavy = k === 'warn' || k === 'danger'
   if (k === 'flat') return { kind: FLAT_SHELL[t.frame], barW: t.barW, strong: true, bracket: false, rail: false }
   switch (t.frame) {
+    // `plane` = "没有边框、只靠底色成块"——**底色被禁之后这条语言在气泡上就不成立了**
+    // （2026-10-11 用户口径："整篇无任何色块"）。所以气泡的 `plane` 降级到 `line` 那一套
+    // **线条阶梯**：气泡必须有"线"才立得住，不能靠色块存在。
+    // 容器的 `plane` 不同（见 `FLAT_SHELL`）——容器没有底线，就是**纯内容**（列表/并排文字）。
+    case 'plane':
     case 'line':
       // 编辑感的轻重阶梯：**竖线越来越粗、越来越实，重语义再夹上下细线**——
       // 而不是"轻语义铺浅底、重语义套整圈框"。全包裹的框正是被点名的模板腔。
@@ -547,14 +552,20 @@ function shellFor(t: FaceTokens, k: BubbleKind | 'flat'): Shell {
   }
 }
 
-/** 底色轴 → 实际颜色（实色反白由调用方另行给） */
-function fillOf(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): string {
-  switch (t.fill) {
-    case 'none': return ''
-    case 'paper': return d.soft2 || d.soft
-    case 'wash': return rgba(c, heavy ? 0.14 : 0.1)
-    default: return rgba(c, heavy ? 0.09 : 0.07)
-  }
+/**
+ * 底色轴 → 实际颜色。**2026-10-11 起恒为 `''`（永远不铺底）**。
+ *
+ * 用户当日指令（原文）："为什么依旧是纯色圆角矩形气泡？完全禁止掉这种气泡设计"，
+ * 追问后选择的口径是**最彻底的那一档**——"**整篇无任何色块**"：气泡与容器**全部不铺底**。
+ * 所以 `fill` 轴（`none/tint/wash/paper`）在**块级**上已**失效**（仍解析、不再输出底色），
+ * 页面底色永远是纸。保留函数与轴是为了不让旧正文报"未知轴"。
+ *
+ * **边界**（这条禁令管的是"面"，不是"点"）：块级（气泡 / 卡片 / 分栏 / 步骤 / 时间线 /
+ * 边框容器 / 引用 / 色带）一律无底色；**记号级**仍可有色——22px 角标徽章、语义标签 chip、
+ * 行内 `[[badge:]]`、小标题序号徽章、分割线圆点。它们不是"色块"，是信息记号。
+ */
+function fillOf(_t: FaceTokens, _c: string, _heavy: boolean, _d: ComposeDesign): string {
+  return ''
 }
 
 /**
@@ -565,7 +576,7 @@ function fillOf(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): str
  * 真给成透明就会整块消失。所以轴说 `none` 时，容器仍补一层极浅的底（约 5.5%）。
  */
 function flatFill(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): string {
-  return t.fill === 'none' ? rgba(c, 0.055) : fillOf(t, c, heavy, d)
+  return fillOf(t, c, heavy, d) // 恒为 ''
 }
 
 const FACE_FONT_CSS: Record<FaceFont, string> = {
@@ -583,10 +594,10 @@ const FACE_FONT_CSS: Record<FaceFont, string> = {
  * 另一个决定：**重语义（注意/警示）的标签改用 chip**——把"警报"集中在一枚小色块上
  * （warn 描边 / danger 实心），而不是给整段铺一层浅色底。这样页面底色始终是纸，只在小构件上落色。
  */
-function labelHtml(t: FaceTokens, text: string, c: string, solid: boolean, kind: BubbleKind | 'flat' = 'note'): string {
+function labelHtml(t: FaceTokens, text: string, c: string, kind: BubbleKind | 'flat' = 'note'): string {
   if (!text || t.label === 'none') return ''
-  const col = solid ? rgba('#ffffff', 0.78) : c
-  if (!solid && t.label === 'eyebrow' && (kind === 'warn' || kind === 'danger')) {
+  const col = c
+  if (t.label === 'eyebrow' && (kind === 'warn' || kind === 'danger')) {
     const filled = kind === 'danger'
     const chip = filled
       ? 'background:' + c + ';color:#ffffff'
@@ -596,7 +607,7 @@ function labelHtml(t: FaceTokens, text: string, c: string, solid: boolean, kind:
   }
   if (t.label === 'chip') {
     return '<p style="margin:0 0 7px;line-height:1.4"><span style="display:inline-block;background:' +
-      (solid ? rgba('#ffffff', 0.22) : rgba(c, 0.16)) + ';color:' + (solid ? '#ffffff' : c) +
+      rgba(c, 0.16) + ';color:' + c +
       ';border-radius:10px;padding:2px 10px;font-size:12px;font-weight:700">' + text + '</span></p>'
   }
   if (t.label === 'mono') {
@@ -668,8 +679,6 @@ interface SurfaceOpts {
   t: FaceTokens
   s: Shell
   c: string            // 语义色（竖线 / 边框 / 标签 / 引号）
-  solid: boolean       // 实色反白（宣传类 key/tip/danger）
-  solidColor: string
   fill: string
   bottom: number       // 底部内距（角饰避让）
   decoImg: string      // 绝对定位角饰图（气泡专用，其它容器传 ''）
@@ -699,7 +708,7 @@ function secBox(margin: string, style: string, inner: string): string {
  * 它说 `frame=line`（要左竖线），这里就把圆角夹到 0；它说实色反白，这里就换成嵌套 shell 加内衬亮边。
  */
 function surface(o: SurfaceOpts): string {
-  const { t, s, c, solid, fill, bottom, decoImg, inner } = o
+  const { t, s, c, fill, bottom, decoImg, inner } = o
   const minBottom = t.pad === 'tight' ? 12 : t.pad === 'loose' ? 18 : 15
   // 角标在不透明底上骑线：**左/右落点各留出 32px 内距**，避免图案压到文字。
   // 未启用角标时保持原本的三值内距（不惊动既有断言与既有长相）。
@@ -716,7 +725,7 @@ function surface(o: SurfaceOpts): string {
     ? padTop + 'px ' + (sideR ? 32 : 16) + 'px ' + padBottom + 'px ' + (sideL ? 32 : 16) + 'px'
     : padTop0 + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
   // 实色反白会把 `rules` 退化成整圈框（夹线撑不住实色），角标要按**实际画出来的壳**算偏移。
-  const effKind: ShellKind = solid && s.kind === 'rules' ? 'box' : s.kind
+  const effKind: ShellKind = s.kind
   // **角标必须骑在框线上**：`position:absolute` 的包含块是**内边距盒**，`left:0` 落在框线**内侧**——
   // 那样徽章只是"贴在框内角上"，盖不到线，"断口"根本不存在（2026-10-10 读图子智能体逐像素抓到：
   // 虚线的左竖边一路没断、上下横线通栏无缺口）。所以按当前壳的框线宽度给**负偏移**，让徽章压住那一截线。
@@ -750,8 +759,8 @@ function surface(o: SurfaceOpts): string {
   // 角标徽章：不透明实色块 + 白色图案（实色反白气泡上反过来：白底 + 语义色图案）。
   // 芯片色经 `chipColor()` 压到与白底 ≥4.5:1——语义里的 NOTE 用的是"浅底上的次要文字色"（石板灰），
   // 直接做实色块只有 3.05:1，15px 的白图形糊在灰块上认不出（读图实测）。
-  const chipBg = solid ? '#ffffff' : chipColor(c)
-  const iconCol = solid ? chipColor(o.solidColor) : '#ffffff'
+  const chipBg = chipColor(c)
+  const iconCol = '#ffffff'
   const badgeR = t.radius >= 10 ? '50%' : (t.radius ? t.radius + 'px' : '2px')
   const badge = markKey
     ? '<span style="position:absolute;' + corner + ';width:22px;height:22px;border-radius:' + badgeR +
@@ -760,32 +769,25 @@ function surface(o: SurfaceOpts): string {
     : ''
   const tape = t.deco.includes('tape')
     ? '<span style="position:absolute;left:20px;top:-8px;width:52px;height:15px;background:' +
-      (solid ? rgba('#ffffff', 0.4) : rgba(c, 0.5)) + ';transform:rotate(-4deg);border-radius:1px"></span>'
+      rgba(c, 0.5) + ';transform:rotate(-4deg);border-radius:1px"></span>'
     : ''
   const brackets = s.bracket
     ? '<span style="position:absolute;left:-1px;top:-1px;width:16px;height:16px;border-left:2px solid ' + c + ';border-top:2px solid ' + c + '"></span>' +
       '<span style="position:absolute;right:-1px;bottom:-1px;width:16px;height:16px;border-right:2px solid ' + c + ';border-bottom:2px solid ' + c + '"></span>'
     : ''
   const quote = o.quote && t.deco.includes('quote')
-    ? '<p style="margin:0 0 -14px;font-size:46px;line-height:1;font-family:Georgia,serif;color:' + rgba(c, solid ? 0.5 : 0.3) + '">“</p>'
+    ? '<p style="margin:0 0 -14px;font-size:46px;line-height:1;font-family:Georgia,serif;color:' + rgba(c, 0.3) + '">“</p>'
     : ''
   const body = tape + brackets + quote + inner + decoImg + badge
   const margin = o.margin !== undefined ? o.margin : (tape ? '14px 0 16px' : '0 0 16px')
   const extra = o.extraStyle || ''
 
-  // 实色反白**只改底色与线条色，框架语言照常**——否则"整篇一套设计语言"会在宣传类的
-  // key/tip/danger 上断掉（双线、虚线这些签名特征会整条消失）。夹线在实色下退化为整圈框
-  // （夹线没有底色，撑不住一块实色）。
-  const bg = solid ? o.solidColor : fill
+  // 底色一律来自 `fill`（`fillOf`/`rgba` ⇒ **永远带透明度**）。曾经那条 promo 专属的
+  // "实色反白"分支已按用户 2026-10-11 的指令整体删除（见 `bubble()` 里的说明）。
+  const bg = fill
   const kind: ShellKind = effKind
-  const line = (a: number) => (solid ? rgba('#ffffff', a) : rgba(c, a))
-  const strong = solid ? '#ffffff' : c
-  if (solid && kind === 'none') {
-    // 实色 + 无框架 = 大面积死色，补一圈内衬亮边把它撑起来
-    const ring = secBox('', 'border:1px solid ' + rgba('#ffffff', 0.32) + ';border-radius:' + Math.max(0, t.radius - 2) +
-      'px;padding:' + pad + ';position:relative', body)
-    return secBox(margin, extra + 'border-radius:' + (t.radius ? t.radius + 'px' : '0') + ';background:' + o.solidColor + ';padding:2px;overflow:hidden', ring)
-  }
+  const line = (a: number) => rgba(c, a)
+  const strong = c
 
   switch (kind) {
     case 'bar': {
@@ -846,8 +848,11 @@ function bubble(
   }[k]
   const ttl = title && title !== meta.label ? title : ''
   const bodyText = body.length ? body.map((l) => inline(l, d)).join('<br/>') : ''
-  const solid = d.key === 'promo' && (k === 'key' || k === 'tip' || k === 'danger')
-  const solidColor = k === 'danger' ? d.danger : k === 'tip' ? d.tip : d.orange
+  // **气泡不再有"纯色反白块"这一形态**（用户 2026-10-11 明确："为什么依旧是纯色圆角矩形气泡？
+  // 完全禁止掉这种气泡设计"）。曾经的 promo 专属 `solid`（KEY/TIP/DANGER 整块实色 + 白字）已删除：
+  // 语义之间的差别改由**语义色 + 文字标签 + 角标图案 + 框架语言的轻重**承担（`shellFor` 里
+  // KEY 走上下夹线、TIP 走加粗左竖线、WARN/DANGER 走更粗的竖线 + 上下细线 / 整圈细框），
+  // 而不是"给整段铺一块实色"。底色一律是**带透明的浅底**（`fillOf`/`rgba`），页面底色永远是纸。
   const heavy = k === 'warn' || k === 'danger'
   const artName = DECO_MAP[decoName] || decoName
   // 角饰来源：预置资产 URL（artUrls）> 现场装饰素材（::: art deco 定义，第 21 轮）
@@ -859,9 +864,9 @@ function bubble(
   const decoImg = src
     ? '<img src="' + src + '" alt="" style="position:absolute;right:12px;bottom:10px;width:' + DECO_W + 'px;height:auto;max-height:' + DECO_MAX_H + 'px;pointer-events:none;opacity:.9;display:block" />' : ''
 
-  const inner = labelHtml(t, meta.label, meta.c, solid, k) +
-    faceTitle(t, ttl, solid ? '#ffffff' : d.heading) +
-    faceBody(bodyText, solid ? rgba('#ffffff', 0.92) : d.text)
+  const inner = labelHtml(t, meta.label, meta.c, k) +
+    faceTitle(t, ttl, d.heading) +
+    faceBody(bodyText, d.text)
   // R22 角标：轴显式指定 > 语义默认（"形状即情绪"契约）；`mark=none` 明确不画。
   // 角标解析：显式 `mark=` > 主题（风格）词汇 > 语义默认（"形状即情绪"）。
   // 主题词汇只覆盖 note/tip（见 marks.ts::THEME_MARKS），警报与结论的形状不动。
@@ -870,14 +875,13 @@ function bubble(
     : t.mark
       ? (resolveMark(t.mark) || themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
       : (themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
-  // `frame=plane` 的气泡**只靠底色成块**（没有边框），若底色也空就整块消失、只剩一坨文字——
-  // 与 R21 给容器补 `flatFill` 的口径一致，这里对 plane 语言补一层浅底（`frame=none` 才是真的裸文字）。
-  // 浓度取 12%：7% 时实测只有 1.07:1，在截图/普通屏上"是不是一块卡片"处在临界（读图复核指出）。
-  const bubbleFill = t.frame === 'plane' && t.fill === 'none' ? rgba(meta.c, 0.12) : fillOf(t, meta.c, heavy, d)
+  // 气泡一律不铺底（2026-10-11 禁令）；`plane` 语言因此不再"靠底色成块"，改为**走线条语言**
+  // （见 `shellFor` 的 `case 'plane'`）——否则整块会消失、只剩一坨文字。
+  const bubbleFill = fillOf(t, meta.c, heavy, d)
   return surface({
-    t, s: shellFor(t, k), c: meta.c, solid, solidColor,
+    t, s: shellFor(t, k), c: meta.c,
     fill: bubbleFill,
-    bottom: solid ? Math.max(12, reserve - 2) : reserve,
+    bottom: reserve,
     decoImg, quote: k === 'key', inner,
     mark: markKey ? { key: markKey, at: t.markat } : null,
   })
@@ -948,7 +952,11 @@ function heading(d: ComposeDesign, level: number, text: string, counter: number 
   const base = 'margin:28px 0 ' + (level <= 2 ? 12 : 10) + 'px'
   switch (t.frame) {
     case 'plane':
-      return '<section style="' + styleOf(base, fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
+      // R23：`plane` 小标题原来靠**底色色块**（`fill`），底色被禁后降级为**左竖条**（与 `line` 同族）——
+      // 小标题必须有个记号才立得住，不能只剩一段加粗文字。
+      return '<section style="' + styleOf(base, 'display:flex', 'align-items:center') + '">' +
+        '<span style="display:inline-block;width:' + t.barW + 'px;height:' + Math.round(fs * 0.9) + 'px;background:' + c + ';margin-right:10px;flex-shrink:0"></span>' +
+        num + hEl + '</section>'
     case 'dash':
       return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
     case 'stack':
@@ -984,15 +992,17 @@ function quoteBlock(d: ComposeDesign, lines: string[]): string {
   const fill = rgba(c, 0.06)
   switch (t.frame) {
     case 'plane':
-      return '<blockquote style="' + base + ';background:' + fill + ';border-radius:' + t.radius + 'px;padding:14px 16px;font-size:15px">' + body + '</blockquote>'
+      // R23：`plane`（"只靠底色成块"）在"整篇无底色"下已无意义 ⇒ 引用降级为**左竖线**，
+      // 与默认语言同族（否则这一支会渲染成一坨没有记号的白文字）。
+      return '<blockquote style="' + base + ';border-left:' + t.barW + 'px solid ' + rgba(c, 0.55) + ';padding:2px 0 2px 14px;font-size:15px">' + body + '</blockquote>'
     case 'dash':
-      return '<blockquote style="' + base + ';border:1px dashed ' + rgba(c, 0.55) + ';border-radius:' + t.radius + 'px;background:' + fill + ';padding:13px 15px;font-size:15px">' + body + '</blockquote>'
+      return '<blockquote style="' + base + ';border:1px dashed ' + rgba(c, 0.55) + ';border-radius:' + t.radius + 'px;padding:13px 15px;font-size:15px">' + body + '</blockquote>'
     case 'stack':
       return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.5) + ';padding:3px"><blockquote style="margin:0;border:1px solid ' + rgba(c, 0.22) + ';background:' + fill + ';padding:12px 14px;font-size:15px">' + body + '</blockquote></blockquote>'
     case 'rules':
       return '<blockquote style="' + base + ';border-top:1px solid ' + rgba(c, 0.5) + ';border-bottom:1px solid ' + rgba(c, 0.5) + ';padding:12px 4px;text-align:center;font-size:16px">' + body + '</blockquote>'
     case 'edge':
-      return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.4) + ';border-left:' + t.barW + 'px solid ' + c + ';background:' + fill + ';padding:12px 14px;font-size:15px">' + body + '</blockquote>'
+      return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.4) + ';border-left:' + t.barW + 'px solid ' + c + ';padding:12px 14px;font-size:15px">' + body + '</blockquote>'
     case 'none':
       return '<blockquote style="' + base + ';padding:2px 0 2px 14px;font-size:15px">' + body + '</blockquote>'
     default:
@@ -1006,7 +1016,7 @@ function card(d: ComposeDesign, title: string, lines: string[]): string {
   const c = d.key === 'promo' ? d.orange : d.accent
   const body = lines.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
   const head = '<p style="margin:0 0 9px;font-size:' + t.size + 'px;font-weight:700;line-height:1.5;color:' + d.heading + FACE_FONT_CSS[t.title] + '">' + inline(escapeHtml(title), d) + '</p>'
-  return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d), bottom: 12, decoImg: '', quote: false, inner: head + body })
+  return surface({ t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d), bottom: 12, decoImg: '', quote: false, inner: head + body })
 }
 
 function steps(d: ComposeDesign, items: string[]): string {
@@ -1034,22 +1044,22 @@ function banner(d: ComposeDesign, title: string, sub: string): string {
   const S = escapeHtml(sub || '')
   const fs = 20 + (t.size - 15)
   const font = FACE_FONT_CSS[t.title]
-  const promo = d.key === 'promo'
-  const titleColor = promo ? '#ffffff' : decoInk(d)
-  const subColor = promo ? rgba('#ffffff', 0.9) : d.sub
+  // 横幅不再有"实色 + 白字"形态 ⇒ 标题文字一律用**纸面上的深色**（R23）。
+  const titleColor = decoInk(d)
+  const subColor = d.sub
   const inner = '<p style="margin:' + (S ? '0 0 4px' : '0') + ';font-size:' + fs + 'px;font-weight:800;color:' + titleColor + font + ';letter-spacing:1px">' + T + '</p>' +
     (S ? '<p style="margin:0;font-size:14px;color:' + subColor + '">' + S + '</p>' : '')
   const centered = '<section style="text-align:center">' + inner + '</section>'
   const radius = t.radius ? 'border-radius:' + t.radius + 'px' : ''
   const fill = flatFill(t, c, false, d)
-  if (promo) {
-    const pad = t.pad === 'tight' ? '18px 16px' : t.pad === 'loose' ? '28px 20px' : '24px 18px'
-    return '<section style="' + styleOf('margin:0 0 16px', radius, 'background:' + c, 'padding:' + pad) + '">' + centered + '</section>'
-  }
+  // **R23（2026-10-11）删掉了宣传类的"纯色横幅"特例**（原来 promo 下横幅是一整块实色 + 白字）。
+  // 用户口径是"整篇无任何色块"，而横幅是全篇最大的一块色 → 它现在与文字类**走同一套线条语言**：
+  // `line` 下划线强调 / `rules` 上下夹线 / `dash` 虚线框 / `edge` 细框+左粗线 / `none` 纯居中。
   const base = 'margin:28px 0 16px'
   switch (t.frame) {
     case 'plane':
-      return '<section style="' + styleOf(base, fill ? 'background:' + fill : '', radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
+      // 底色被禁后，"只靠底色"的横幅没有形态可言 ⇒ 降级为**上下夹线**（与 rules 同形）。
+      return '<section style="' + styleOf(base, 'border-top:2px solid ' + rgba(c, 0.5), 'border-bottom:2px solid ' + rgba(c, 0.5), 'padding:12px 4px') + '">' + centered + '</section>'
     case 'dash':
       return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
     case 'stack':
@@ -1087,8 +1097,8 @@ function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
   const inner = '<section style="margin:0 0 8px;line-height:0">' + deco + '</section>' +
     '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + body + '</p>'
   return surface({
-    t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '',
-    fill: flatFill(t, c, false, d) || rgba(c, 0.06), bottom: 13, decoImg: '', quote: false, inner,
+    t, s: shellFor(t, 'flat'), c,
+    fill: flatFill(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner,
   })
 }
 
@@ -1098,7 +1108,7 @@ function frameBlock(d: ComposeDesign, items: string[]): string {
   const body = items.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
   // 边框容器额外允许角括号装饰（`deco` 里有 brackets 就挂对角两个）
   const s: Shell = { ...shellFor(t, 'flat'), bracket: t.deco.includes('brackets') }
-  return surface({ t, s, c, solid: false, solidColor: '', fill: flatFill(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner: body })
+  return surface({ t, s, c, fill: flatFill(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner: body })
 }
 
 function listBlock(d: ComposeDesign, ordered: boolean, items: string[]): string {
@@ -1111,7 +1121,7 @@ function listBlock(d: ComposeDesign, ordered: boolean, items: string[]): string 
         '<span style="display:inline-block;width:8px;height:8px;border-radius:' + bulletR + ';background:' + c + ';margin:9px 10px 0 0;flex-shrink:0"></span>' +
         '<span style="font-size:16px;line-height:1.75;color:' + d.text + '">' + it + '</span></section>'
     }).join('')
-    return surface({ t, s: shellFor(t, 'flat'), c, solid: false, solidColor: '', fill: flatFill(t, c, false, d), bottom: 11, decoImg: '', quote: false, inner: rows })
+    return surface({ t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d), bottom: 11, decoImg: '', quote: false, inner: rows })
   }
   const tag = ordered ? 'ol' : 'ul'
   const ls = ordered ? 'decimal' : 'disc'

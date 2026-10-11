@@ -109,8 +109,8 @@ let failed = 0
 // （实测在仓库根建出来过）。证据要么在正确的地方，要么别声称有。
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
-// 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-10 R22 实测 211 条（含八种落点与角饰让位）。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 211 })
+// 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-11 R23 实测 215 条（+4：宣传类"纯色气泡"禁令）。
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 218 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -119,27 +119,41 @@ const check = (name, ok, extra = '') => {
   if (!ok) failed++
 }
 
+// R23：横幅不再是实色块（"整篇无任何色块"）⇒ "主题色落地"的判据从 `background:#hex` 改为**线条色**：
+// 横幅现在用同一主题色画**上下夹线**（`rgba(主题色,0.5)`）。下面这个小工具把 hex 转成引擎用的 rgba 写法。
+const hexToRgba = (hex, a) => {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`
+}
+// 横幅的形态随 `frame` 变（line→下划线、plane→上下夹线、stack→双层框…），所以判据放宽成
+// "某条 border 用的是这个主题色的 rgba"——既钉住"主题色确实落地"，也不绑死某一种线条。
+const bannerHasLine = (html, hex) => {
+  const n = parseInt(hex.slice(1), 16)
+  const rgb = `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`
+  return new RegExp('border[^;"]*(?:' + hex + '|rgba\\(\\s*' + rgb + '\\s*,)').test(html)
+}
+
 // 1) 宣传类样例（校园主题）：mode 自动检测 promo；关键模块渲染；主题色落地
 const r = composeMarkdown(SAMPLE, { mode: 'auto' })
 check('auto detect promo', r.mode === 'promo' && r.modeLabel === '宣传类', `${r.mode}/${r.modeLabel}`)
 check('theme declared not rendered', !r.html.includes('[[theme'))
-check('campus theme banner (blue)', r.html.includes('background:#2f6fed;padding:24px 18px'))
+check('campus theme banner (blue, 走线条而非色块)', bannerHasLine(r.html, '#2f6fed'))
 check('wrapper white bg (campus)', r.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
 check('steps numbered circles', (r.html.match(/border-radius:50%/g) || []).length >= 3)
 check('band rgba pattern', r.html.includes('rgba(') && r.html.includes('band') === false)
 check('badge rendered', r.html.includes('border-radius:20px'))
 check('title box rendered (campus blue)', r.html.includes('border:2px solid #2f6fed'))
-// P0：气泡底部内边距改为按角饰实际高度预留（避免压字 / vivid 气泡 overflow:hidden 裁切），
-// R16 进一步改为"实色 + 内衬亮边"（嵌套 section），故断言**语义而非固定像素**：
-// 「宣传类 KEY 走实色反白、底色取主题主色、语义标签仍在场」。
-// R17 起具体形状随"组件语言"变（校园主题映射到 soft），故这里**不绑死形状**：
-// 断言"KEY 气泡确实以主题主色实色渲染、且文字是白色、语义标签在场"。
+// P0：气泡底部内边距改为按角饰实际高度预留（避免压字 / vivid 气泡 overflow:hidden 裁切）。
+// **R23（2026-10-11）：那条 promo 专属的"实色反白"分支被用户整体禁掉了**——
+// 原话"为什么依旧是纯色圆角矩形气泡？完全禁止掉这种气泡设计"。
+// 所以这里不再断言"KEY 以主题主色实色渲染"，改为断言**反过来的事**：KEY 气泡在场、语义标签在场、
+// 且**它身上没有不透明底色**。判据见下面的「气泡底色必须是带透明度的 rgba」那一组。
 const vividSegs = []
-for (let idx = r.html.indexOf('background:#2f6fed'); idx >= 0; idx = r.html.indexOf('background:#2f6fed', idx + 1)) {
-  const end = r.html.indexOf('</section>', idx)
-  vividSegs.push(r.html.slice(idx, end < 0 ? undefined : end))
+for (let idx = r.html.indexOf('>重点<'); idx >= 0; idx = r.html.indexOf('>重点<', idx + 1)) {
+  const open = r.html.lastIndexOf('<section style="', idx)
+  vividSegs.push(r.html.slice(open, r.html.indexOf('>', open))) // **只看开标签**：段内还有角标 span 的实色芯片
 }
-check('key bubble rendered (campus vivid)', vividSegs.some((s) => s.includes('重点') && s.includes('#ffffff')), `segs=${vividSegs.length}`)
+check('key bubble rendered (campus, 非实色)', vividSegs.length >= 1 && vividSegs.every((s) => !/background:#[0-9a-fA-F]{3,8}\b/.test(s)), `segs=${vividSegs.length} 底色=${vividSegs.map((s) => (s.match(/background:[^;"]+/) || ['(无)'])[0].slice(0, 24)).join('|')}`)
 check('no emoji/gradient/shadow in output', !/linear-gradient|box-shadow|[\u{1F000}-\u{1FAFF}]/u.test(r.html))
 check('plainText non-empty', r.plainText.length > 30, `${r.plainText.length} chars`)
 check('no warnings', r.warnings.length === 0, r.warnings.join('|'))
@@ -211,8 +225,119 @@ check('R21 默认气泡不铺底（没有"全包裹浅色面板"）',
   `带底色的 section 数=${(five.match(/<section style="[^"]*background:/g) || []).length}（应为 1，即文章根容器）`)
 check('R21 默认气泡不整圈包框（只有 border-left / border-top / border-bottom）', !/<section style="[^"]*[^-]border:/.test(five))
 check('R21 默认气泡不是圆角矩形', !/<section style="[^"]*border-radius:/.test(five))
+// ---- R23（2026-10-11）：**宣传类也不许再有"纯色圆角矩形气泡"** ----
+//
+// 用户原话："为什么依旧是纯色圆角矩形气泡？完全禁止掉这种气泡设计"。
+// 被禁掉的是 promo 专属的 `solid` 分支（KEY/TIP/DANGER 整块实色 + 白字 + 圆角）。
+// 上面 R21 那三条只管 `mode=text`；**宣传类此前恰好绕过它们**（`solid` 把底铺满），
+// 所以这里对 promo 独立再断言一遍——**判据是"底色必须带透明度"**：
+// 旧实色是 `background:#2f6fed`（不透明十六进制），新形态是 `background:rgba(...)`。
+const promoSix = composeMarkdown(['NOTE', 'TIP', 'WARN', 'DANGER', 'KEY'].map((k) => `> [!${k}] 标签${k}\n> 正文一句。`).join('\n\n'), { mode: 'promo' }).html
+const bubbleSecsOf = (html) =>
+  ['标签NOTE', '标签TIP', '标签WARN', '标签DANGER', '标签KEY']
+    .map((tag) => {
+      const at = html.indexOf('>' + tag + '<')
+      if (at < 0) return null
+      const open = html.lastIndexOf('<section style="', at)
+      return html.slice(open, html.indexOf('>', open))
+    })
+    .filter(Boolean)
+const promoBubbles = bubbleSecsOf(promoSix)
+const opaqueBg = (style) => /background:#[0-9a-fA-F]{3,8}\b/.test(style) || /background:rgb\(/.test(style)
+check('R23 宣传类五种语义的气泡全都在场（取样成功，否则下面的断言是空断言）',
+  promoBubbles.length === 5, `取到 ${promoBubbles.length}/5`)
+check('R23 宣传类气泡**没有不透明底色**（"纯色圆角矩形气泡"已禁）',
+  promoBubbles.length === 5 && promoBubbles.every((s) => !opaqueBg(s)),
+  promoBubbles.map((s) => (s.match(/background:[^;"]+/) || ['(无底)'])[0]).join(' | '))
+// 自证伪：这条判据必须真能抓住旧的实色形态，否则它是条永远为真的空断言。
+check('R23 该判据能抓住旧的实色气泡（自证伪）',
+  opaqueBg('<section style="background:#c96f4a;border-radius:14px">') &&
+    opaqueBg('<section style="background:rgb(201,111,74);padding:13px">') &&
+    !opaqueBg('<section style="background:rgba(201,111,74,0.1);padding:13px">'))
+// 语义差别改由**语义色（竖线/夹线）+ 标签文字 + 角标图案**承担——不再靠"铺一块实色"。
+// 判据：五个气泡的**线条语义色**两两不同（NOTE 3px / TIP 4px / WARN 5px+夹线 / DANGER 5px+夹线 / KEY 上下夹线）。
+// NOTE/TIP/WARN/DANGER 走 bar（竖线色是**不透明**语义色），KEY 走 rules（夹线是**半透明**同色系）——
+// 所以这里要求"四条竖线色两两不同"，再加一条"KEY 是上下夹线语言"。
+const promoRailHex = promoBubbles.map((s) => (s.match(/(?:border-left|border-top):\d+px solid (#[0-9a-fA-F]{6})/) || [])[1]).filter(Boolean)
+const promoKeyOpen = promoBubbles.find((s) => s.includes('border-top:'))
+check('R23 宣传类五语义靠"语义色 + 线条轻重"区分（四条竖线色互不相同 + KEY 走上下夹线）',
+  promoRailHex.length >= 4 && new Set(promoRailHex).size >= 4 && Boolean(promoKeyOpen && promoKeyOpen.includes('border-bottom:')),
+  `${promoRailHex.join(',')} | KEY=${promoKeyOpen ? 'rules' : '(未找到)'}`)
 // ② 轻重阶梯落在**竖线粗细**上：NOTE 3 < TIP 4 < WARN/DANGER 5（越重越粗）。
 check('R21 note=3px 竖线', five.includes('border-left:3px solid '))
+
+// ---- R23（2026-10-11）：**整篇无任何色块** ----
+//
+// 用户当日选的口径是最彻底的那一档："**整篇无任何色块**"——气泡与容器**全部不铺底**。
+// 判据（可证伪）：除**文章根容器**（整页白底）之外，不允许出现"带 padding 且铺了不透明/半透明底色"的 section。
+// **边界**：这条禁令管的是"面"（块级容器与气泡），不管"点"——22px 角标徽章、语义标签 chip、
+// 行内 `[[badge:]]`、小标题序号徽章、分割线条/块仍是 `<span>` 或短横条，它们是信息记号不是色块。
+// 注意：**刻意不放 `[[banner]]` 与 `[[title:…]]`**——它们是"版面标题带"，不是气泡也不是内容容器，
+// 保留实色（见下面的边界断言）。禁令管的是**内容块**（气泡 / 卡片 / 分栏 / 步骤 / 时间线 / 边框容器 / 引用 / 色带）。
+const NO_BLOCK = `[[theme:校园]]
+[[boxes:frame=line]]
+
+> [!NOTE] 提示
+> 正文。
+
+> [!KEY] 重点
+> 正文。
+
+::: card 卡片
+- 一
+:::
+
+::: steps
+- 一步
+:::
+
+::: cols
+- 甲
+- 乙
+:::
+
+::: band 波点
+- 带
+:::
+
+::: timeline
+- 节点
+:::
+
+::: frame
+- 框
+:::
+
+> 一句引用。
+
+## 小标题
+
+正文 [[badge:徽章]] 一句。
+
+---
+`
+const noBlockHtml = composeMarkdown(NO_BLOCK, { mode: 'promo' }).html
+const secStyles = [...noBlockHtml.matchAll(/<section style="([^"]*)"/g)].map((m) => m[1])
+const rootStyle = secStyles[0] || ''
+const isBlockBg = (s) => /padding:/.test(s) && (/background:#[0-9a-fA-F]{3,8}\b/.test(s) || /background:rgb\(/.test(s) || /background:rgba\(/.test(s))
+const blockBgs = secStyles.slice(1).filter(isBlockBg)
+check('R23 整篇无块级底色：除根容器外，没有任何带 padding 的 section 铺了底色',
+  rootStyle.includes('background:#ffffff') && blockBgs.length === 0,
+  `section 数=${secStyles.length}｜带底色的块=${blockBgs.length}｜${blockBgs.slice(0, 3).map((s) => (s.match(/background:[^;"]+/) || [''])[0]).join(' | ')}`)
+// 自证伪：这条判据必须真能抓住旧的浅底容器，否则它是永远为真的空断言。
+// 边界（如实断言，免得"整篇无任何色块"被当成连标题带也管）：横幅仍是实色块。
+// 横幅与居中装饰标题**也不再是实色块**（它们曾是全篇最大的一块色）。
+// 判据：两者都不得出现不透明底，且横幅的主题色**改由线条承载**。
+check('R23 横幅 / 居中装饰标题也不是色块（主题色改由线条承载）',
+  !composeMarkdown('[[theme:校园]]\n\n[[title:装饰标题]]\n', { mode: 'promo' }).html.includes('background:#2f6fed') &&
+  !composeMarkdown('[[theme:校园]]\n\n[[banner:横幅|副标题]]\n', { mode: 'promo' }).html.includes('background:#2f6fed') &&
+  bannerHasLine(composeMarkdown('[[theme:校园]]\n\n[[banner:横幅|副标题]]\n', { mode: 'promo' }).html, '#2f6fed'))
+check('R23 该判据能抓住旧的浅底容器（自证伪）',
+  [ 'background:#ffffff;padding:4px 16px',
+    'margin:0;background:rgba(200,100,50,0.06);padding:13px',
+    'margin:0;background:#eef6ff;padding:13px',
+    'margin:0;border-left:3px solid #333;padding:13px' ].filter(isBlockBg).length === 3)
+
 check('R21 tip=4px 竖线', five.includes('border-left:4px solid '))
 check('R21 warn/danger=5px 竖线（恰两条，且比 tip 粗）', (five.match(/border-left:5px solid /g) || []).length === 2)
 // ③ 重语义再夹上下两道细线（半包围）——这是它凭空比 tip 重的那一档，**只给重语义**。
@@ -269,7 +394,8 @@ check('R21 宣传类两段正文各自成段（裸 <p>，未被吞并）',
 const badgeImgs = (html) => [...html.matchAll(/<img src="(data:image\/svg\+xml;charset=utf-8,[^"]+)" alt="" style="width:15px;height:15px;display:block"/g)].map((m) => decodeURIComponent(m[1]))
 const badgeChips = (html) => [...html.matchAll(/<span style="position:absolute;(left|right):(-?[\d.]+px|0);(top|bottom):(-?[\d.]+px|0);width:22px;height:22px;border-radius:[^;]*;background:([^;]+);/g)].map((m) => ({ h: m[1], hv: m[2], v: m[3], vv: m[4], bg: m[5] }))
 const FRAMES7 = ['line', 'edge', 'plane', 'dash', 'rules', 'stack', 'none']
-const LINE_FRAMES = ['line', 'edge', 'dash', 'rules', 'stack']
+// R23：`plane` 从"只靠底色"降级为线条语言（底色被禁），所以它也"有线可骑"。
+const LINE_FRAMES = ['line', 'edge', 'plane', 'dash', 'rules', 'stack']
 
 const frameHtml = {}
 for (const f of FRAMES7) frameHtml[f] = composeMarkdown(`[[boxes:frame=${f}]]\n\n${FIVE}`, { mode: 'text' }).html
@@ -277,7 +403,7 @@ check('R22 七种 frame 语言的气泡都带角标（角标不挑语言）',
   FRAMES7.every((f) => badgeImgs(frameHtml[f]).length === 5),
   FRAMES7.map((f) => `${f}:${badgeImgs(frameHtml[f]).length}`).join(' '))
 // 角标必须**不透明**、且**骑在框线上**：`position:absolute` 的包含块是内边距盒，`left:0` 会落在框线内侧、
-// 盖不到线——所以有框线的语言必须给**负偏移**，没有线可骑的语言（plane/none）才允许 0。
+// 盖不到线——所以有框线的语言必须给**负偏移**，只有**真的没有线**的语言（`none`）才允许 0。
 // 芯片若被改成半透明就盖不住线；这条同时把"没骑上"和"透了"两类回归都钉住。
 check('R22 角标不透明实色 + 骑在框线上（有线语言负偏移，无线语言 0）',
   FRAMES7.every((f) => {
@@ -292,8 +418,12 @@ const oneBubble = (spec, kind) => composeMarkdown(`[[boxes:${spec}]]\n\n> [!${ki
 check('R22 左竖线的负偏移 = 竖线宽度（NOTE barW=3 → left:-3px）', /left:-3px;top:0;width:22px/.test(oneBubble('frame=line', 'NOTE')))
 check('R22 重语义（WARN barW=5 + 夹线）→ left:-5px;top:-1px', /left:-5px;top:-1px;width:22px/.test(oneBubble('frame=line', 'WARN')))
 check('R22 细框语言（dash 1px 边框）→ left:-1px;top:-1px', /left:-1px;top:-1px;width:22px/.test(oneBubble('frame=dash', 'NOTE')))
-// plane 语言**只靠底色成块**（没有边框）：底色为空就整块消失，只剩一坨文字。
-check('R22 frame=plane 气泡有底色（plane 语言不能整块消失）', /background:rgba\(/.test(oneBubble('frame=plane', 'NOTE')))
+// **R23 改口径**：`plane`（"没有边框、只靠底色成块"）在"整篇无任何色块"下不成立，
+// 气泡的 `plane` 降级到 `line` 那一套**线条阶梯**——判据从"有底色"改成"**有左竖线、且无底色**"。
+const planeBubble = oneBubble('frame=plane', 'NOTE')
+check('R23 frame=plane 气泡降级为左竖线（有线、无底色）',
+  /border-left:3px solid #/.test(planeBubble) && !/<section style="margin[^"]*background:/.test(planeBubble),
+  (planeBubble.match(/<section style="margin[^"]*"/) || [''])[0].slice(0, 90))
 check('R22 frame=none 才是真裸文字（无边框也无底色）', !/border-(?:left|top|right|bottom)?:/.test(oneBubble('frame=none', 'NOTE').replace(/border-radius[^;"]*/g, '')) && !/<section style="[^"]*background:rgba/.test(oneBubble('frame=none', 'NOTE')))
 // 角标芯片必须与白底 ≥4.5:1，否则 15px 白图形糊在浅灰块上认不出（读图实测 NOTE 原为 3.05:1）
 const lum = (hex) => { const c = hex.replace('#', ''); const f = (v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4) }; const n = parseInt(c, 16); return 0.2126 * f((n >> 16) & 255) + 0.7152 * f((n >> 8) & 255) + 0.0722 * f(n & 255) }
@@ -376,9 +506,12 @@ for (const spec of markCombos) {
   if (!q.ok || /undefined/.test(html)) markBad.push(spec + '→' + (q.issues.map((i) => i.kind).join('/') || 'undefined'))
 }
 check(`R22 框架 × 图案抽样全部可渲染且过 checkHtml（${markCombos.length} 组）`, markBad.length === 0, markBad.slice(0, 4).join(' | '))
-// 宣传类（实色反白）角标不得 `undefined`，且反白时芯片换白底
+// 宣传类角标：R23 起气泡不再是实色块，芯片色回到统一的 `chipColor(语义色)`（过对比度），
+// 不能再是那条"实色反白 ⇒ 白底芯片"的特例。
 const promoMark = composeMarkdown('[[boxes:mark=枫叶]]\n\n> [!DANGER] 警示\n> 正文。', { mode: 'promo' }).html
-check('R22 宣传类实色反白：角标芯片换白底（在实色上仍看得见）', badgeChips(promoMark).some((c) => c.bg === '#ffffff') && !/undefined/.test(promoMark))
+check('R22/R23 宣传类角标：芯片为语义色（过对比度）且不 undefined',
+  badgeChips(promoMark).some((c) => c.bg && c.bg !== '#ffffff' && !/^transparent/.test(c.bg)) && !/undefined/.test(promoMark),
+  badgeChips(promoMark).map((c) => c.bg).join(','))
 
 // ---- R22 续：主题（风格）词汇层——知识库 §三.1"每个风格条目提供自己的图案词汇表" ----
 // 优先级：[[boxes:mark=名]] 显式 > 主题词汇 > 语义默认。主题**只覆盖 note/tip**，
@@ -410,7 +543,8 @@ check('R17 五套产出彼此不同（HTML 两两不等）', new Set(SCHEME_NAME
 // 每套的**签名结构特征**必须在场——这是"换了语言"而不是"换了配色"的判据
 const SCHEME_SIG = {
   editorial: (h) => h.includes('border-left:3px solid ') && h.includes('border-left:4px solid ') && h.includes('border-top:2px solid '),
-  soft: (h) => h.includes('border-radius:14px') && !h.includes('border-left:') && !h.includes('dashed'),
+  // R23：soft 原来靠"圆角 + 浅底"签名，底色被禁后改为"**左竖线 + chip 胶囊标签 + 无大引号**"。
+  soft: (h) => h.includes('border-left:3px solid ') && h.includes('border-radius:10px') && !h.includes('font-size:46px') && !h.includes('dashed'),
   magazine: (h) => /border:1px solid [^;]+;padding:3px/.test(h) && /font-size:17px/.test(h),
   sticker: (h) => h.includes('border:1px dashed ') && h.includes('rotate(-4deg)'),
   tech: (h) => h.includes('font-family:Consolas') && h.includes('>// 提示<'),
@@ -452,7 +586,7 @@ check('R18 冲突消解：frame=line 强制圆角 0', /border-left:3px solid /.t
 // ③ 未知轴/取值：出声且不生效；有效段照常生效；**整条都不认识时回退主题映射**（不静默变默认语言）
 const unk = composeMarkdown('[[boxes:半径=99;frane=line]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
 check('R18 未知轴名/取值 → 给警告', unk.warnings.some((w) => w.includes('组件设计轴')), JSON.stringify(unk.warnings))
-check('R18 未知段以外的有效段照常生效', composeMarkdown('[[boxes:soft;半径=99]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' }).html.includes('border-radius:14px'))
+check('R18 未知段以外的有效段照常生效', composeMarkdown('[[boxes:soft;半径=99]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' }).html.includes('border-radius:10px'))
 check('R18 整条都不认识时回退主题映射（不静默变编辑感）', resolveBoxScheme('[[boxes:瞎写]]', 'campus') === 'soft')
 
 // ④ 组合自由：能产出**任何预置都没有**的长相——这才是"自主推断"的意义
@@ -477,12 +611,15 @@ check('R18 容器跟随轴（卡片：plane→圆角无边框 / stack→双线�
   composeMarkdown('[[boxes:magazine]]\n\n::: card 卡片\n- 一\n- 二\n:::\n', { mode: 'text' }).html.includes('padding:3px'))
 check('R18 引用跟随轴（frame=rules → 上下夹线居中）',
   composeMarkdown('[[boxes:frame=rules]]\n\n> 一句引用。\n', { mode: 'text' }).html.includes('text-align:center'))
-// 实色反白**只改底色与线条色、不改框架**——否则宣传类的 key/tip/danger 会把整篇的
-// 设计语言断掉（双线/虚线这些签名特征在 3/5 的语义上直接消失）。
-const solidFrames = ['edge', 'dash', 'stack'].map((f) => composeMarkdown(`[[boxes:frame=${f}]]\n\n> [!KEY] 重点\n> 正文。`, { mode: 'promo' }).html)
-check('R18 实色气泡保留框架语言（edge→白色左粗线 / dash→虚线 / stack→双线）',
-  solidFrames[0].includes('border-left:3px solid #ffffff') && solidFrames[1].includes('border:1px dashed') && solidFrames[2].includes('padding:3px'),
-  solidFrames.map((h) => (h.includes('#ffffff') ? 'white' : 'no-white')).join(','))
+// **R23 改口径**：原来这条断言"实色反白只改底色与线条色、不改框架"，判据是"edge 的左粗线是**白色**"。
+// 实色分支被禁掉之后，"白色线条特例"也随之作废——保留的是**意图**：宣传类的 KEY 一样跟随 frame 语言。
+// 判据改为"框架签名在场，且**不再出现白色线条**"。
+const promoKeyFrames = ['edge', 'dash', 'stack'].map((f) => composeMarkdown(`[[boxes:frame=${f}]]\n\n> [!KEY] 重点\n> 正文。`, { mode: 'promo' }).html)
+const promoKeyOpenStyles = promoKeyFrames.map((h) => { const o = h.lastIndexOf('<section style="', h.indexOf('>重点<')); return h.slice(o, h.indexOf('>', o)) })
+check('R18/R23 宣传类 KEY 保留框架语言（edge→左粗线 / dash→虚线框 / stack→双线嵌套），且不再是白色特例',
+  /border-left:\d+px solid #/.test(promoKeyOpenStyles[0]) && promoKeyFrames[1].includes('border:1px dashed') && promoKeyFrames[2].includes('padding:3px') &&
+    !promoKeyOpenStyles.some((s) => s.includes('#ffffff')),
+  promoKeyOpenStyles.map((s) => (s.includes('#ffffff') ? 'white' : 'semantic')).join(','))
 
 // ---- R20（2026-10-09）：装饰件（标题 / 横幅 / 分割线 / 徽章）也读**同一套**设计轴 ----
 // 判据是"换轴 → 换**结构**"（不是换了配色），且显式覆盖与默认都不降级——与 R16/R17/R18 同口径。
@@ -497,12 +634,13 @@ const onlyBadge = (spec) => composeMarkdown(`[[boxes:${spec}]]\n\n正文 [[badge
 // ① 标题：结构由 `frame` 决定
 const headFrames = ['line', 'plane', 'dash', 'stack', 'rules', 'edge', 'none'].map((f) => onlyHeading('frame=' + f))
 check('R20 标题跟随 frame：line→左竖条', /display:flex;align-items:center/.test(headFrames[0]) && /width:3px;height:\d+px;background:#2f6fed/.test(headFrames[0]))
-check('R20 标题跟随 frame：plane→色块', headFrames[1].includes('background:rgba(47,111,237'))
+check('R20 标题跟随 frame：plane→降级为左竖条（底色被禁，与 line 同形）', /display:flex;align-items:center/.test(headFrames[1]) && /width:3px;height:\d+px;background:#2f6fed/.test(headFrames[1]))
 check('R20 标题跟随 frame：dash→虚线框', headFrames[2].includes('border:1px dashed'))
 check('R20 标题跟随 frame：stack→双线框', headFrames[3].includes('padding:3px'))
 check('R20 标题跟随 frame：rules→上下夹线居中', headFrames[4].includes('border-top:2px solid') && headFrames[4].includes('text-align:center'))
 check('R20 标题跟随 frame：edge→细框+左粗线', headFrames[5].includes('border-left:3px solid #2f6fed'))
-check('R20 标题七种 frame 产出彼此不同', new Set(headFrames.map(hashHtml)).size === 7)
+// R23：底色被禁后 `plane` 与 `line` 在小标题上**同形**（如实断言这次塌缩，而不是假装七种都不同）
+check('R20 标题六种形态互不相同，且 plane 与 line 同形（塌缩如实记录）', new Set(headFrames.map(hashHtml)).size === 6 && hashHtml(headFrames[1]) === hashHtml(headFrames[0]))
 // 字号 / 字体轴确实作用到标题（h2 基础 20px，size 15/19 → 20/24）
 check('R20 字号轴作用到标题（size=19 → h2 24px）', /<h2 style="margin:0;font-size:24px/.test(onlyHeading('size=19')))
 check('R20 字体轴作用到标题（title=serif → 衬线族）', /<h2 style="[^"]*font-family:Georgia/.test(onlyHeading('title=serif')))
@@ -557,9 +695,9 @@ check('R20 宣传类装饰件输出过 checkHtml', checkHtml(composeMarkdown(`[[
 
 // 1c) 主题：opts.theme（UI）优先于正文声明；日系底色/主色落地
 const uiTheme = composeMarkdown(SAMPLE, { mode: 'auto', theme: 'japanese' })
-check('opts theme overrides body theme', uiTheme.html.includes('background:#faf3e3;padding:4px 16px') && uiTheme.html.includes('background:#c29b6b;padding:24px 18px'))
+check('opts theme overrides body theme', uiTheme.html.includes('background:#faf3e3;padding:4px 16px') && bannerHasLine(uiTheme.html, '#c29b6b'))
 const bodyTheme = composeMarkdown('[[theme:国潮]]\n\n[[banner:开业大吉|主标题]]\n\n正文内容。', { mode: 'auto' })
-check('body theme guochao applied', bodyTheme.html.includes('background:#fff9ef;padding:4px 16px') && bodyTheme.html.includes('background:#c03a2b;padding:24px 18px'))
+check('body theme guochao applied', bodyTheme.html.includes('background:#fff9ef;padding:4px 16px') && bannerHasLine(bodyTheme.html, '#c03a2b'))
 
 // 1d) 第 23 轮：自定义色板 [[palette]]——非预置风格可渲染；缺色板的未知风格 → 警告并回退默认
 const customTheme = composeMarkdown(
@@ -567,7 +705,7 @@ const customTheme = composeMarkdown(
   { mode: 'auto' },
 )
 check('custom palette wrapper bg', customTheme.html.includes('background:#fbf6ef;padding:4px 16px'))
-check('custom palette banner uses orange', customTheme.html.includes('background:#b5482d;padding:24px 18px'))
+check('custom palette banner uses orange（线条色）', bannerHasLine(customTheme.html, '#b5482d'))
 check('custom palette no unknown-theme warning', !customTheme.warnings.some((w) => w.includes('未收录')))
 const unknownTheme = composeMarkdown('[[theme:山海清风]]\n\n正文内容，未带自定义色板。', { mode: 'text' })
 check('unknown theme warning', unknownTheme.warnings.some((w) => w.includes('「山海清风」未收录且正文未提供 [[palette]]')))
@@ -575,7 +713,7 @@ check('unknown theme falls back default white', unknownTheme.html.startsWith('<s
 
 // 第 28 轮：风格名归一——「校园风」等带尾缀声明应命中校园色板而非回退默认
 const aliasTheme = composeMarkdown('[[theme:校园风]]\n\n[[banner:开学典礼|副标题]]\n\n正文内容。', { mode: 'auto' })
-check('alias theme 校园风 hits campus palette', aliasTheme.html.includes('background:#2f6fed;padding:24px 18px') && aliasTheme.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
+check('alias theme 校园风 hits campus palette', bannerHasLine(aliasTheme.html, '#2f6fed') && aliasTheme.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
 check('alias theme no unknown-style warning', !aliasTheme.warnings.some((w) => w.includes('未收录')))
 
 // 第 28 轮：照片位（::: photo）渲染为可替换占位块。第 31 轮：照片位与装饰插画并存口径——
