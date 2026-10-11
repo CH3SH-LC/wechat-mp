@@ -309,8 +309,8 @@ export type FaceLabel = 'eyebrow' | 'chip' | 'mono' | 'none'
 export type FaceFont = 'sans' | 'serif' | 'mono'
 export type FacePad = 'tight' | 'normal' | 'loose'
 export type FaceDeco = 'brackets' | 'tape' | 'quote'
-/** 角标落点：tl 左上 / tr 右上 / bl 左下 / br 右下（R22） */
-export type FaceMarkAt = 'tl' | 'tr' | 'bl' | 'br'
+/** 角标落点：四角 + 四边中点（R22；用户原话"顶端／左上角／右侧／左侧／右下角都可以"） */
+export type FaceMarkAt = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'r' | 'b' | 'l'
 
 export interface FaceTokens {
   radius: number
@@ -377,6 +377,11 @@ const FACE_VALUE_ALIAS: Record<string, string> = {
   不画: 'none', 无角标: 'none', 不要: 'none',
   左上: 'tl', 右上: 'tr', 左下: 'bl', 右下: 'br',
   左上角: 'tl', 右上角: 'tr', 左下角: 'bl', 右下角: 'br',
+  顶端: 't', 顶部: 't', 上方: 't', 上边: 't',
+  底端: 'b', 底部: 'b', 下方: 'b', 下边: 'b',
+  左侧: 'l', 左边: 'l',
+  右侧: 'r', 右边: 'r',
+  上中: 't', 下中: 'b', 左中: 'l', 右中: 'r',
 }
 
 const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: string[]) => boolean }> = {
@@ -391,7 +396,7 @@ const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: s
   deco: { pick: ['none', 'brackets', 'tape', 'quote'], apply: (t, v) => { t.deco = (v[0] === 'none' ? [] : (v as FaceDeco[])); return true } },
   // R22：角标图案（引擎内置词汇表，见 marks.ts）+ 落点。`none` 是"不画"。
   mark: { pick: [...MARK_KEYS, 'none'], apply: (t, v) => { t.mark = v[0]; return true } },
-  markat: { pick: ['tl', 'tr', 'bl', 'br'], apply: (t, v) => { t.markat = v[0] as FaceMarkAt; return true } },
+  markat: { pick: ['tl', 'tr', 'bl', 'br', 't', 'r', 'b', 'l'], apply: (t, v) => { t.markat = v[0] as FaceMarkAt; return true } },
 }
 
 /** 把 `[[boxes:]]` 的**载荷**解析成轴取值（载荷形如 `soft;radius=4;label=chip`） */
@@ -700,11 +705,16 @@ function surface(o: SurfaceOpts): string {
   // 未启用角标时保持原本的三值内距（不惊动既有断言与既有长相）。
   const markKey = o.mark && o.mark.key ? o.mark.key : null
   const markAt: FaceMarkAt = (o.mark && o.mark.at) || 'tl'
-  const padTop = t.pad === 'tight' ? 11 : t.pad === 'loose' ? 17 : 13
-  const padBottom = Math.max(minBottom, bottom)
+  const padTop0 = t.pad === 'tight' ? 11 : t.pad === 'loose' ? 17 : 13
+  // 边中点的角标落在**正文中轴**上（左右水平居中 / 上下垂直居中），必须多留一档内距，
+  // 否则 22px 的徽章会压到第一行（`t`/`b`）或中间几行（`l`/`r`）。
+  const sideL = markAt === 'tl' || markAt === 'bl' || markAt === 'l'
+  const sideR = markAt === 'tr' || markAt === 'br' || markAt === 'r'
+  const padTop = markKey && markAt === 't' ? Math.max(padTop0, 26) : padTop0
+  const padBottom = markKey && markAt === 'b' ? Math.max(Math.max(minBottom, bottom), 26) : Math.max(minBottom, bottom)
   const pad = markKey
-    ? padTop + 'px ' + (markAt === 'tr' || markAt === 'br' ? 32 : 16) + 'px ' + padBottom + 'px ' + (markAt === 'tl' || markAt === 'bl' ? 32 : 16) + 'px'
-    : padTop + 'px 16px ' + padBottom + 'px'
+    ? padTop + 'px ' + (sideR ? 32 : 16) + 'px ' + padBottom + 'px ' + (sideL ? 32 : 16) + 'px'
+    : padTop0 + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
   // 实色反白会把 `rules` 退化成整圈框（夹线撑不住实色），角标要按**实际画出来的壳**算偏移。
   const effKind: ShellKind = solid && s.kind === 'rules' ? 'box' : s.kind
   // **角标必须骑在框线上**：`position:absolute` 的包含块是**内边距盒**，`left:0` 落在框线**内侧**——
@@ -715,13 +725,28 @@ function surface(o: SurfaceOpts): string {
   const railT = effKind === 'rules' ? 2 : (effKind === 'box' || effKind === 'dash' || effKind === 'edge' || effKind === 'stack' ? 1 : (effKind === 'bar' && s.rail ? 1 : 0))
   const railB = effKind === 'rules' ? 2 : (effKind === 'box' || effKind === 'dash' || effKind === 'edge' || effKind === 'stack' ? 1 : (effKind === 'bar' && s.rail ? 1 : 0))
   const off = (v: number) => (v ? '-' + v + 'px' : '0')
+  // **右下角有角饰时，右下角标必须让位**：角饰（`::: art deco` / 素材）固定在 `right:12px;bottom:10px`、
+  // 宽 60px，与 `br` 角标的 22×22 在水平 10px、垂直 12px 上**实测重叠**。做法不是取消角标，
+  // 而是把它沿底边往左挪到角饰之外（仍是"底边、靠右"），保住"骑线"效果。
+  const decoShift = decoImg && markAt === 'br' ? DECO_W + 20 : 0
+  // 四角：贴角；四边中点：**垂直于该边居中的中轴**（`left:50%;margin-left:-11px` 一类）。
+  // 用户原话就是"顶端／左上角／右侧／左侧／右下角都可以"，所以边中点与角一样是**一等落点**。
+  const mid = '-11px' // 徽章宽 22px 的一半
   const corner = markAt === 'tl'
     ? 'left:' + off(lineL) + ';top:' + off(railT)
     : markAt === 'tr'
       ? 'right:' + off(lineR) + ';top:' + off(railT)
       : markAt === 'bl'
         ? 'left:' + off(lineL) + ';bottom:' + off(railB)
-        : 'right:' + off(lineR) + ';bottom:' + off(railB)
+        : markAt === 'br'
+          ? (decoShift ? 'right:' + decoShift + 'px;bottom:' + off(railB) : 'right:' + off(lineR) + ';bottom:' + off(railB))
+          : markAt === 't'
+            ? 'left:50%;margin-left:' + mid + ';top:' + off(railT)
+            : markAt === 'b'
+              ? 'left:50%;margin-left:' + mid + ';bottom:' + off(railB)
+              : markAt === 'l'
+                ? 'left:' + off(lineL) + ';top:50%;margin-top:' + mid
+                : 'right:' + off(lineR) + ';top:50%;margin-top:' + mid
   // 角标徽章：不透明实色块 + 白色图案（实色反白气泡上反过来：白底 + 语义色图案）。
   // 芯片色经 `chipColor()` 压到与白底 ≥4.5:1——语义里的 NOTE 用的是"浅底上的次要文字色"（石板灰），
   // 直接做实色块只有 3.05:1，15px 的白图形糊在灰块上认不出（读图实测）。

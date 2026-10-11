@@ -1,7 +1,7 @@
 // cdp-preflight-check.mjs —— cdp-preflight / desktop-harness 的**故障注入回归**（指南 §0.5 R4）
 //
 // 纯 mock：不启动任何进程、不读密钥、不调用模型、不真实 taskkill、不访问网络。
-// 每一处 OS/进程/时间操作都以注入的 probe / alive / runner 替代，目录用系统临时目录。
+// 每一处 OS/进程/时间操作都以注入的 probe / alive / graceful / runner 替代，目录用系统临时目录。
 //
 // 覆盖的缺陷（对应 10-02 R4 复核逐条）：
 //   1. 收尾身份闭锁：启动身份齐备（PID+映像名+完整路径+创建时刻）才可关；身份不匹配 / UNKNOWN /
@@ -20,7 +20,7 @@ import { createJudge, guardCrashes, resolveOutDir, persistRunResult } from './li
 
 const outDir = resolveOutDir('cdp-preflight-check')
 // 必需检查条数的下界：删掉一条断言立即变红（故意如此）。
-const MIN_CHECKS = 30
+const MIN_CHECKS = 33
 const judge = createJudge({ script: 'cdp-preflight-check', outDir, minChecks: MIN_CHECKS })
 guardCrashes(judge)
 
@@ -45,12 +45,12 @@ const work = mkdtempSync(join(tmpdir(), 'wxmp-cdp-preflight-check-'))
 // 0. 诊断纯函数导出（缺失即回归失败，不崩溃）
 // =====================================================================================
 console.log('\n[0. harness 诊断纯函数]')
-const exportNames = ['classifySamples', 'classifyTcpError', 'classifyTargetList', 'extractUserDataDirs', 'findDevToolsActivePort', 'probeProcessIdentity', 'closeOwnPid']
+const exportNames = ['classifySamples', 'classifyTcpError', 'classifyTargetList', 'extractUserDataDirs', 'findDevToolsActivePort', 'probeProcessIdentity', 'closeOwnPid', 'postCloseToMainWindow']
 const missing = exportNames.filter((n) => typeof H[n] !== 'function')
 check('harness 导出诊断纯函数', missing.length === 0, missing.length ? `缺：${missing.join(',')}` : exportNames.join(','))
 
 // =====================================================================================
-// 1. closeOwnPid 身份闭锁（全部注入：probe / alive / runner）
+// 1. closeOwnPid 身份闭锁（全部注入：probe / alive / graceful / runner）
 // =====================================================================================
 console.log('\n[1. closeOwnPid 身份闭锁]')
 const APP = 'C:\\apps\\wechat-mp-desktop.exe'
@@ -70,11 +70,20 @@ const identityFor = (exePath, image, startTime = 111) => ({
 const APP_ID = identityFor(APP, 'wechat-mp-desktop')
 
 async function runClose(opts) {
-  const calls = []
+  const calls = [] // 温和关闭（向主窗口投递 WM_CLOSE）的调用记录
+  const forceCalls = [] // taskkill 调用记录（强制 / 回退）
   let alive = opts.aliveInitially !== false
   const probe = opts.probe
+  // 默认的假"投递 WM_CLOSE"：记账并按 killOnRunner 决定进程是否退出。
+  const graceful =
+    opts.graceful ||
+    ((pid) => {
+      calls.push({ graceful: pid })
+      if (opts.killOnRunner !== false) alive = false
+      return { ok: true, via: 'wm-close-post', hwnd: 1, windows: [[1, 'main']] }
+    })
   const runner = (args) => {
-    calls.push(args)
+    forceCalls.push(args)
     if (opts.killOnRunner !== false) alive = false
     return { ok: true }
   }
@@ -85,9 +94,10 @@ async function runClose(opts) {
     forceMs: opts.forceMs != null ? opts.forceMs : 150,
     probe,
     alive: opts.aliveFn || (() => alive),
+    graceful,
     runner,
   })
-  return { r, calls, aliveAfter: alive }
+  return { r, calls, forceCalls, aliveAfter: alive }
 }
 
 // 1a. 身份不匹配（映像名不同）→ 零关闭操作
@@ -111,14 +121,14 @@ async function runClose(opts) {
   check('身份 UNKNOWN → refused，零关闭操作', r.refused === true && calls.length === 0 && r.reverifiedIdentity && r.reverifiedIdentity.matchesExpected === null, `refused=${r.refused} calls=${calls.length} matches=${r.reverifiedIdentity && r.reverifiedIdentity.matchesExpected}`)
 }
 
-// 1c. 身份匹配 → 可关闭（注入假 killer，WM_CLOSE 路径）
+// 1c. 身份匹配 → 可关闭（注入假"投递 WM_CLOSE"，走正常关闭路径）
 {
-  const { r, calls } = await runClose({
+  const { r, calls, forceCalls } = await runClose({
     exe: APP,
     expectedIdentity: APP_ID,
     probe: () => ({ ok: true, via: 'mock', image: 'wechat-mp-desktop', path: APP, startTime: 111 }),
   })
-  check('身份匹配 → 正常走 WM_CLOSE（假 killer）', r.closed === true && r.refused !== true && r.via === 'wm-close' && calls.length === 1 && calls[0][0] === '/PID' && !calls[0].includes('/F'), JSON.stringify({ closed: r.closed, via: r.via, calls }))
+  check('身份匹配 → 正常走 WM_CLOSE 投递（假投递器）', r.closed === true && r.refused !== true && r.via === 'wm-close' && calls.length === 1 && forceCalls.length === 0, JSON.stringify({ closed: r.closed, via: r.via, calls, forceCalls }))
 }
 
 // 1d. 进程已不在 → exitedBeforeRequest 标记非正常退出路径
@@ -210,29 +220,29 @@ async function runClose(opts) {
       ? { ok: true, via: 'mock', image: 'wechat-mp-desktop', path: APP, startTime: 111111 }
       : { ok: true, via: 'mock', image: 'wechat-mp-desktop', path: APP, startTime: 999999 }
   }
-  const { r, calls } = await runClose({
+  const { r, calls, forceCalls } = await runClose({
     exe: APP,
     expectedIdentity: identityFor(APP, 'wechat-mp-desktop', 111111),
     probe,
-    killOnRunner: false, // runner 不改 alive：这里要证明的是"身份变了就不再强杀"，不是"进程被杀了"
+    killOnRunner: false, // graceful 不改 alive：这里要证明的是"身份变了就不再强杀"，不是"进程被杀了"
     gracefulMs: 50,
     forceMs: 50,
   })
-  const noForce = !calls.some((a) => a.includes('/F'))
-  check('强杀前身份变化 → refused（identity-changed-before-force），只发过温和关闭一次、无 /F', r.refused === true && r.via === 'identity-changed-before-force' && calls.length === 1 && noForce, JSON.stringify({ refused: r.refused, via: r.via, calls, reverifiedBeforeForce: r.reverifiedBeforeForce && r.reverifiedBeforeForce.matchesExpected }))
+  const noForce = forceCalls.length === 0
+  check('强杀前身份变化 → refused（identity-changed-before-force），只发过温和关闭一次、无 /F', r.refused === true && r.via === 'identity-changed-before-force' && calls.length === 1 && noForce, JSON.stringify({ refused: r.refused, via: r.via, calls, forceCalls, reverifiedBeforeForce: r.reverifiedBeforeForce && r.reverifiedBeforeForce.matchesExpected }))
 }
 
 // 1m. 温和等待期间进程自己退出（只是退得慢）→ 算应用退出路径，via wm-close-late，不再强杀
 {
   // 假 alive：关闭前核验 / 温和等待判定 / 超时后的 `!alive` 判定 三次返回 true，
-  // 第四次（强杀前的再核验）返回 false。runner 全程不改 alive（退出不是它造成的）。
+  // 第四次（强杀前的再核验）返回 false。graceful 全程不改 alive（退出不是它造成的）。
   // gracefulMs=0 让循环只做一次判定，调用次序确定：①关闭前 ②循环判定 ③超时后判活 ④强杀前再核验。
   let aliveCalls = 0
   const aliveFn = () => {
     aliveCalls += 1
     return aliveCalls <= 3
   }
-  const { r, calls } = await runClose({
+  const { r, calls, forceCalls } = await runClose({
     exe: APP,
     expectedIdentity: APP_ID,
     probe: () => ({ ok: true, via: 'mock', image: 'wechat-mp-desktop', path: APP, startTime: 111 }),
@@ -241,7 +251,52 @@ async function runClose(opts) {
     forceMs: 0,
     aliveFn,
   })
-  check('温和等待期间进程退出 → via wm-close-late（closed=true, forced=false），无 /F', r.closed === true && r.forced === false && r.refused === false && r.via === 'wm-close-late' && !calls.some((a) => a.includes('/F')), JSON.stringify({ closed: r.closed, forced: r.forced, via: r.via, calls }))
+  check('温和等待期间进程退出 → via wm-close-late（closed=true, forced=false），无 /F', r.closed === true && r.forced === false && r.refused === false && r.via === 'wm-close-late' && forceCalls.length === 0, JSON.stringify({ closed: r.closed, forced: r.forced, via: r.via, calls, forceCalls }))
+}
+
+// 1n. 投递器说"枚举不到窗口" → 回退 taskkill `/PID`（不带 /F）；进程应声退出仍记 via=wm-close
+//     （2026-10-11 新增：默认投递器改成"直投主窗口"后，这条回退路必须仍在且可证伪）
+{
+  const { r, calls, forceCalls } = await runClose({
+    exe: APP,
+    expectedIdentity: APP_ID,
+    probe: () => ({ ok: true, via: 'mock', image: 'wechat-mp-desktop', path: APP, startTime: 111 }),
+    graceful: (pid) => {
+      calls.push({ graceful: pid })
+      return { ok: false, via: 'no-window', hwnd: null, windows: [] }
+    },
+  })
+  const fb = forceCalls[0] || []
+  check('枚举不到窗口 → 回退 taskkill /PID（无 /F），退出后仍记 via=wm-close', r.via === 'wm-close' && forceCalls.length === 1 && fb[0] === '/PID' && !fb.includes('/F'), JSON.stringify({ via: r.via, forceCalls }))
+}
+
+// 1o. 投递器**抛异常** → 一样回退 taskkill，不崩、不跳过收尾
+{
+  const { r, forceCalls } = await runClose({
+    exe: APP,
+    expectedIdentity: APP_ID,
+    probe: () => ({ ok: true, via: 'mock', image: 'wechat-mp-desktop', path: APP, startTime: 111 }),
+    graceful: () => {
+      throw new Error('模拟 powershell 崩溃')
+    },
+  })
+  check('投递器抛异常 → 回退 taskkill /PID，不崩', r.via === 'wm-close' && forceCalls.length === 1 && forceCalls[0][0] === '/PID', JSON.stringify({ via: r.via, forceCalls }))
+}
+
+// 1p. 默认投递器（真实现，不注入）：对一个**没有可见窗口**的进程应如实回 ok:false，且不抛
+//     用本机 spawn 的一个隐藏 node 进程当靶子——它确实没有可见顶层窗口。
+{
+  const { spawn } = await import('node:child_process')
+  const kid = spawn(process.execPath, ['-e', 'setTimeout(()=>{},8000)'], { windowsHide: true, stdio: 'ignore' })
+  await new Promise((r) => setTimeout(r, 600))
+  const res = H.postCloseToMainWindow(kid.pid)
+  const ok = res && res.ok === false && Array.isArray(res.windows)
+  check('默认投递器对"无可见窗口的进程"如实回 ok:false（不抛、不误发）', ok, JSON.stringify({ ok: res && res.ok, via: res && res.via, windows: res && res.windows }))
+  try {
+    kid.kill('SIGKILL')
+  } catch {
+    /* 已经退出了 */
+  }
 }
 
 // =====================================================================================

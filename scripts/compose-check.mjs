@@ -109,8 +109,8 @@ let failed = 0
 // （实测在仓库根建出来过）。证据要么在正确的地方，要么别声称有。
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
-// 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-10 R22 实测 202 条。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 202 })
+// 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-10 R22 实测 211 条（含八种落点与角饰让位）。
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 211 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -323,6 +323,33 @@ const br = composeMarkdown('[[boxes:markat=右下]]\n\n> [!NOTE] 标题\n> 正�
 check('R22 markat=右下 角标落到右下', /position:absolute;right:0;bottom:0;width:22px/.test(br))
 const tr = composeMarkdown('[[boxes:markat=tr]]\n\n> [!NOTE] 标题\n> 正文。', { mode: 'text' }).html
 check('R22 markat=右上 时右侧内距留白（不压正文）', /22px;height:22px[^>]*/.test(tr) && /padding:\d+px 32px \d+px 16px/.test(tr))
+// ---- R22 续：四边中点也是一等落点（用户原话"顶端／左侧／右侧…都可以"）----
+const midAt = (a) => composeMarkdown(`[[boxes:markat=${a}]]\n\n> [!NOTE] 标题\n> 正文。`, { mode: 'text' }).html
+check('R22 markat=t（顶端）角标水平居中、骑在上框线上', /position:absolute;left:50%;margin-left:-11px;top:/.test(midAt('t')))
+check('R22 markat=b（底端）角标水平居中、骑在下框线上', /position:absolute;left:50%;margin-left:-11px;bottom:/.test(midAt('b')))
+check('R22 markat=l（左侧）角标垂直居中、骑在左竖线上（负偏移 = 竖线宽）', /position:absolute;left:-3px;top:50%;margin-top:-11px/.test(midAt('l')))
+check('R22 markat=r（右侧）角标垂直居中', /position:absolute;right:[^;]+;top:50%;margin-top:-11px/.test(midAt('r')))
+check('R22 边中点落点也**多留一档内距**（徽章不压正文）',
+  /padding:26px 16px 15px 16px/.test(midAt('t')) && /padding:13px 16px 26px 16px/.test(midAt('b')),
+  (midAt('t').match(/padding:26px[^";]*/) || ['?'])[0] + ' | ' + (midAt('b').match(/padding:13px 16px 26px[^";]*/) ? '13px 16px 26px …' : '?'))
+check('R22 中文写法也认（顶端/左侧/右边）',
+  /left:50%;margin-left:-11px/.test(midAt('顶端')) && /left:-3px;top:50%/.test(midAt('左侧')) && /right:[^;]+;top:50%/.test(midAt('右边')))
+// 取角标 span 的**前四段**定位（left/right + margin + top/bottom）——只比前两段会让 t/b 撞脸
+const atKey = (a) => {
+  const m = midAt(a).match(/position:absolute;([^"]+?)width:22px/)
+  return m ? m[1] : ''
+}
+check('R22 八种落点两两不同（产出互不相同的定位）',
+  new Set(['tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r'].map(atKey)).size === 8,
+  [...new Set(['tl', 'tr', 'bl', 'br', 't', 'b', 'l', 'r'].map(atKey))].length + ' 种唯一')
+// 右下角**有角饰**时，右下角标必须让位（角饰固定 right:12px/bottom:10px、宽 60px，与 br 实测重叠）
+const decoBubble = composeMarkdown(
+  '::: art deco bloom\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 260" fill="none"><circle cx="90" cy="104" r="16" fill="#c96f4a"/><circle cx="236" cy="124" r="14" fill="#d9a35f"/><circle cx="150" cy="150" r="20" fill="#8fb8a4"/><path d="M120 130 q-26 -8 -34 -30 q28 2 40 18z" fill="#5f8d8a"/><path d="M188 170 q24 -14 44 -6 q-10 24 -38 18z" fill="#e8b48a"/><circle cx="90" cy="104" r="6" fill="#f2c76e"/></svg>\n:::\n\n[[boxes:markat=br;mark=枫叶]]\n\n> [!KEY|bloom] 右下角与角饰\n> 角标应当让开右下角的角饰。\n',
+  { mode: 'text' }).html
+check('R22 右下角有角饰时，br 角标让位（不压在角饰上）',
+  /position:absolute;right:80px;bottom:/.test(decoBubble),
+  (decoBubble.match(/position:absolute;right:\d+px;bottom:[-\d]+px;width:22px/) || ['(未让位)'])[0])
+check('R22 没有角饰时 br 仍贴角（让位只在需要时发生）', /position:absolute;right:0;bottom:/.test(midAt('br')))
 // mark=none：明确不画（给"不要角标"的语言留出口）
 const noMark = composeMarkdown('[[boxes:mark=none]]\n\n> [!NOTE] 标题\n> 正文。', { mode: 'text' }).html
 check('R22 mark=none 不画角标', !/width:22px;height:22px/.test(noMark))

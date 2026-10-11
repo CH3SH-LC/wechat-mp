@@ -15,7 +15,7 @@
 //   4. 背景 helper 用隐藏窗口（Windows 上给 exe 传 `--window-position=-32000,-32000` 不适用，
 //      这里改用 CREATE_NO_WINDOW 的等价做法：spawn 时 `windowsHide: true`）。
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -334,9 +334,16 @@ export function procIdentity(pid, exe, opts = {}) {
  *   1. **身份闭锁**：关闭前重新核验。`matchesExpected !== true`（false 或 null，含"查不出来"）→
  *      **零关闭操作**，返回 `{ closed:false, refused:true, reason, identity }`。也**绝不允许**用应用
  *      路径去核验 Edge，调用方必须传该进程**自己的** exe（错误的 exe → 身份不匹配 → 拒绝关闭）。
- *   2. 先走**应用自己的退出路径**：Windows 上 `taskkill /PID <n>`（**不带 `/F`**）会向该进程的
- *      顶层窗口投递 WM_CLOSE，也就是点窗口右上角关闭——app 正常收尾后自行退出。这算"正常关闭"。
- *      原来用 Node 的 `process.kill(pid,'SIGTERM')`：Windows 上**没有**对应优雅语义
+ *   2. 先走**应用自己的退出路径**：**直接向应用的主窗口投递 WM_CLOSE**（等价于点窗口右上角的 X），
+ *      由 `postCloseToMainWindow()` 枚举该 PID 的可见顶层窗口、挑出带标题的那个再投递——app 正常收尾
+ *      后自行退出，算"正常关闭"。可注入 `opts.graceful` 覆盖（供回归）。
+ *      **为什么不再默认用 `taskkill /PID`（不带 /F）**：2026-10-11 实测它会把 WM_CLOSE 投给**错误的窗口**。
+ *      应用带 `--remote-debugging-port` 起来时会多出一个**可见但无标题**的 WebView2 辅助顶层窗口；
+ *      `taskkill` 命中了它（辅助窗口应声消失），**主窗口一次都没收到**——于是 `taskkill` 回 ok、
+ *      进程纹丝不动，等满 gracefulMs 后只能 `/F` 强杀，`via` 记成 `taskkill-force`：看起来像
+ *      "应用不肯正常退出"，实际是**关闭请求送错了门牌号**。反证：对主窗口直接 PostMessage WM_CLOSE，
+ *      进程 **3ms** 内自行退出。只有当**连一个窗口都枚举不到**时，才回退到 `taskkill /PID`（保留旧行为，
+ *      不静默升级成强杀）。原来用 Node 的 `process.kill(pid,'SIGTERM')`：Windows 上**没有**对应优雅语义
  *      （越界直接 TerminateProcess），所以"方法名叫 SIGTERM"并不等于"应用正常退出"。
  *   3. 优雅路径没退成（比如应用无响应）才 `/F` 强杀，并**如实标 `forced:true`**——
  *      L5 的"正常重开"只认 `forced === false` 的那一次。**但强杀之前会再核验一次身份**：
@@ -349,7 +356,8 @@ export function procIdentity(pid, exe, opts = {}) {
  * `exitedBeforeRequest:true`，调用方据此**必须**把它当"非正常退出路径"处理——它只能证明"现在是关闭
  * 状态"，**不能**证明走过应用自身的退出路径（例如崩溃退出、被别的进程结束都会落在这里）。
  *
- * 可注入项（供故障注入回归）：`runner`（假 killer）、`probe`（假身份探针）、`alive`（假存活判定）。
+ * 可注入项（供故障注入回归）：`graceful`（假"投递 WM_CLOSE"）、`runner`（假 taskkill，强制路径与回退用）、
+ * `probe`（假身份探针）、`alive`（假存活判定）。
  */
 export async function closeOwnPid(pid, opts = {}) {
   const gracefulMs = opts.gracefulMs != null ? opts.gracefulMs : 20000
@@ -434,8 +442,20 @@ export async function closeOwnPid(pid, opts = {}) {
     }
   }
 
-  // 1. 正常关闭：WM_CLOSE（不带 /F）
-  const g = run(['/PID', String(pid)])
+  // 1. 正常关闭：**直接向应用自己的主窗口投递 WM_CLOSE**（等于点窗口右上角的 X）。
+  //    默认实现见 `postCloseToMainWindow`；可注入 `opts.graceful`。只有连窗口都枚举不到时，
+  //    才回退到 `taskkill /PID`（保留旧行为，不静默改成"直接强杀"）。
+  const gracefulFn = opts.graceful || postCloseToMainWindow
+  let g = null
+  try {
+    g = gracefulFn(pid)
+  } catch (e) {
+    g = { ok: false, via: 'graceful-threw', error: String((e && e.message) || e) }
+  }
+  if (!g || g.ok !== true) {
+    const fb = run(['/PID', String(pid)])
+    g = { ok: Boolean(fb && fb.ok), via: 'taskkill-fallback', hwnd: null, windows: (g && g.windows) || [], fallback: fb, reason: (g && (g.reason || g.error || g.via)) || 'no-window' }
+  }
   const t0 = Date.now()
   while (aliveFn(pid) && Date.now() - t0 < gracefulMs) await sleep(300)
   if (!aliveFn(pid)) {
@@ -506,6 +526,80 @@ export async function closeOwnPid(pid, opts = {}) {
     reverifiedIdentity: procIdentity(pid, exe, idOpts),
     identity: procIdentity(pid, exe, idOpts),
     afterMs: Date.now() - t1,
+  }
+}
+
+/**
+ * **向应用自己的主窗口投递 WM_CLOSE**（等价于点窗口右上角的 X），不依赖 CDP、不依赖 `taskkill`。
+ *
+ * 为什么必须"挑窗口"而不是交给 `taskkill /PID`：见 `closeOwnPid` 第 2 步的说明——应用带调试端口起来后
+ * 会多一个**可见但无标题**的 WebView2 辅助顶层窗口，`taskkill` 会命中那一个，主窗口收不到关闭请求。
+ *
+ * 挑选规则（可被回归证伪）：在**该 PID 的可见顶层窗口**里，优先取**标题非空**的第一个；
+ * 一个都没有时退回"第一个可见窗口"；连可见窗口都没有则回 `ok:false`（调用方回退 taskkill）。
+ *
+ * 返回 `{ ok, via, hwnd, windows }`：`windows` 是本次枚举到的 `[hwnd, title]` 列表（写进证据，便于复核）。
+ * 走"PowerShell 以 UTF-8 写文件、Node 再读"这条路：直接捕获 stdout 时中文标题会按控制台代码页（GBK）
+ * 输出、被 Node 按 UTF-8 解码成乱码，那样"标题对不对"就成了对乱码的断言。
+ */
+export function postCloseToMainWindow(pid) {
+  const tmp = join(process.env.TEMP || process.env.TMP || '.', `wxmp-wmclose-${pid}-${Date.now().toString(36)}.json`)
+  const out = tmp.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const ps = `
+Add-Type -TypeDefinition @'
+using System; using System.Text; using System.Runtime.InteropServices;
+public class WxmpWin {
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
+  public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  public static System.Collections.Generic.List<string> List(uint target) {
+    var outl = new System.Collections.Generic.List<string>();
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (pid == target) {
+        var sb = new StringBuilder(512); GetWindowText(h, sb, 512);
+        if (IsWindowVisible(h)) outl.Add(h.ToString() + "\\t" + sb.ToString());
+      }
+      return true;
+    }, IntPtr.Zero);
+    return outl;
+  }
+  public static bool Post(long h) { return PostMessage(new IntPtr(h), 0x0010, IntPtr.Zero, IntPtr.Zero); }
+}
+'@
+$rows = [WxmpWin]::List(${pid})
+$best = $rows | Where-Object { ($_ -split "\`t")[1] } | Select-Object -First 1
+if (-not $best) { $best = $rows | Select-Object -First 1 }
+if ($best) {
+  $h = [long](($best -split "\`t")[0])
+  $ok = [WxmpWin]::Post($h)
+  $obj = @{ ok = [bool]$ok; hwnd = $h; windows = @($rows) }
+} else {
+  $obj = @{ ok = $false; hwnd = 0; windows = @() }
+}
+[System.IO.File]::WriteAllText("${out}", ($obj | ConvertTo-Json -Compress -Depth 4), [System.Text.UTF8Encoding]::new($false))
+`
+  try {
+    execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], { timeout: 30000 })
+    const raw = existsSync(tmp) ? readFileSync(tmp, 'utf8').trim() : ''
+    try {
+      unlinkSync(tmp)
+    } catch {
+      /* 临时文件删不掉不影响判定 */
+    }
+    if (!raw) return { ok: false, via: 'enum-empty', reason: 'powershell 没有写出结果', hwnd: null, windows: [] }
+    const j = JSON.parse(raw)
+    const windows = (Array.isArray(j.windows) ? j.windows : j.windows ? [j.windows] : []).map((r) => {
+      const i = String(r).indexOf('\t')
+      return i < 0 ? { hwnd: Number(r) || null, title: '' } : { hwnd: Number(String(r).slice(0, i)) || null, title: String(r).slice(i + 1) }
+    })
+    if (j.ok === true) return { ok: true, via: 'wm-close-post', hwnd: j.hwnd, windows }
+    return { ok: false, via: 'no-window', reason: windows.length ? '只枚举到没有标题的窗口' : '没有可见顶层窗口', hwnd: null, windows }
+  } catch (e) {
+    return { ok: false, via: 'enum-failed', reason: String((e && e.message) || e), hwnd: null, windows: [] }
   }
 }
 

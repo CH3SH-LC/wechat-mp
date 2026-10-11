@@ -100,7 +100,16 @@ try {
     // 这个判定挂在 CDP 上，等于让冒烟测试去证明一件与它无关的事。
     // CDP 的可用性另行**如实记录**（`cdpAvailable`），它是真机验收的前提，不是冒烟的前提。
     await new Promise((r) => setTimeout(r, 6000))
-    const title = windowTitleOf(ctx.pid)
+    // 枚举**全部可见顶层窗口**再断言（不再用 MainWindowTitle——它在 CDP 打开时会取到 WebView2 的
+    // 空标题辅助窗口，见 `windowTitlesOf` 的说明）。等待期间轮询，取第一次出现的真标题。
+    let titles = []
+    for (let i = 0; i < 6; i++) {
+      titles = windowTitlesOf(ctx.pid)
+      if (titles.some((t) => t.includes('智序'))) break
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+    const title = titles.find((t) => t.includes('智序')) || ''
+    run.windowTitles = titles
     run.windowTitle = title
 
     let cdpAvailable = false
@@ -115,7 +124,7 @@ try {
     }
     run.cdpAvailable = cdpAvailable
     run.cdpNote = cdpNote
-    console.log(`[release-smoke] 窗口标题（OS 读取）=${JSON.stringify(title)}`)
+    console.log(`[release-smoke] 窗口标题（OS 读取，全部可见顶层窗口）=${JSON.stringify(titles)} ⇒ 命中=${JSON.stringify(title)}`)
     console.log(`[release-smoke] CDP 可用=${cdpAvailable}${cdpNote ? '（' + cdpNote + '）' : ''}`)
 
     // 隔离工作区应该已被应用自己建出来
@@ -124,7 +133,7 @@ try {
     run.isolatedWorkspace = { dir: iso.workspace, exists: wsExists, fileCount: Object.keys(wsFiles).length }
 
     check('进程在冒烟期间一直活着', isAlive(ctx.pid))
-    check('窗口标题是「智序 · 公众号推文助手」（操作系统读取，不依赖 CDP）', String(title).includes('智序'), `title=${title}`)
+    check('窗口标题是「智序 · 公众号推文助手」（操作系统读取全部顶层窗口，不依赖 CDP）', String(title).includes('智序'), `titles=${JSON.stringify(titles)}`)
     check('隔离工作区已由应用自动建立（说明写的是隔离目录）', wsExists, iso.workspace)
     check('隔离工作区的会话/文档目录为空（新 profile，没有真实数据）', isEmptyish(wsFiles), JSON.stringify(Object.keys(wsFiles).slice(0, 8)))
 
@@ -166,29 +175,56 @@ try {
 }
 
 /**
- * 用**操作系统**读取进程的主窗口标题（不依赖 CDP）。
+ * 用**操作系统**读取该进程的**所有顶层窗口标题**（不依赖 CDP）。
+ *
+ * 为什么不是 `Get-Process ... MainWindowTitle`：**2026-10-10 实测它不可靠**——
+ * 应用在开了远程调试端口（`WXMP_CDP_PORT`，冒烟自己就会给它分配一个）后，进程会多出一个
+ * **可见但无标题**的顶层窗口（WebView2 的辅助窗口）。PowerShell 的 `MainWindowTitle` 走
+ * "取该进程某个符合条件的顶层窗口"的启发式，可能**取到那个空标题窗口** ⇒ 标题读成 `""`。
+ * 实测时间线：t=1s/3s 能读到真标题，t≥5s 变空（辅助窗口出现后）——于是 `sleep 6s 再读` 变成一场竞态：
+ * 机器快就过、慢就挂。**产品没问题**（真窗口一直在，标题正确），是**量法**错了。
+ * 改为枚举全部窗口、取有标题的那些，断言"其中有一个是它"。
  *
  * 走"PowerShell 以 UTF-8 写文件、Node 再读"这条路径，而不是直接捕获 stdout：
  * 直接捕获时 PowerShell 按控制台代码页（本机是 GBK）输出，Node 按 UTF-8 解码，
  * 中文标题会变成乱码——那样"标题对没对"这条断言就变成了对乱码的断言（假绿/假红都可能）。
  */
-function windowTitleOf(pid) {
-  const tmp = join(iso.evidence, 'window-title.txt')
+function windowTitlesOf(pid) {
+  const tmp = join(iso.evidence, 'window-titles.json')
+  const ps = `
+Add-Type @"
+using System; using System.Text; using System.Runtime.InteropServices;
+public class WEnum {
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
+  public delegate bool EnumWindowsProc(IntPtr h, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  public static System.Collections.Generic.List<string> List(uint target) {
+    var outl = new System.Collections.Generic.List<string>();
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (pid == target) {
+        var sb = new StringBuilder(1024); GetWindowText(h, sb, 1024);
+        if (IsWindowVisible(h)) outl.Add(sb.ToString());
+      }
+      return true;
+    }, IntPtr.Zero);
+    return outl;
+  }
+}
+"@
+$t = [WEnum]::List(${pid})
+[System.IO.File]::WriteAllText('${tmp.replace(/'/g, "''")}', ($t | ConvertTo-Json -Compress), [System.Text.UTF8Encoding]::new($false))
+`
   try {
-    execFileSync(
-      'powershell',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-Command',
-        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { [System.IO.File]::WriteAllText('${tmp.replace(/'/g, "''")}', [string]$p.MainWindowTitle, [System.Text.UTF8Encoding]::new($false)) }`,
-      ],
-      { timeout: 25000 },
-    )
-    return existsSync(tmp) ? readFileSync(tmp, 'utf8').trim() : ''
+    execFileSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], { timeout: 30000 })
+    const raw = existsSync(tmp) ? readFileSync(tmp, 'utf8').trim() : ''
+    if (!raw) return []
+    const v = JSON.parse(raw)
+    return Array.isArray(v) ? v.map(String) : [String(v)]
   } catch {
-    return ''
+    return []
   }
 }
 
