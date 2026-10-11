@@ -110,7 +110,7 @@ let failed = 0
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
 // 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-11 R23 实测 215 条（+4：宣传类"纯色气泡"禁令）。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 218 })
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 225 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -265,6 +265,40 @@ check('R23 宣传类五语义靠"语义色 + 线条轻重"区分（四条竖线�
   `${promoRailHex.join(',')} | KEY=${promoKeyOpen ? 'rules' : '(未找到)'}`)
 // ② 轻重阶梯落在**竖线粗细**上：NOTE 3 < TIP 4 < WARN/DANGER 5（越重越粗）。
 check('R21 note=3px 竖线', five.includes('border-left:3px solid '))
+
+// ---- R24（2026-10-11）：**八种结构不同的气泡骨架** ----
+//
+// 用户判词："同一种结构，只是切换了非常简单的图标，不能说有很多的不同设计……给出更多的气泡设计"。
+// 所以这里断言的不是"图案不同"，而是**结构不同**：每种骨架必须能靠一段**独有的结构签名**被认出来。
+const SHAPES8 = ['rail', 'medal', 'index', 'cap', 'hanger', 'side', 'quote', 'bracket']
+const shapeHtml = (sp, extra = '') => composeMarkdown(`[[boxes:frame=line;shape=${sp}${extra}]]\n\n> [!TIP] 换书先看版权页\n> 教材类留意版次：同一本书差一个版次。\n`, { mode: 'text' }).html
+const sig = {
+  rail: (h) => /border-left:\d+px solid #/.test(h) && /position:absolute;left:-\d+px;top:0;width:22px/.test(h),
+  medal: (h) => /width:44px;height:44px/.test(h) && /border:2px solid #/.test(h) && /flex:1;min-width:0/.test(h),
+  index: (h) => /font-size:29px/.test(h) && />01</.test(h) && /Georgia,serif/.test(h),
+  cap: (h) => /width:22px;height:2px;background:#/.test(h) && !/border-left:\d+px solid #/.test(h),
+  hanger: (h) => /position:absolute;left:9px;top:14px;width:44px;text-align:left/.test(h) && /padding:13px 16px \d+px 60px/.test(h),
+  side: (h) => /writing-mode:vertical-rl/.test(h) && /align-self:flex-start/.test(h),
+  quote: (h) => /height:74px/.test(h) && /transform:scale\(4\);transform-origin:0 0/.test(h) && /Georgia,'Songti SC','SimSun',serif/.test(h),
+  bracket: (h) => (h.match(/border-left:2px solid #[0-9a-f]{6};border-top:2px solid #/g) || []).length === 1 && (h.match(/border-right:2px solid #[0-9a-f]{6};border-bottom:2px solid #/g) || []).length === 1,
+}
+const shapeBuilt = {}
+for (const sp of SHAPES8) shapeBuilt[sp] = shapeHtml(sp)
+check('R24 八种骨架各自到场（取样成功，否则下面的断言是空断言）', SHAPES8.every((sp) => shapeBuilt[sp].length > 80), SHAPES8.map((sp) => `${sp}:${shapeBuilt[sp].length}`).join(' '))
+const shapeMiss = SHAPES8.filter((sp) => !sig[sp](shapeBuilt[sp]))
+check('R24 每种骨架都有**它自己的结构签名**（不是同一套结构换图案）', shapeMiss.length === 0, shapeMiss.length ? '未命中：' + shapeMiss.join(',') : '8/8')
+check('R24 八种结构**两两不同**（结构签名互不重合）', new Set(SHAPES8.filter((sp) => sig[sp](shapeBuilt[sp]))).size === 8, SHAPES8.filter((sp) => sig[sp](shapeBuilt[sp])).join(','))
+check('R24 每种骨架都过 checkHtml 且不含未渲染占位', SHAPES8.every((sp) => checkHtml(shapeBuilt[sp]).ok && !/undefined|@@ART/.test(shapeBuilt[sp])), SHAPES8.map((sp) => sp + ':' + checkHtml(shapeBuilt[sp]).ok).join(' '))
+// 骨架一样要守 R23：八种全都不许有块级底色
+check('R24 八种骨架都不含块级底色（与 R23 一致）',
+  SHAPES8.every((sp) => !/<section style="[^"]*padding:[^"]*background:(#|rgb\(|rgba\()/.test(shapeBuilt[sp])),
+  SHAPES8.filter((sp) => /<section style="[^"]*padding:[^"]*background:(#|rgb\(|rgba\()/.test(shapeBuilt[sp])).join(',') || '8/8 干净')
+// 序号骨架按正文顺序自动编号（01 → 02）
+const twoIndex = composeMarkdown('[[boxes:frame=line;shape=index]]\n\n> [!TIP] 甲\n> 一。\n\n> [!NOTE] 乙\n> 二。\n', { mode: 'text' }).html
+check('R24 序号骨架按正文出现顺序自动编号（01 → 02）', twoIndex.includes('>01<') && twoIndex.includes('>02<'), (twoIndex.match(/>(0\d)</g) || []).join(','))
+// 未知名不生效、不崩（走既有"未知轴"口径）
+const badShape = composeMarkdown('[[boxes:shape=弯曲的样式]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
+check('R24 认不出的骨架名 → 出声且回退默认（不静默变形）', badShape.warnings.some((w) => w.includes('组件设计轴')) && /border-left:\d+px solid #/.test(badShape.html), badShape.warnings.slice(0, 1).join('|'))
 
 // ---- R23（2026-10-11）：**整篇无任何色块** ----
 //

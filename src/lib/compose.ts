@@ -309,8 +309,27 @@ export type FaceLabel = 'eyebrow' | 'chip' | 'mono' | 'none'
 export type FaceFont = 'sans' | 'serif' | 'mono'
 export type FacePad = 'tight' | 'normal' | 'loose'
 export type FaceDeco = 'brackets' | 'tape' | 'quote'
-/** 角标落点：四角 + 四边中点（R22；用户原话"顶端／左上角／右侧／左侧／右下角都可以"） */
+/**
+ * 角标落点：四角 + 四边中点（R22；用户原话"顶端／左上角／右侧／左侧／右下角都可以"）
+ */
 export type FaceMarkAt = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'r' | 'b' | 'l'
+
+/**
+ * **气泡骨架（R24）**——用户判词："同一种结构，只是切换了非常简单的图标，不能说有很多的不同设计
+ * ……现在的模式也是单一的，给出更多的气泡设计"。
+ *
+ * 所以这里给的不是"换个图案"，而是**结构上真的不一样**的七种骨架：
+ *   rail    左竖线式（默认）：竖线 + 标签上置 + 标题 + 正文
+ *   medal   徽章两栏式：左侧 44px 大图案徽章 + 右侧文字（无竖线）
+ *   index   序号式：左侧两位序号（01/02…）+ 右侧文字
+ *   cap     标题条式：一行"短横条 + 标签"当题头，下面才是标题与正文（无外框）
+ *   hanger  悬挂标签式：标签**出血悬挂到框外**左侧，正文保持缩进
+ *   side    竖排标签式：左侧一列**竖排**语义字 + 右侧文字 + 左细线
+ *   quote   引文式：46px 出血大引号 + 衬线正文，无框
+ *   bracket 角括号式：只有左上/右下两个 L 形角括号，文字内缩
+ * 八种都遵守"整篇无底色"（R23）——结构只由**线、留白、字号字重、记号**构成。
+ */
+export type FaceShape = 'rail' | 'medal' | 'index' | 'cap' | 'hanger' | 'side' | 'quote' | 'bracket'
 
 export interface FaceTokens {
   radius: number
@@ -326,6 +345,8 @@ export interface FaceTokens {
   mark: string
   /** 角标落点（R22）：默认左上 */
   markat: FaceMarkAt
+  /** 气泡骨架（R24）：默认左竖线式 */
+  shape: FaceShape
 }
 
 /**
@@ -342,7 +363,7 @@ export interface FaceTokens {
 const FACE_DEFAULT: FaceTokens = {
   radius: 0, frame: 'line', barW: 3, fill: 'none',
   label: 'eyebrow', title: 'sans', size: 15, deco: ['quote'], pad: 'normal',
-  mark: '', markat: 'tl',
+  mark: '', markat: 'tl', shape: 'rail',
 }
 
 /** R17 的五个"固定语言"= 轴组合的**别名**（预置是示例，不是上限） */
@@ -382,6 +403,14 @@ const FACE_VALUE_ALIAS: Record<string, string> = {
   左侧: 'l', 左边: 'l',
   右侧: 'r', 右边: 'r',
   上中: 't', 下中: 'b', 左中: 'l', 右中: 'r',
+  竖线式: 'rail', 左竖线式: 'rail', 默认式: 'rail',
+  徽章式: 'medal', 徽章两栏式: 'medal', 大图标式: 'medal',
+  序号式: 'index', 编号式: 'index',
+  标题条式: 'cap', 题头式: 'cap',
+  悬挂式: 'hanger', 悬挂标签式: 'hanger', 出血标签式: 'hanger',
+  竖排式: 'side', 竖排标签式: 'side',
+  引文式: 'quote', 引语式: 'quote', 金句式: 'quote',
+  角括号式: 'bracket', 括号式: 'bracket',
 }
 
 const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: string[]) => boolean }> = {
@@ -397,6 +426,8 @@ const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: s
   // R22：角标图案（引擎内置词汇表，见 marks.ts）+ 落点。`none` 是"不画"。
   mark: { pick: [...MARK_KEYS, 'none'], apply: (t, v) => { t.mark = v[0]; return true } },
   markat: { pick: ['tl', 'tr', 'bl', 'br', 't', 'r', 'b', 'l'], apply: (t, v) => { t.markat = v[0] as FaceMarkAt; return true } },
+  // R24：气泡骨架。`rail` 是默认；其余七种是**结构不同**的骨架，不是换图案。
+  shape: { pick: ['rail', 'medal', 'index', 'cap', 'hanger', 'side', 'quote', 'bracket'], apply: (t, v) => { t.shape = v[0] as FaceShape; return true } },
 }
 
 /** 把 `[[boxes:]]` 的**载荷**解析成轴取值（载荷形如 `soft;radius=4;label=chip`） */
@@ -688,6 +719,8 @@ interface SurfaceOpts {
   margin?: string
   /** 额外内联样式（并排容器的 flex 尺寸等） */
   extraStyle?: string
+  /** 覆盖按轴算出的内距（R24 的骨架各自有不同内距：flex 两栏 / 悬挂标签的左侧留白等） */
+  padOverride?: string
   /**
    * 角标（R22）：`key` 是 marks.ts 的规范键（null = 不画）。
    * 角标是**不透明**徽章，骑在框线上、把该处框线盖住 ⇒ 框线**天然"略去一部分"**，
@@ -721,9 +754,11 @@ function surface(o: SurfaceOpts): string {
   const sideR = markAt === 'tr' || markAt === 'br' || markAt === 'r'
   const padTop = markKey && markAt === 't' ? Math.max(padTop0, 26) : padTop0
   const padBottom = markKey && markAt === 'b' ? Math.max(Math.max(minBottom, bottom), 26) : Math.max(minBottom, bottom)
-  const pad = markKey
-    ? padTop + 'px ' + (sideR ? 32 : 16) + 'px ' + padBottom + 'px ' + (sideL ? 32 : 16) + 'px'
-    : padTop0 + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
+  const pad = o.padOverride
+    ? o.padOverride
+    : markKey
+      ? padTop + 'px ' + (sideR ? 32 : 16) + 'px ' + padBottom + 'px ' + (sideL ? 32 : 16) + 'px'
+      : padTop0 + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
   // 实色反白会把 `rules` 退化成整圈框（夹线撑不住实色），角标要按**实际画出来的壳**算偏移。
   const effKind: ShellKind = s.kind
   // **角标必须骑在框线上**：`position:absolute` 的包含块是**内边距盒**，`left:0` 落在框线**内侧**——
@@ -836,6 +871,8 @@ function bubble(
   decoName: string,
   artUrls: Record<string, string>,
   decoMap: Record<string, DecoSpec>,
+  /** 本篇第几个气泡（从 1 起；`shape=index` 的序号骨架用它） */
+  ord = 1,
 ): string {
   const t = faceOf(d)
   const k: BubbleKind = (BUBBLE_LABEL as Record<string, string>)[kind] ? (kind as BubbleKind) : 'note'
@@ -878,13 +915,75 @@ function bubble(
   // 气泡一律不铺底（2026-10-11 禁令）；`plane` 语言因此不再"靠底色成块"，改为**走线条语言**
   // （见 `shellFor` 的 `case 'plane'`）——否则整块会消失、只剩一坨文字。
   const bubbleFill = fillOf(t, meta.c, heavy, d)
-  return surface({
-    t, s: shellFor(t, k), c: meta.c,
-    fill: bubbleFill,
-    bottom: reserve,
-    decoImg, quote: k === 'key', inner,
-    mark: markKey ? { key: markKey, at: t.markat } : null,
-  })
+  const base = shellFor(t, k)
+  const labelTxt = t.label === 'none' ? '' : meta.label
+  const flow = { label: labelHtml(t, meta.label, meta.c, k), title: faceTitle(t, ttl, d.heading), body: faceBody(bodyText, d.text) }
+
+  // ---- R24：八种**结构不同**的骨架（不是换图案）----
+  // 每条分支只做两件事：决定 `inner` 的排布，以及覆盖 `s`（壳）/ `mark`（角标）/ `padOverride`。
+  switch (t.shape) {
+    // 徽章两栏式：左侧 44px 大图案徽章 + 右侧文字。不画竖线、不挂角标（徽章本身就是标记）。
+    case 'medal': {
+      const mk = markKey || SEMANTIC_MARK[k] || 'dot'
+      const circ = t.radius >= 10 ? '50%' : '2px'
+      const inner2 = '<section style="display:flex;align-items:flex-start">' +
+        '<span style="flex-shrink:0;width:44px;height:44px;margin:0 12px 0 0;display:flex;align-items:center;justify-content:center;border:2px solid ' + meta.c + ';border-radius:' + circ + '">' +
+        '<img src="' + markDataUrl(mk, meta.c) + '" alt="" style="width:27px;height:27px;display:block" /></span>' +
+        '<section style="flex:1;min-width:0">' + flow.label + flow.title + flow.body + '</section></section>'
+      return surface({ t, s: { ...base, kind: 'none', bracket: false, rail: false }, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner: inner2, mark: null, padOverride: '2px 0' })
+    }
+    // 序号式：左侧两位序号（01/02…，衬线大字）+ 右侧文字。
+    case 'index': {
+      const n = String(Math.max(1, Math.min(99, ord))).padStart(2, '0')
+      const inner2 = '<section style="display:flex;align-items:flex-start">' +
+        '<span style="flex-shrink:0;width:44px;margin:-5px 12px 0 0;font-size:29px;line-height:1;font-weight:800;font-family:Georgia,serif;letter-spacing:-1px;color:' + meta.c + '">' + n + '</span>' +
+        '<section style="flex:1;min-width:0">' + flow.label + flow.title + flow.body + '</section></section>'
+      return surface({ t, s: { ...base, kind: 'none', bracket: false, rail: false }, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner: inner2, mark: null, padOverride: '2px 0' })
+    }
+    // 标题条式：一行"短横条 + 标签"当题头，标题与正文在下方（无外框）。
+    case 'cap': {
+      const head = '<section style="display:flex;align-items:center;margin:0 0 9px">' +
+        '<span style="flex-shrink:0;width:22px;height:2px;background:' + meta.c + ';margin:0 9px 0 0"></span>' +
+        (labelTxt ? '<span style="font-size:12px;font-weight:700;letter-spacing:1px;color:' + meta.c + '">' + labelTxt + '</span>' : '') +
+        '</section>'
+      return surface({ t, s: { ...base, kind: 'none', bracket: false, rail: false }, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner: head + flow.title + flow.body, mark: null, padOverride: '2px 0' })
+    }
+    // 悬挂标签式：标签**出血挂在左侧栏**（不在正文流里），正文保持缩进。
+    case 'hanger': {
+      const tag = labelTxt
+        ? '<span style="position:absolute;left:9px;top:14px;width:44px;text-align:left;font-size:11px;font-weight:700;letter-spacing:1px;color:' + meta.c + '">' + labelTxt + '</span>'
+        : ''
+      return surface({ t, s: { ...base, kind: 'bar', barW: 2, strong: false, rail: false, bracket: false }, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner: tag + flow.title + flow.body, mark: null, padOverride: '13px 16px ' + Math.max(15, reserve) + 'px 60px' })
+    }
+    // 竖排标签式：左侧一列**竖排**语义字 + 右侧文字。
+    case 'side': {
+      const tag = labelTxt
+        ? '<span style="flex-shrink:0;writing-mode:vertical-rl;letter-spacing:3px;font-size:11px;font-weight:700;color:' + meta.c + ';margin:0 15px 0 0;align-self:flex-start;line-height:1;letter-spacing:3px">' + labelTxt + '</span>'
+        : ''
+      const inner2 = '<section style="display:flex;align-items:stretch">' + tag +
+        '<section style="flex:1;min-width:0">' + flow.title + flow.body + '</section></section>'
+      return surface({ t, s: base, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner: inner2, mark: null, padOverride: '13px 16px ' + Math.max(15, reserve) + 'px 12px' })
+    }
+    // 引文式：46px 出血大引号 + 衬线正文，无框。
+    case 'quote': {
+      const inner2 = '<section style="font-family:Georgia,\'Songti SC\',\'SimSun\',serif">' +
+        '<p style="margin:0 0 3px -9px;height:74px;line-height:1"><span style="display:inline-block;font-size:40px;line-height:1;transform:scale(4);transform-origin:0 0;color:' + rgba(meta.c, 0.7) + '">“</span></p>' +
+        flow.title + flow.body + '</section>'
+      return surface({ t, s: { ...base, kind: 'none', bracket: false, rail: false }, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner: inner2, mark: null, padOverride: '6px 2px' })
+    }
+    // 角括号式：只有左上 / 右下两个 L 形角括号，文字内缩。
+    case 'bracket':
+      return surface({ t, s: { ...base, kind: 'none', bracket: true, rail: false }, c: meta.c, fill: bubbleFill, bottom: reserve, decoImg, quote: false, inner, mark: null, padOverride: '11px 15px' })
+    // 左竖线式（默认）
+    default:
+      return surface({
+        t, s: base, c: meta.c,
+        fill: bubbleFill,
+        bottom: reserve,
+        decoImg, quote: k === 'key', inner,
+        mark: markKey ? { key: markKey, at: t.markat } : null,
+      })
+  }
 }
 
 /**
@@ -1363,6 +1462,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const arts: ArtSpec[] = []
   const decoMap: Record<string, DecoSpec> = {}
   const lines = String(md || '').split(/\r?\n/)
+  // R24：气泡序号（`shape=index` 的序号骨架用）——按正文出现顺序从 1 起。
+  let bubbleSeq = 0
   const out: string[] = []
   // 与 out 一一对应的元信息：该节点来自源文哪一行、是不是"代码节点"（泄漏检查要跳过代码）
   const outMeta: { line: number; code: boolean; system?: boolean }[] = []
@@ -1727,7 +1828,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         if (l !== '') body.push(l)
         i++
       }
-      emit(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls, decoMap), alertLine)
+      bubbleSeq += 1
+      emit(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls, decoMap, bubbleSeq), alertLine)
       continue
     }
 
