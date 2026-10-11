@@ -3,7 +3,11 @@
 // 确定性工具取用循环，仅在模型要求时发生，不改变用户可见的对话回合（用户消息不被阻挡）。
 // 浏览器模式不调用（直接返回 { mode:'skip' }），E2E mock 语义不变。
 import { invoke } from '@tauri-apps/api/core'
-import { ChatMsg, ChatToolCall, inTauri } from './chat.ts'
+// R25：`ChatMsg` / `ChatToolCall` 只是**类型**——必须用 `import type`，
+// 否则 `node --experimental-strip-types` 直接 import 本模块时会报
+// "does not provide an export named 'ChatMsg'"（`scripts/edit-contract-check.mjs` 正是这么用的）。
+import type { ChatMsg, ChatToolCall } from './chat.ts'
+import { inTauri } from './chat.ts'
 import { runKnowledgeTool } from './retrieval.ts'
 import { assetLine, categoryKey, searchAssets } from './asset-library.ts'
 import type { ProgressFn } from './progress.ts'
@@ -166,12 +170,9 @@ export function isCorrectableFinishError(args: string): boolean {
   return o.text !== undefined && o.text !== null
 }
 
-// READY 后进入正文撰写的指令（由 App 在最终流式消息末尾追加；第 29 轮：允许正文前自然说明，不再强制"不要解释"）
-export const WRITE_INSTRUCTION =
-  '开始撰写正文：正文放进一个 ```v2 围栏代码块（不要 ```html）。正文前可以用普通文字自然说明（写好了/按什么风格/采纳什么默认）。' +
-  // F1：撰写阶段单独再点一次边界——本回合随附的知识摘要只约束写法，
-  // 不能因为"取过某份知识"就被当成事实授权。
-  MATERIAL_GROUNDING_REF + '知识摘要仍适用。'
+// R25：撰写指令（含"有前稿时的改稿契约"）搬到 `edit-contract.ts`——那个模块**不依赖 Vite**，
+// 离线回归（`scripts/edit-contract-check.mjs`）才能直接 import 它做断言；这里只做重导出，保持旧入口可用。
+export { WRITE_INSTRUCTION, writeInstruction } from './edit-contract.ts'
 
 /** 准备阶段的**总额**预算：知识取用、空回复重试、协议纠偏共用它，不各自拥有三次 */
 export const MAX_PREP_CALLS = 3

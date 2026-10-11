@@ -99,10 +99,16 @@ export const MATERIAL_RULE =
 // 生成"自动修订"的追加用户消息。
 // P1：全部是局部问题时走**定点修订**口径——附上具体行号与原文行，要求逐字保留其余内容；
 // 否则退回整篇修订口径（保留已澄清方向与原文草稿，按问题清单修订并只输出一个 ```v2 围栏）。
-export function buildReviseContent(v2: string, issues: string[]): string {
+// R25：`preserveRest` —— 改稿回合（本回合开始时已有已验收文稿）的自动修订**不许借机重写全文**。
+// 起因同 `writeInstruction`：用户只想改一处，自动质检却"按问题清单重写一遍"，把别处一起动了。
+export function buildReviseContent(v2: string, issues: string[], opts: { preserveRest?: boolean } = {}): string {
   const list = issues.map((w) => '- ' + w).join('\n')
   const located = allLocal(issues) ? locateIssues(v2, issues) : []
   const fence = '```v2\n' + v2 + '\n```'
+  const keepRest = opts.preserveRest
+    ? '**这一轮是在改稿**：只改问题所指的地方，**其余内容逐字保留**——不许借机重写全文、不要调整段落顺序、' +
+      '不要改动没被点到的组件 / 气泡骨架 / 素材引用 / 篇幅。\n'
+    : ''
 
   if (located.length) {
     const rows = located.map((h) => `- 第 ${h.line} 行：${h.text.trim()}\n  ⟵ ${h.issue}`).join('\n')
@@ -110,6 +116,7 @@ export function buildReviseContent(v2: string, issues: string[]): string {
       `\n${REVISE_MARKER}本地排版引擎质检未通过，但**问题只出在下列个别行**。\n` +
       `请只修这些行，其余内容逐字保留：不要改写、不要调整段落顺序、不要新增或删减任何其他内容、不要重新起稿。\n` +
       `**本轮只修上面列出的问题，不新增运营规则、服务承诺或现场安排**（那是新的事实陈述，不在本次修订范围内）。\n` +
+      keepRest +
       MATERIAL_GROUNDING_REF + '\n' +
       `${MATERIAL_RULE}\n\n` +
       `需要修的行（行号按下面正文计）：\n${rows}\n\n` +
@@ -121,6 +128,7 @@ export function buildReviseContent(v2: string, issues: string[]): string {
     `\n${REVISE_MARKER}本地排版引擎质检未通过，请把上一版正文按下列问题修订重写一遍：\n` +
     `（保留已澄清的主题 / 风格、**用户材料已给或明确确认的事实**、照片位设置与整体结构，补齐所缺项、纠正问题；\n` +
     `上一版里的其他陈述只按原样带过，**不要顺手扩写**；**本轮只修上面列出的问题，不新增运营规则、服务承诺或现场安排**；不要重复贴旧稿。）\n` +
+    keepRest +
     MATERIAL_GROUNDING_REF + '\n' +
     `${MATERIAL_RULE}\n` +
     `质检问题：\n${list}\n\n` +

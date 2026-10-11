@@ -27,9 +27,10 @@ import { checkHtml, QualityResult } from './lib/quality.ts'
 import { ChatMsg, DeltaPayload, cancelChatRun, inTauri, sendChatRust, sendChatMock } from './lib/chat.ts'
 import { isCreateRequest } from './lib/needs.ts'
 import type { TaskEvent, TaskPhase } from './lib/progress.ts'
-import { WRITE_INSTRUCTION, runPrep } from './lib/prep.ts'
+import { runPrep, writeInstruction } from './lib/prep.ts'
 import type { AssetPolicy, PrepOutcome } from './lib/prep.ts'
 import { MAX_AUTO_REVISES, buildReviseContent } from './lib/revise.ts'
+import { structureDiff } from './lib/edit-diff.ts'
 import {
   bodyIntegrity,
   bodyText,
@@ -865,6 +866,8 @@ export default function App() {
     // 旧写法把"历史里出现过创作请求"当作"本回合已确认的创作操作契约"，于是"历史上要过一篇通知 +
     // 现在问一句 NOT READY 是什么意思"会被判成创作请求，把普通答疑变成一次没被授权的写作。
     // 现在不存在这个开关：有合法终结结果就是有授权，没有就没有（历史照旧进 baseMsgs 给模型看）。
+    // R25：改稿契约只在"本回合开始时确实存在一份已验收文稿"时给出（纯事实判断，不是路由）。
+    const hasPriorDoc = Boolean(priorIsAccepted && priorAccepted && priorAccepted.source)
     const needPrep = inTauri() && (PREP_EVERY_TURN || isCreateRequest(raw))
     /** 模型声明的素材操作；缺省按"文档里已有绑定 → 保持不动"，避免缺省值把既有配图重画一遍 */
     const hasPriorBindings = Boolean(priorAccepted?.bindings?.length)
@@ -999,7 +1002,7 @@ export default function App() {
             digestNote += `\n\n## 排版引擎协议（必读：v2 语法/美术占位/风格声明/质量底线；冲突以本协议为准——**但本协议只决定语法与样式，不决定本稿事实**）\n${proto}\n`
           }
         }
-        streamMsgs = [...baseMsgs, { role: 'user', content: digestNote + WRITE_INSTRUCTION }]
+        streamMsgs = [...baseMsgs, { role: 'user', content: digestNote + writeInstruction(hasPriorDoc) }]
       }
     }
 
@@ -1394,6 +1397,12 @@ export default function App() {
       // ④ 完整通过门禁 → 直接进入持久化提交（计划 §5 第 3 条）。提示级问题不触发重写。
       if (cand.verdict.ok) {
         acceptedCand = cand
+        // R25：改稿回合记一条"改动范围"（改了多少 / 素材引用与设计轴有没有被动过）。
+        // 只是记录，不参与判定——用来事后回答"这次是只改了一处，还是把整篇重写了"。
+        if (hasPriorDoc && priorAccepted?.source) {
+          const d = structureDiff(priorAccepted.source, cand.source)
+          trace({ kind: 'run', runId: ledger.runId, stage: 'validation', ok: true, note: `改稿改动范围：${d.summary}` })
+        }
         const seq = ++artSeqRef.current
         if (artSeqRef.current === seq) {
           setHtml(cand.html)
@@ -1468,7 +1477,9 @@ export default function App() {
       writePhaseRef.current = 'revise'
       awaitingTokenRef.current = true
       updateAssistant('')
-      const revise = buildReviseContent(cand.source, fixText)
+      // R25：改稿回合（本回合开始时已有已验收文稿）的自动修订**不许借机重写全文**——
+      // 否则"用户只改一处 → 质检触发重写 → 别处一起变了"，正是用户说的"改一处就掉质量"。
+      const revise = buildReviseContent(cand.source, fixText, { preserveRest: hasPriorDoc })
       try {
         if (inTauri()) {
           // 阶段 4 第 6 条：自动修订显式走 revise 档（high / 32000），不再沿用撰写的 max 档。
