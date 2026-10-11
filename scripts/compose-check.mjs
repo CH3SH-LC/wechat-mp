@@ -110,7 +110,7 @@ let failed = 0
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
 // 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-11 R23 实测 215 条（+4：宣传类"纯色气泡"禁令）。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 225 })
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 231 })
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -295,7 +295,40 @@ check('R24 八种骨架都不含块级底色（与 R23 一致）',
   SHAPES8.filter((sp) => /<section style="[^"]*padding:[^"]*background:(#|rgb\(|rgba\()/.test(shapeBuilt[sp])).join(',') || '8/8 干净')
 // 序号骨架按正文顺序自动编号（01 → 02）
 const twoIndex = composeMarkdown('[[boxes:frame=line;shape=index]]\n\n> [!TIP] 甲\n> 一。\n\n> [!NOTE] 乙\n> 二。\n', { mode: 'text' }).html
-check('R24 序号骨架按正文出现顺序自动编号（01 → 02）', twoIndex.includes('>01<') && twoIndex.includes('>02<'), (twoIndex.match(/>(0\d)</g) || []).join(','))
+check('R24 序号骨架按正文顺序自动编号（01 → 02）', twoIndex.includes('>01<') && twoIndex.includes('>02<'), (twoIndex.match(/>(0\d)</g) || []).join(','))
+// 口径收紧（2026-10-11 完整 demo 读图复核踩到）：**只数用了 shape=index 的气泡**，
+// 且**遇到 `##` 归零**——否则"三条读法"里前面那个普通 rail 提示会把清单顶到 02 起。
+const seqScoped = composeMarkdown('[[boxes:frame=line;shape=index]]\n\n> [!NOTE] 普通一\n> 甲。\n\n## 小节\n\n> [!TIP] 要点一\n> 乙。\n\n> [!TIP] 要点二\n> 丙。\n', { mode: 'text' }).html
+check('R24 序号只数 index 骨架的气泡、且遇 `##` 归零（清单从 01 起）',
+  seqScoped.includes('>01<') && seqScoped.includes('>02<') && !seqScoped.includes('>03<'),
+  (seqScoped.match(/>(0\d)</g) || []).join(','))
+// R24 续：`[[boxes:…]]` 改为**流式**（从它那一行起生效）——此前只有第一条生效，
+// 于是"要点用序号骨架、金句用引文骨架"在引擎里做不到。
+const streamAxes = composeMarkdown('[[boxes:frame=line;shape=rail]]\n\n> [!NOTE] 甲标题\n> 一。\n\n[[boxes:frame=line;shape=medal]]\n\n> [!TIP] 乙标题\n> 二。\n', { mode: 'text' }).html
+const posA = streamAxes.indexOf('>甲标题<')
+const posB = streamAxes.indexOf('>乙标题<')
+const posMedal = streamAxes.indexOf('width:44px;height:44px')
+const posRail = streamAxes.search(/border-left:\d+px solid #/)
+check('R24 骨架声明是**流式**的：第二条 `[[boxes:…]]` 从它那一行起换骨架',
+  posA > 0 && posB > posA && posRail > 0 && posRail < posA && posMedal > posA && posMedal < posB,
+  `甲标题@${posA} 乙标题@${posB} 竖线@${posRail} 徽章@${posMedal}`)
+check('R24 流式声明不影响它之前的内容（只向后生效）',
+  posRail > 0 && posRail < posA && (streamAxes.slice(posRail, posA).match(/width:44px;height:44px/) || []).length === 0,
+  '甲仍是 rail')
+// R24 续：`::: cols` 超过 3 项 → **降级为纵向排列**并出声。
+// 起因：完整 demo 第 2 屏读图复核实测——375px 下 4 列每列只剩 ~76px、内距吃掉一半，
+// **每行只排得下 2 个汉字**，正文被压成"竖直细条"，读者根本读不了。宁可排成竖列也别出这种成品。
+const bigCols = composeMarkdown('::: cols\n- 甲项\n- 乙项\n- 丙项\n- 丁项\n:::\n', { mode: 'text' })
+check('R24 分栏超 3 项 → 降级为纵向排列（不出"每行 2 个字"的成品）',
+  bigCols.warnings.some((w) => w.includes('分栏最多 3 项')) && !/display:flex;align-items:stretch/.test(bigCols.html),
+  `warn=${bigCols.warnings.length} 并排=${/display:flex;align-items:stretch/.test(bigCols.html)}`)
+check('R24 分栏列数**按内容长度**决定：项短才 3 列，整句退到 2 列 + 换行',
+  // 已实测：375px 下 3 列每列约 105px、每行 4 个字，装整句会把词拦腰拆开（"权力"断成 权/力）
+  /width:33\.3%/.test(composeMarkdown('::: cols\n- 甲\n- 乙\n- 丙\n:::\n', { mode: 'text' }).html) &&
+    /width:calc\(50% - 6px\)/.test(composeMarkdown('::: cols\n- 这是很长的一句话，用来验证整句时长分栏会退到两列排列\n- 第二句同样很长，也需要退到两列才读得舒服一些\n- 第三句也不短，一起验证这条规则确实生效了\n:::\n', { mode: 'text' }).html),
+  '短项→' + (/width:33\.3%/.test(composeMarkdown('::: cols\n- 甲\n- 乙\n- 丙\n:::\n', { mode: 'text' }).html) ? '3列' : '?') + '；长项→' + (/width:calc\(50% - 6px\)/.test(composeMarkdown('::: cols\n- 这是很长的一句话，用来验证整句时长分栏会退到两列排列\n- 第二句同样很长，也需要退到两列才读得舒服一些\n- 第三句也不短，一起验证这条规则确实生效了\n:::\n', { mode: 'text' }).html) ? '2列' : '?'))
+check('R24 三项短分栏仍走并排（没把正常用法一起废掉）', 
+  /display:flex;align-items:stretch/.test(composeMarkdown('::: cols\n- 甲项\n- 乙项\n- 丙项\n:::\n', { mode: 'text' }).html))
 // 未知名不生效、不崩（走既有"未知轴"口径）
 const badShape = composeMarkdown('[[boxes:shape=弯曲的样式]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
 check('R24 认不出的骨架名 → 出声且回退默认（不静默变形）', badShape.warnings.some((w) => w.includes('组件设计轴')) && /border-left:\d+px solid #/.test(badShape.html), badShape.warnings.slice(0, 1).join('|'))

@@ -237,17 +237,37 @@ function titleBlock(d: ComposeDesign, text: string): string {
 function colsBlock(d: ComposeDesign, items: string[]): string {
   const t = faceOf(d)
   const n = items.length
-  const pct = n >= 3 ? '33.3%' : '50%'
   const c = d.key === 'promo' ? d.orange : d.accent
-  return '<section style="margin:0 0 16px;display:flex;align-items:stretch">' + items.map((it, idx) => {
-    const mr = idx === n - 1 ? '' : 'margin-right:12px;'
-    const inner = '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
-    return surface({
-      t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
-      bottom: 11, decoImg: '', quote: false, inner,
-      margin: '0', extraStyle: 'flex:1;width:' + pct + ';' + mr,
-    })
-  }).join('') + '</section>'
+  const cell = (it: string, extraStyle: string) => surface({
+    t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
+    bottom: 11, decoImg: '', quote: false,
+    inner: '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>',
+    margin: '0', extraStyle,
+  })
+  // **几列由内容长度决定，不由项数硬定**（2026-10-11 完整 demo 读图实测）：
+  // 375px 下 3 列每列只剩约 105px、每行 4 个字，装整句话会把词拦腰拆开（"权力"断成 权/力）。
+  // 所以"项短"（≤14 字，平均）才排 3 列；否则退到 **2 列 + 换行**——每列约 165px、实测**每行 8 个汉字**
+  // （这是 375px 两栏的物理上限：15px 字号 + 0.5px 字距 ≈ 15.5px/字，131px 可用宽 ÷ 15.5 = 8.5）。
+  const plain = items.map((it) => it.replace(/&[a-z]+;|<[^>]*>/g, ''))
+  const avg = plain.reduce((a, s) => a + s.length, 0) / Math.max(1, n)
+  const three = n >= 3 && avg <= 14
+  if (!three) {
+    return '<section style="margin:0 0 16px;display:flex;flex-wrap:wrap;justify-content:space-between">' +
+      items.map((it) => cell(it, 'width:calc(50% - 6px);margin:0 0 12px 0')).join('') + '</section>'
+  }
+  const mr = 'margin-right:12px;'
+  return '<section style="margin:0 0 16px;display:flex;align-items:stretch">' +
+    items.map((it, idx) => cell(it, 'flex:1;width:33.3%;' + (idx === n - 1 ? '' : mr))).join('') + '</section>'
+}
+
+function flatListBlock(d: ComposeDesign, items: string[]): string {
+  const t = faceOf(d)
+  const c = d.key === 'promo' ? d.orange : d.accent
+  return items.map((it) => surface({
+    t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
+    bottom: 11, decoImg: '', quote: false,
+    inner: '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>',
+  })).join('')
 }
 
 function imgrowBlock(_d: ComposeDesign, items: { src: string; alt: string }[]): string {
@@ -1455,14 +1475,16 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // 而不是静默按默认渲染（静默是"模型写了没效果、谁也不知道"的温床）。
   if (faceSpec.unknown.length) {
     warnings.push(
-      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat，或预置名 编辑感/亲和/杂志/手账/科技',
+      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat/shape，或预置名 编辑感/亲和/杂志/手账/科技',
     )
   }
   const images: ComposeImage[] = []
   const arts: ArtSpec[] = []
   const decoMap: Record<string, DecoSpec> = {}
   const lines = String(md || '').split(/\r?\n/)
-  // R24：气泡序号（`shape=index` 的序号骨架用）——按正文出现顺序从 1 起。
+  // R24：气泡序号（`shape=index` 的序号骨架用）。口径（2026-10-11 读图复核后收紧）：
+  // ① **只数用了 `shape=index` 的气泡**——否则前面来个普通 rail 提示，要点清单就从 02 起（实测踩到）；
+  // ② **遇到 `##` 重新从 0 起**——序号是"本节内第几条"，不是全篇流水号。
   let bubbleSeq = 0
   const out: string[] = []
   // 与 out 一一对应的元信息：该节点来自源文哪一行、是不是"代码节点"（泄漏检查要跳过代码）
@@ -1594,6 +1616,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     if (h) {
       const level = h[1].length
       if (d.key === 'promo' && level === 2) h2Counter++
+      if (level === 2) bubbleSeq = 0 // R24：序号骨架的计数在小节处归零（序号是"本节内第几条"）
       emit(heading(d, level, h[2], d.key === 'promo' && level === 2 ? h2Counter : null), i + 1)
       i++
       continue
@@ -1610,8 +1633,23 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 风格声明 [[theme:名称]] 与自定义色板 [[palette:...]]（第 23 轮：只影响配色，不产生输出）
     if (/^\[\[theme:[^\]]+\]\]$/.test(line)) { i++; continue }
     if (/^\[\[palette:[^\]]+\]\]$/.test(line)) { i++; continue }
-    // R17：组件语言声明（同样只影响渲染，不产生输出）
-    if (/^\[\[boxes:[^\]]+\]\]$/.test(line)) { i++; continue }
+    // R17：组件语言声明（同样只影响渲染，不产生输出）。
+    // **R24 续：改为"从这一行起生效"（流式）**——此前只有**第一条**生效，等于全篇锁死一套骨架，
+    // 于是"要点用序号骨架、金句用引文骨架"在引擎里根本做不到（自己在协议里写的建议自相矛盾）。
+    // 现在每次出现都**重新声明整套语言**（与第一条同语义：别名 + 轴取值落在 `FACE_DEFAULT` 之上），
+    // 从它那一行起一直生效到下一次声明。认不出的轴照旧出声。
+    if (/^\[\[boxes:[^\]]+\]\]$/.test(line)) {
+      const payload = line.replace(/^\[\[boxes:\s*/, '').replace(/\s*\]\]$/, '')
+      const rf = faceFromSpec(payload)
+      if (rf.unknown.length) {
+        warnings.push(
+          '组件设计轴「' + rf.unknown.join(' / ') + '」不认识（第 ' + (i + 1) + ' 行），已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat/shape，或预置名 编辑感/亲和/杂志/手账/科技',
+        )
+      }
+      d.scheme = payload
+      i++
+      continue
+    }
 
     // 横幅 [[banner:主|副]]
     const bn = line.match(/^\[\[banner:([^|\]]+)(?:\|([^\]]+))?\]\]$/)
@@ -1779,7 +1817,12 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         else emit(P(d) + 'frame 需至少 1 行内容（- 文字）' + '</p>', contLine, { system: true })
       } else if (kind === 'cols') {
         const cols = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => escapeHtml(l.replace(/^[-*+]\s+/, '')))
-        if (cols.length >= 2) emit(colsBlock(d, cols), contLine)
+        if (cols.length > 3) {
+          // 375px 下 4 列只剩 ~76px/列、内距占掉一半 ⇒ 每行只排得下 2 个字（读图实测）。
+          // 与其硬排成难读的竖条，不如**降级为纵向排列**并出声（协议本来就只允许 2-3 项）。
+          warnings.push('分栏最多 3 项（4 列在 375px 下每行只排得下 2 个字），已改为纵向排列：第 ' + contLine + ' 行')
+          emit(flatListBlock(d, cols), contLine)
+        } else if (cols.length >= 2) emit(colsBlock(d, cols), contLine)
         else emit(P(d) + bodyLines.map((l) => inline(escapeHtml(l.replace(/^[-*+]\s+/, '')), d)).join('<br/>') + '</p>', contLine)
       } else if (kind === 'imgrow') {
         const imgs = bodyLines.filter((l) => /^[-*+]\s+/.test(l)).map((l) => {
@@ -1828,7 +1871,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         if (l !== '') body.push(l)
         i++
       }
-      bubbleSeq += 1
+      if (faceOf(d).shape === 'index') bubbleSeq += 1
       emit(bubble(d, kind, first, body.map((s) => escapeHtml(s)), decoName, artUrls, decoMap, bubbleSeq), alertLine)
       continue
     }
