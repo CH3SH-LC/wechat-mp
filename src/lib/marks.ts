@@ -61,7 +61,7 @@ export const THEME_MARKS: Record<string, { note?: string; tip?: string }> = {
   forest: { note: 'sprout', tip: 'drop' },
   tech: { note: 'gear', tip: 'bolt' },
   magazine: { note: 'book', tip: 'star' },
-  japanese: { note: 'book', tip: 'star' },
+  japanese: { note: 'book', tip: 'drop' },
   guochao: { note: 'book', tip: 'star' },
   newspaper: { note: 'book', tip: 'star' },
   handbook: { note: 'heart', tip: 'star' },
@@ -72,7 +72,7 @@ export const THEME_MARKS: Record<string, { note?: string; tip?: string }> = {
   cream: { note: 'book', tip: 'heart' },
   mint: { note: 'drop', tip: 'sprout' },
   terracotta: { note: 'sprout', tip: 'maple' },
-  indigo: { note: 'gear', tip: 'star' },
+  indigo: { note: 'gear', tip: 'diamond' },
   cyberpunk: { note: 'bolt', tip: 'gear' },
 }
 
