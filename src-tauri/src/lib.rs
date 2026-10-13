@@ -4,6 +4,7 @@ mod chat;
 mod desktop_runtime;
 mod documents;
 mod export;
+mod insertion_images;
 mod local_images;
 mod manual;
 mod publish;
@@ -20,6 +21,7 @@ use documents::{
     open_document, open_document_revision, save_document,
 };
 use export::{export_html, export_images};
+use insertion_images::{list_insertion_images, open_insertion_image_folder};
 use local_images::{get_local_image, import_local_image};
 use manual::open_manual;
 use publish::{publish_draft, WxTokenState};
@@ -84,6 +86,11 @@ pub fn run() {
             // 运行取消表（阶段 4）：前端"停止"按钮的后端句柄
             app.manage(CancelState::default());
             app.manage(desktop_runtime::DesktopRuntime::default());
+            // A missing/unavailable image inbox must not prevent the app from opening.
+            // The list/open commands retry preparation and return actionable errors.
+            if let Err(error) = insertion_images::initialize_insertion_image_folder() {
+                eprintln!("[wxmp] {error}");
+            }
             // 主窗口在这里建（`tauri.conf.json` 的 `app.windows` 已置空）。
             // 搬到代码里的唯一理由是：只有 builder 才能把 WebView2 的附加参数交给 wry
             // （见 `browser_args` 的说明）。标题、尺寸、最小尺寸与配置里逐字一致，
@@ -108,6 +115,8 @@ pub fn run() {
             delete_asset,
             import_local_image,
             get_local_image,
+            list_insertion_images,
+            open_insertion_image_folder,
             export_html,
             export_images,
             open_manual,

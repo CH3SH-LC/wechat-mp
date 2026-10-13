@@ -282,9 +282,9 @@ const CASES = [
     priorDoc: { ...PRIOR_DOC, source: '# 已有多图文章\n\n' + Array.from({ length: 9 }, (_, i) => `![图](local-image://li-${String(i + 1).repeat(64)})`).join('\n\n') },
   },
   {
-    name: 'local-image-late-import-after-clear',
+    name: 'local-image-import-lock-then-clear',
     prompt: '帮我写一篇周末到馆提醒的通知。', prep: PREP_COMPOSE,
-    write: BAD_V2, revise: REVISED_V2, lateClearImage: LOCAL_IMAGE,
+    write: BAD_V2, revise: REVISED_V2, clearAfterImportImage: LOCAL_IMAGE,
   },
   {
     name: 'candidate-first-turn-then-revise',
@@ -442,10 +442,10 @@ function stubSource(c) {
       case 'list_assets_report': return { items: [] }
       case 'search_assets': return { items: [] }
       case 'get_asset': return null
-      case 'get_local_image': return ${c.imageWindow ? `{...${JSON.stringify(LOCAL_IMAGE)},assetId:args.assetId,name:'已保存原图'}` : JSON.stringify(c.localImage ?? c.lateClearImage ?? null)}
+      case 'get_local_image': return ${c.imageWindow ? `{...${JSON.stringify(LOCAL_IMAGE)},assetId:args.assetId,name:'已保存原图'}` : JSON.stringify(c.localImage ?? c.clearAfterImportImage ?? null)}
       case 'import_local_image':
         if (w.__holdImport) await new Promise((resolve) => { w.__releaseImport = resolve })
-        return ${JSON.stringify(c.localImage ?? c.lateClearImage ?? null)}
+        return ${JSON.stringify(c.localImage ?? c.clearAfterImportImage ?? null)}
       case 'add_asset': return { id: 'as-fixture' }
       case 'review_assets': return { ok: false, reason: '夹具：不做视觉复核' }
       case 'gen_svg': return SVGSAMPLE
@@ -540,15 +540,61 @@ try {
       }
       await page.waitForFunction(() => !document.querySelector('.chat-input-row textarea[disabled]'), null, { timeout: 120000 })
       await page.waitForTimeout(1200)
-      if (c.lateClearImage) {
-        await page.evaluate(() => { window.__holdImport = true })
-        await page.locator('input[type=file]').setInputFiles({ name: '等待中的照片.png', mimeType: 'image/png', buffer: Buffer.from(c.lateClearImage.dataUrl.split(',')[1], 'base64') })
+      if (c.clearAfterImportImage) {
+        const clearDialogs = []
+        let allowClear = false
+        const handleClearDialog = async (dialog) => {
+          clearDialogs.push(dialog.message())
+          if (allowClear) await dialog.accept()
+          else await dialog.dismiss()
+        }
+        page.on('dialog', handleClearDialog)
+        await page.locator('.chat-input-row textarea').fill('原图保存后再继续修改这篇文章')
+        await page.evaluate(() => {
+          const calls = window.__wxmp.calls
+          window.__wxmp.importClear = { before: {
+            sessionId: calls.filter(call => call.cmd === 'save_session').at(-1)?.args.id,
+            callCount: calls.length,
+            chatText: document.querySelector('.chat-body').textContent,
+            draft: document.querySelector('.chat-input-row textarea').value,
+            preview: document.querySelector('.preview-pane iframe')?.contentDocument?.body?.textContent || '',
+          } }
+          window.__holdImport = true
+        })
+        await page.locator('input[type=file]').setInputFiles({ name: '等待中的照片.png', mimeType: 'image/png', buffer: Buffer.from(c.clearAfterImportImage.dataUrl.split(',')[1], 'base64') })
         await page.waitForFunction(() => typeof window.__releaseImport === 'function')
-        page.once('dialog', (dialog) => dialog.accept())
+        const clearDisabled = await page.locator('[data-act="clear"]').isDisabled()
+        // HTMLElement.click() 尊重真实 disabled，不强行穿透禁用控件或调用内部处理函数。
+        await page.locator('[data-act="clear"]').evaluate((button) => button.click())
+        await page.locator('.chat-input-row textarea').press('Enter')
+        await page.waitForTimeout(100)
+        await page.evaluate((held) => { window.__wxmp.importClear.held = held }, { clearDisabled, dialogCount: clearDialogs.length })
+        await page.evaluate(() => { window.__holdImport = false; window.__releaseImport() })
+        await page.waitForFunction(() => document.querySelectorAll('.chat-pane > .attach-strip .attach-chip').length === 1 && !document.querySelector('[data-act="clear"]').disabled)
+        await page.evaluate(() => {
+          const state = window.__wxmp.importClear
+          const sinceImport = window.__wxmp.calls.slice(state.before.callCount)
+          const image = document.querySelector('.chat-pane > .attach-strip img')
+          state.completed = {
+            chatText: document.querySelector('.chat-body').textContent,
+            draft: document.querySelector('.chat-input-row textarea').value,
+            preview: document.querySelector('.preview-pane iframe')?.contentDocument?.body?.textContent || '',
+            imageName: image?.alt, imageData: image?.getAttribute('src'),
+            disruptiveCalls: sinceImport.filter(call => ['create_session', 'open_session', 'delete_session', 'delete_document', 'prep_turn', 'chat_stream'].includes(call.cmd)).map(call => call.cmd),
+            clearedSession: sinceImport.some(call => call.cmd === 'save_session' && call.args.messages.length === 0),
+          }
+        })
+        allowClear = true
         await page.locator('[data-act="clear"]').click()
         await page.locator('.chat-empty').waitFor()
-        await page.evaluate(() => { window.__holdImport = false; window.__releaseImport() })
-        await page.waitForTimeout(150)
+        await page.waitForTimeout(1200)
+        await page.evaluate((dialogs) => {
+          const state = window.__wxmp.importClear
+          state.after = { dialogs, finalSave: window.__wxmp.calls.filter(call => call.cmd === 'save_session').at(-1)?.args,
+            attachedCount: document.querySelectorAll('.chat-pane > .attach-strip .attach-chip').length,
+            empty: !!document.querySelector('.chat-empty'), previewCount: document.querySelectorAll('.preview-pane iframe').length }
+        }, clearDialogs)
+        page.off('dialog', handleClearDialog)
       }
       turns = await page.evaluate(() => window.__wxmp.calls.filter((x) => x.cmd === 'chat_stream').length)
     } catch (e) {
@@ -576,6 +622,7 @@ try {
           sessionSends: calls.filter((x) => x.cmd === 'save_session').map((x) => x.args),
           imageReads: calls.filter((x) => x.cmd === 'get_local_image').map((x) => x.args.assetId),
           attachedCount: document.querySelectorAll('.chat-pane > .attach-strip .attach-chip').length,
+          importClear: window.__wxmp.importClear || null,
           previewText: document.querySelector('.preview-pane iframe')?.contentDocument?.body?.textContent || '',
           bodyText: document.body.innerText,
           docState: document.querySelector('[data-doc-state]')?.getAttribute('data-doc-state'),
@@ -715,7 +762,15 @@ if (!run.errors.length && collected.length === CASES.length) {
       check(`${label}：传输窗口不删除或改写已有文章`, r.snap.documentSends.length === 0)
       continue
     }
-    if (c.lateClearImage) check(`${label}：清空后迟到导入不回填附件`, r.snap.attachedCount === 0 && r.snap.cmds.includes('import_local_image'))
+    if (c.clearAfterImportImage) {
+      const state = r.snap.importClear
+      check(`${label}：原图导入中清空禁用且不弹确认`, state?.held.clearDisabled === true && state.held.dialogCount === 0)
+      check(`${label}：导入完成前没有清空、切会话或额外模型请求`, state?.completed.disruptiveCalls.length === 0 && state.completed.clearedSession === false)
+      check(`${label}：原图保存完成后消息、草稿和既有成稿原样保留`, Boolean(state?.before.preview) && state.completed.chatText === state.before.chatText && state.completed.draft === state.before.draft && state.completed.preview === state.before.preview)
+      check(`${label}：完成的原图实际回填当前消息附件`, state?.completed.imageName === c.clearAfterImportImage.name && state.completed.imageData === c.clearAfterImportImage.modelDataUrl)
+      check(`${label}：导入完成后才确认清空原会话`, Boolean(state?.before.sessionId) && state.after.dialogs.length === 1 && state.after.dialogs[0].includes('清空') && state.after.finalSave?.id === state.before.sessionId && state.after.finalSave.messages.length === 0)
+      check(`${label}：确认清空后没有迟到附件或残留成稿`, state?.after.empty === true && state.after.attachedCount === 0 && state.after.previewCount === 0 && r.snap.attachedCount === 0)
+    }
     check(`${label}：本回合真的跑起来了（有 prep 往返）`, (r.snap.prepSends || []).length > 0, `prep 往返 ${(r.snap.prepSends || []).length} 次`)
 
     // prep 普通轮与末轮都在实参里带上共同依据规则。

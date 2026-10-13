@@ -7,7 +7,7 @@ import { createJudge, guardCrashes, parseRunnerArgs } from './lib/run-result.mjs
 
 const require = createRequire(import.meta.url)
 const { outDir, base } = parseRunnerArgs()
-const judge = createJudge({ script: 'local-image-check', outDir, plannedCases: ['input.', 'render.', 'persist.', 'failure.'], minChecks: 20 })
+const judge = createJudge({ script: 'local-image-check', outDir, plannedCases: ['input.', 'picker.', 'render.', 'persist.', 'failure.'], minChecks: 45 })
 guardCrashes(judge)
 const check = (id, pass, evidence = '') => { judge.check(id, pass, evidence); console.log(`${pass ? 'PASS' : 'FAIL'} ${id} ${evidence}`) }
 let browser
@@ -35,6 +35,11 @@ try {
     window.__exports = []
     window.__sessions = {}
     window.__holdImport = false
+    window.__insertionListing = { directory: 'C:\\Users\\中文用户\\Documents\\wechat-mp-workspace\\待插入图片', images: [], warnings: [] }
+    window.__insertionOpens = 0
+    window.__holdListing = false
+    window.__listingError = ''
+    window.__folderError = ''
     window.__imageReads = 0
     window.__eventCallbacks = {}; window.__eventListeners = {}; let callbackId = 0
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: (event) => { delete window.__eventListeners[event] } }
@@ -47,6 +52,15 @@ try {
     window.__TAURI_INTERNALS__ = { transformCallback: (fn) => { const id = ++callbackId; window.__eventCallbacks[id] = fn; return id }, invoke: async (cmd, args) => {
       if (cmd === 'plugin:event|listen') { window.__eventListeners[args.event] = args.handler; return args.handler }
       if (cmd === 'plugin:event|unlisten') return null
+      if (cmd === 'list_insertion_images') {
+        if (window.__holdListing) await new Promise((resolve) => { window.__releaseListing = resolve })
+        if (window.__listingError) throw new Error(window.__listingError)
+        return structuredClone(window.__insertionListing)
+      }
+      if (cmd === 'open_insertion_image_folder') {
+        if (window.__folderError) throw new Error(window.__folderError)
+        window.__insertionOpens++; return window.__insertionListing.directory
+      }
       if (cmd === 'import_local_image') {
         if (window.__holdImport) await new Promise((resolve) => { window.__releaseImport = resolve })
         if (args.name === 'broken.png') throw new Error('图片文件损坏，无法解码')
@@ -71,9 +85,13 @@ try {
     const root = createRoot(host)
     window.__attachments = []; window.__sent = []
     window.__chatActive = true
+    window.__chatBusy = false
+    window.__chatDisabled = false
+    window.__importChanges = []
     window.__messages = []
-    const render = () => root.render(React.createElement(ChatPane, { msgs: window.__messages, busy: false, active: window.__chatActive, status: '原图检查', images: window.__attachments,
+    const render = () => root.render(React.createElement(ChatPane, { msgs: window.__messages, busy: window.__chatBusy, disabled: window.__chatDisabled, active: window.__chatActive, status: '原图检查', images: window.__attachments,
       onAttachImages: (items) => { window.__attachments.push(...items); render() }, onRemoveImage: (i) => { window.__attachments.splice(i, 1); render() },
+      onImportingChange: (value) => { window.__importChanges.push(value) },
       onSend: (text) => window.__sent.push(text), onStop: () => {},
     }))
     window.__renderChat = render
@@ -135,6 +153,93 @@ try {
   await chooser.setInputFiles({ name: '修复图片.png', mimeType: 'image/png', buffer: Buffer.from(fixture.green.split(',')[1], 'base64') })
   await page.waitForFunction(() => window.__attachments.length === 6 && !document.body.innerText.includes('图片暂不可读：修复图片.png'))
   check('input.reimport-refreshes-old-failed-thumbnail', await page.locator('.msg-user img[alt="修复图片.png"]').count() === 1)
+
+  const pickerButton = page.getByRole('button', { name: '待插入图片', exact: true })
+  const picker = page.getByRole('dialog', { name: '待插入图片', exact: true })
+  await pickerButton.click()
+  await picker.getByText('这里还没有图片', { exact: true }).waitFor()
+  check('picker.empty-three-steps-and-exact-directory', await picker.locator('ol li').count() === 3 && (await picker.textContent()).includes('C:\\Users\\中文用户\\Documents\\wechat-mp-workspace\\待插入图片'))
+  check('picker.explains-direct-children-and-supported-formats', (await picker.textContent()).includes('仅显示此文件夹本层的 PNG、JPEG、WebP、GIF、BMP 图片'))
+  await picker.getByRole('button', { name: '打开文件夹', exact: true }).click()
+  check('picker.opens-dedicated-folder', await page.evaluate(() => window.__insertionOpens === 1))
+  await page.keyboard.press('Escape')
+  await picker.waitFor({ state: 'detached' })
+  check('picker.escape-restores-opener-focus', await pickerButton.evaluate((el) => document.activeElement === el))
+  await page.evaluate(() => {
+    const longName = '校园秋日阅读活动现场照片中文长文件名'.repeat(5) + '.png'
+    window.__insertionListing.images = [longName, 'broken.png', '第三张.jpg'].map((name, i) => ({ name, path: window.__insertionListing.directory + '\\' + name, byteLength: i ? 2048 : 12 * 1024 * 1024 }))
+    window.__insertionListing.warnings = ['当前只显示前 500 张图片。']
+    window.__importsBeforePicker = window.__imports.length
+    window.__readsBeforePicker = window.__imageReads
+  })
+  await pickerButton.click()
+  await picker.getByRole('checkbox').first().waitFor()
+  check('picker.listing-does-not-read-images-or-send', await page.evaluate(() => window.__imports.length === window.__importsBeforePicker && window.__imageReads === window.__readsBeforePicker && window.__sent.length === 1) && await picker.locator('img').count() === 0)
+  check('picker.shows-file-size-and-backend-warning', (await picker.textContent()).includes('12.0 MB') && (await picker.textContent()).includes('当前只显示前 500 张图片。'))
+  await picker.getByRole('checkbox').nth(0).check()
+  await picker.getByRole('checkbox').nth(1).check()
+  check('picker.respects-existing-attachments-and-max-limit', await picker.getByRole('checkbox').nth(2).isDisabled() && (await picker.textContent()).includes('已选 2 张 · 当前消息还可添加 2 张'))
+  await picker.getByRole('searchbox', { name: '查找文件名' }).fill('第三张')
+  check('picker.search-keeps-selected-outside-filter', await picker.getByRole('checkbox').count() === 1 && (await picker.textContent()).includes('已选 2 张'))
+  await picker.getByRole('searchbox', { name: '查找文件名' }).fill('')
+  await picker.getByRole('button', { name: '刷新', exact: true }).click()
+  await page.waitForFunction(() => document.querySelector('.insertion-picker-body')?.getAttribute('aria-busy') === 'false')
+  check('picker.refresh-retains-still-present-selection', await picker.locator('input[type=checkbox]:checked').count() === 2)
+  await page.setViewportSize({ width: 375, height: 640 })
+  const narrowLayout = await picker.evaluate((el) => {
+    const file = el.querySelector('.insertion-picker-filename')
+    const body = el.querySelector('.insertion-picker-body')
+    return { withinViewport: el.getBoundingClientRect().right <= innerWidth && el.getBoundingClientRect().left >= 0,
+      noHorizontalOverflow: body.scrollWidth <= body.clientWidth, wraps: file.getBoundingClientRect().height > 40,
+      scrolls: body.scrollHeight > body.clientHeight }
+  })
+  check('picker.narrow-long-name-wraps-and-scrolls', Object.values(narrowLayout).every(Boolean), JSON.stringify(narrowLayout))
+  await picker.screenshot({ path: join(outDir, 'picker-narrow-light.png') })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  check('picker.dark-theme-has-own-readable-surface', await picker.evaluate((el) => getComputedStyle(el).colorScheme === 'dark' && getComputedStyle(el).backgroundColor === 'rgb(29, 41, 41)'))
+  await picker.screenshot({ path: join(outDir, 'picker-narrow-dark.png') })
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.setViewportSize({ width: 1000, height: 700 })
+  await picker.getByRole('button', { name: '添加到消息', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  check('picker.keyboard-focus-stays-inside-modal', await picker.evaluate((el) => el.contains(document.activeElement)))
+  await page.evaluate(() => { window.__holdImport = true })
+  await picker.getByRole('button', { name: '添加到消息', exact: true }).click()
+  await page.waitForFunction(() => window.__importChanges.at(-1) === true)
+  check('picker.import-lock-disables-send-and-repeat-add', await picker.getByRole('button', { name: '添加中…', exact: true }).isDisabled() && await page.getByRole('button', { name: '发送', exact: true }).isDisabled())
+  await page.keyboard.press('Escape')
+  await picker.waitFor({ state: 'detached' })
+  await page.evaluate(() => { window.__holdImport = false; window.__releaseImport() })
+  await page.waitForFunction(() => window.__attachments.length === 7 && window.__importChanges.at(-1) === false)
+  check('picker.selected-path-import-preserves-prior-and-does-not-send', await page.evaluate(() => window.__attachments[6].name.startsWith('校园秋日') && window.__nativeImportedPath.startsWith(window.__insertionListing.directory) && window.__attachments[0].name === '中文 空格原图.png' && window.__sent.length === 1))
+  check('picker.partial-failure-shows-file-and-keeps-success', (await page.getByRole('alert').textContent()).includes('broken.png：图片文件损坏'))
+  await pickerButton.click()
+  await picker.getByRole('checkbox').first().waitFor()
+  await picker.getByRole('checkbox').nth(2).check()
+  await page.evaluate(() => { window.__insertionListing.images = window.__insertionListing.images.slice(0, 2) })
+  await picker.getByRole('button', { name: '刷新', exact: true }).click()
+  await page.waitForFunction(() => document.querySelectorAll('.insertion-picker input[type=checkbox]').length === 2)
+  check('picker.refresh-removes-deleted-file-selection', await picker.locator('input[type=checkbox]:checked').count() === 0 && await picker.getByRole('button', { name: '添加到消息', exact: true }).isDisabled())
+  await page.evaluate(() => { window.__folderError = '文件夹不可访问' })
+  await picker.getByRole('button', { name: '打开文件夹', exact: true }).click()
+  await picker.getByRole('alert').waitFor()
+  check('picker.open-folder-error-is-visible', (await picker.getByRole('alert').textContent()).includes('打开文件夹失败：文件夹不可访问'))
+  await page.evaluate(() => { window.__folderError = ''; window.__listingError = '读取被拒绝' })
+  await picker.getByRole('button', { name: '刷新', exact: true }).click()
+  await picker.getByText('读取图片列表失败：读取被拒绝', { exact: true }).waitFor()
+  check('picker.refresh-error-keeps-current-list-and-attachments', await picker.getByRole('checkbox').count() === 2 && await page.evaluate(() => window.__attachments.length === 7))
+  await page.evaluate(() => { window.__chatBusy = true; window.__renderChat() })
+  await picker.waitFor({ state: 'detached' })
+  check('picker.busy-closes-picker-and-disables-entry', await pickerButton.isDisabled())
+  await page.evaluate(() => { window.__chatBusy = false; window.__listingError = ''; window.__holdListing = true; window.__renderChat() })
+  await pickerButton.click()
+  await page.waitForFunction(() => typeof window.__releaseListing === 'function')
+  await page.evaluate(() => { window.__chatDisabled = true; window.__renderChat() })
+  await picker.waitFor({ state: 'detached' })
+  await page.evaluate(() => { window.__holdListing = false; window.__releaseListing() })
+  await page.waitForTimeout(40)
+  check('picker.session-transition-discards-late-listing', await picker.count() === 0 && await pickerButton.isDisabled() && await page.evaluate(() => window.__attachments.length === 7))
+  await page.evaluate(() => { window.__chatDisabled = false; window.__renderChat() })
 
   const result = await page.evaluate(async () => {
     const local = await import('/src/lib/local-images.ts')

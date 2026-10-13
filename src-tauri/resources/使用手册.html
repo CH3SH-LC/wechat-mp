@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="智序 1.0.0 中文使用手册，从安装与模型配置，到提供底稿、导入照片、预览改稿、保存与手动发布。">
-<title>智序 1.0.0 · 中文使用手册</title>
+<meta name="description" content="智序 1.0.1 中文使用手册，从安装与模型配置，到提供底稿、导入照片、预览改稿、保存与手动发布。">
+<title>智序 1.0.1 · 中文使用手册</title>
 <style>
 :root{--ink:#20333a;--muted:#63737a;--accent:#b24c35;--teal:#24645f;--paper:#fffdf8;--line:#deded2;--soft:#eef3ef;--warm:#faf0e5}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#e8ece9;color:var(--ink);font:16px/1.8 "Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;overflow-wrap:anywhere}a{color:var(--teal);text-underline-offset:3px}a:hover{color:var(--accent)}a:focus-visible,button:focus-visible{outline:3px solid var(--accent);outline-offset:4px}button{font:inherit;cursor:pointer}.book{max-width:940px;margin:34px auto 64px}.sheet{background:var(--paper);padding:44px 54px 32px;margin-bottom:22px;border:1px solid var(--line);scroll-margin-top:20px}.kicker{margin:0 0 10px;color:var(--accent);font-size:12px;letter-spacing:2px;font-weight:700}.chapter{display:flex;align-items:baseline;gap:18px;border-bottom:2px solid var(--ink);padding-bottom:15px;margin-bottom:22px}.number{font:italic 40px/1 Georgia,serif;color:var(--accent)}h1,h2,h3,p{margin-top:0}h1{font-family:"Noto Serif SC","Source Han Serif SC","SimSun",serif;font-size:64px;line-height:1.18;letter-spacing:3px;margin:20px 0}h1 span{display:block;font-family:"Microsoft YaHei",sans-serif;font-size:27px;letter-spacing:1px;font-weight:400;margin-top:18px}h2{font-size:25px;line-height:1.4;margin:0}h3{font-size:17px;line-height:1.5;margin:22px 0 8px}p{margin-bottom:12px}.lead{font-size:20px;line-height:1.7}.sub{color:var(--muted);font-size:14px}.rule{height:4px;width:64px;background:var(--accent);margin:25px 0}.cover{padding-top:54px}.cover-top{display:flex;justify-content:space-between;gap:12px;align-items:center;color:var(--teal);font-size:13px;font-weight:700}.edition{border:1px solid var(--teal);padding:3px 11px;white-space:nowrap}.promise{border-left:3px solid var(--accent);padding:4px 0 4px 18px;margin:24px 0}.route{display:grid;grid-template-columns:repeat(5,1fr);border-top:1px solid var(--line);border-bottom:1px solid var(--line);margin:25px 0}.route div{padding:16px 8px 16px 0}.route b{display:block;font-size:15px}.route small{font-size:12px;color:var(--muted)}.toc{display:grid;grid-template-columns:1fr 1fr;gap:7px 24px;margin:16px 0 24px}.toc a{text-decoration:none;display:flex;gap:10px;border-bottom:1px dotted var(--line);padding:4px 0}.toc span{color:var(--accent);font:italic 19px Georgia,serif}.note,.warning{padding:14px 18px;margin:17px 0;border-left:3px solid var(--teal);background:var(--soft);font-size:14px}.warning{background:var(--warm);border-color:var(--accent)}.steps{list-style:none;counter-reset:step;padding:0;margin:16px 0}.steps>li{counter-increment:step;position:relative;padding-left:39px;margin-bottom:17px}.steps>li:before{content:counter(step,decimal-leading-zero);position:absolute;left:0;top:1px;color:var(--accent);font:bold 21px/1.5 Georgia,serif}.steps p{margin:4px 0 0}.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}.panel{border:1px solid var(--line);padding:15px 18px}.panel h3{margin-top:0}.panel p:last-child{margin-bottom:0}.ui{padding:2px 6px;background:#eaf0ec;border:1px solid #d4dfd8;border-radius:3px;font-size:.92em}.path{font-family:Consolas,"Microsoft YaHei",monospace;font-size:.92em;word-break:break-all}.app-map{border:1px solid #becbc6;margin:19px 0}.map-top{background:var(--ink);color:white;padding:11px 14px;font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.map-body{display:grid;grid-template-columns:1fr 1fr}.map-body>div{padding:18px}.map-body>div+div{border-left:1px solid var(--line);background:var(--soft)}.map-body strong{display:block;margin-bottom:6px}.map-body p{font-size:14px;margin:0}.tag{font-size:12px;color:var(--muted)}.sample{margin:18px 0;border:1px solid #d6dfd7;background:#f4f6f0;break-inside:avoid}.sample-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 15px;border-bottom:1px solid #d6dfd7;color:var(--teal)}.sample-head h3{font-size:16px;margin:0}.copy{border:1px solid #aebfb5;background:var(--paper);padding:3px 11px;border-radius:3px;font-size:12px;color:var(--teal);flex:none}.sample-text{margin:0;padding:15px 17px;white-space:pre-wrap;font:14px/1.8 "Microsoft YaHei","PingFang SC",sans-serif;user-select:text}.quote{margin:12px 0;padding:12px 15px;border-left:2px solid var(--line);background:#f6f5ef;font-size:14px}.quote p{margin:0}ul,ol{padding-left:23px;margin:9px 0 15px}li{margin:5px 0}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:10px 11px}th{background:var(--soft)}td:first-child{font-weight:600;width:25%}tr{break-inside:avoid}.checklist{list-style:none;padding:0}.checklist li{padding-left:22px;position:relative}.checklist li:before{content:"□";position:absolute;left:0;color:var(--teal)}.footer{display:flex;justify-content:space-between;gap:16px;border-top:1px solid var(--line);margin-top:27px;padding-top:12px;color:var(--muted);font-size:11px}.footer a{color:var(--muted);text-decoration:none}.tools{display:flex;justify-content:flex-end;max-width:940px;margin:22px auto -18px;padding:0 4px}.print{border:1px solid #a9b8b0;background:var(--paper);color:var(--teal);padding:7px 16px;border-radius:4px;font-size:13px}.sources{font-size:12px;color:var(--muted)}.sources li{margin:3px 0}.compact p{margin-bottom:8px}.compact h3{margin-top:17px}
 @media(max-width:650px){body{font-size:15px}.book{margin:18px 10px 36px}.sheet{padding:28px 23px 23px;margin-bottom:15px}.cover{padding-top:32px}h1{font-size:52px}h1 span{font-size:23px}.lead{font-size:18px}.chapter{gap:13px}.number{font-size:33px}h2{font-size:22px}.toc,.two{grid-template-columns:1fr}.route{grid-template-columns:repeat(3,1fr)}.route div{padding:11px 5px 11px 0}.map-body{grid-template-columns:1fr}.map-body>div+div{border-left:0;border-top:1px solid var(--line)}.sample-head{align-items:flex-start}.tools{margin:15px 12px 0}th,td{padding:8px 7px}td:first-child{width:28%}}
@@ -14,11 +14,11 @@
 <div class="tools"><button class="print" type="button" id="print-manual">打印 / 保存为 PDF</button></div>
 <main class="book">
 <section class="sheet cover" id="start">
-<div class="cover-top"><span>给第一次做公众号推文的你</span><span class="edition">1.0.0 中文版</span></div>
+<div class="cover-top"><span>给第一次做公众号推文的你</span><span class="edition">1.0.1 中文版</span></div>
 <h1>智序<span>从一份材料，到一篇推文。</span></h1><div class="rule"></div>
 <p class="lead">把底稿和照片交给智序，<br>用平常说话的方式，一起把文章改好。</p>
 <p>智序是 Windows 上的公众号创作桌面软件。它能协助写作、排版和制作插画，在右侧显示手机尺寸的预览，把成稿保存在本机，并导出给你手动使用。你不需要会编程，也不需要学习排版语法。</p>
-<div class="promise"><strong>已经有完整底稿，就从底稿开始。</strong><br>只有一个想法也可以。先说明读者、主题和手里的事实，没想好的版式细节可以交给 AI。</div>
+<div class="promise"><strong>1.0.1 新增「待插入图片」。</strong><br>照片先放进专用文件夹，再回智序刷新、勾选，和需求一起发送。完整底稿仍可直接粘贴，没想好的版式细节可以交给 AI。</div>
 <div class="route" aria-label="创作流程"><div><b>01 安装配置</b><small>连上自己的模型账号</small></div><div><b>02 提供材料</b><small>底稿、事实、原图</small></div><div><b>03 等待与预览</b><small>含一次文案复核</small></div><div><b>04 对话修改</b><small>逐步改到你满意</small></div><div><b>05 保存导出</b><small>重开核对，手动发布</small></div></div>
 <h3>按顺序读一遍，或直接跳到需要的地方</h3>
 <nav class="toc" aria-label="手册目录"><a href="#install"><span>01</span>安装与认识界面</a><a href="#setup"><span>02</span>第一次配置模型</a><a href="#materials"><span>03</span>准备底稿与导入原图</a><a href="#examples"><span>04</span>三个可复制的输入示例</a><a href="#preview"><span>05</span>风格、等待与手机预览</a><a href="#revise"><span>06</span>修改、保存与重新打开</a><a href="#export"><span>07</span>导出与公众号手动使用</a><a href="#backup"><span>08</span>素材工坊与本机备份</a><a href="#help"><span>09</span>遇到问题这样处理</a></nav>
@@ -27,16 +27,16 @@
 <section class="sheet" id="install">
 <div class="kicker">准备好电脑，先打开工作台</div><div class="chapter"><span class="number">01</span><h2>安装与认识界面</h2></div>
 <p>本次发布提供 Windows x64 安装包。准备一台可联网的 Windows 电脑和一个浏览器，用于登录模型服务商网站。</p>
-<ol class="steps"><li><strong>下载安装包。</strong><p>打开 <a href="https://github.com/CH3SH-LC/wechat-mp/releases/tag/v1.0.0">智序 GitHub Releases 下载页</a>，找到 <strong>1.0.0</strong>，展开 <span class="ui">Assets</span>。下载 <span class="path">zhixu-1.0.0-windows-x64-setup.exe</span>，不要选 <span class="path">Source code</span> 源码压缩包。手册附件为 <span class="path">zhixu-1.0.0-user-guide.html</span> 和 <span class="path">zhixu-1.0.0-user-guide.pdf</span>。</p></li>
+<ol class="steps"><li><strong>下载安装包。</strong><p>打开 <a href="https://github.com/CH3SH-LC/wechat-mp/releases/tag/v1.0.1">智序 GitHub Releases 下载页</a>，找到 <strong>1.0.1</strong>，展开 <span class="ui">Assets</span>。下载 <span class="path">zhixu-1.0.1-windows-x64-setup.exe</span>，不要选 <span class="path">Source code</span> 源码压缩包。手册附件为 <span class="path">zhixu-1.0.1-user-guide.html</span> 和 <span class="path">zhixu-1.0.1-user-guide.pdf</span>。</p></li>
 <li><strong>双击安装，按向导完成。</strong><p>可使用向导给出的默认安装位置，也可选择你需要的位置。安装过程中保持联网。若缺少 WebView2，安装程序会联网下载安装；它是让智序显示界面的微软组件。</p></li>
 <li><strong>从开始菜单打开「智序」。</strong><p>如果你拿到的是软件提供者已经准备好的项目目录，可双击其中的 <span class="path">启动智序.cmd</span>。不要单独移动程序文件或手册。</p></li></ol>
 <div class="warning"><strong>Windows 弹出保护提示时：</strong>先确认文件确实来自上述发布页，且文件名与版本一致。确认来源可信后，才按系统提供的「更多信息 → 仍要运行」继续；不确定来源时，回发布页重新下载，无需关闭系统安全防护。</div>
 <h3>第一次看到的界面</h3>
-<div class="app-map" aria-label="界面位置文字示意"><div class="map-top"><strong>智序</strong><span>对话　文档库　素材工坊</span><span>使用手册　设置</span></div><div class="map-body"><div><strong>左侧：AI 对话</strong><p>输入材料和修改要求。输入框旁有「图片」「发送」；生成时「发送」会变成「停止」。</p></div><div><strong>右侧：推文预览 · 375px</strong><p>像看手机文章一样上下滚动。上方有缩放、导出图片和导出 HTML 等按钮。</p></div></div></div>
+<div class="app-map" aria-label="界面位置文字示意"><div class="map-top"><strong>智序</strong><span>对话　文档库　素材工坊</span><span>使用手册　设置</span></div><div class="map-body"><div><strong>左侧：AI 对话</strong><p>输入材料和修改要求。输入框旁有「图片」「待插入图片」「发送」；生成时「发送」会变成「停止」。</p></div><div><strong>右侧：推文预览 · 375px</strong><p>像看手机文章一样上下滚动。上方有缩放、导出图片和导出 HTML 等按钮。</p></div></div></div>
 <p class="tag">这是位置示意，不是软件截图。窗口较窄时，按钮可能换行。</p>
 <ul><li><span class="ui">对话</span>：写文章和改文章的主要地方。</li><li><span class="ui">文档库</span>：找到已保存的成稿，打开后接着修改。</li><li><span class="ui">展开会话栏</span>：查看历史对话，点 <span class="ui">新建</span> 开始另一篇。</li><li><span class="ui">使用手册</span>：随时打开这份说明。浏览器显示的是手册，创作仍在智序桌面窗口里完成。</li></ul>
 <div class="note">更新前先备份作品目录，关闭智序，再运行新版安装包。软件文件与作品目录分开保存；卸载、覆盖安装或换电脑前，都建议先按第 08 节做好备份。</div>
-<div class="footer"><span>智序 1.0.0 · 安装与界面</span><a href="#start">回到目录</a><span>01</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 安装与界面</span><a href="#start">回到目录</a><span>01</span></div></section>
 <section class="sheet" id="setup">
 <div class="kicker">只需完成一次，以后直接开始写</div><div class="chapter"><span class="number">02</span><h2>第一次配置模型</h2></div>
 <p><strong>API Key 可以理解为模型服务的专用钥匙。</strong>它让智序使用你自己的 DeepSeek 开放平台账号。能登录 DeepSeek 网页聊天，不代表开放平台已有可用余额；智序不会随安装赠送模型额度。</p>
@@ -50,16 +50,19 @@
 <p>第一次使用可保持默认关闭。它用于额外复核排版与插图，会增加模型调用。它与成稿过程中的<strong>一次文案复核</strong>不同：文案复核会随创作流程执行，不需要勾选这个选项。</p>
 <div class="note"><strong>哪些操作会产生模型费用？</strong>对话、起草、文案复核、改稿、制作或重试 AI 素材，以及开启后的视觉复核，都可能调用模型。反复重试也可能收费；停止请求不代表已经产生的用量会退回。打开已存文档、普通预览和导出本身不需要新生成内容。</div>
 <p class="sub">平台入口可能要求先登录。上面的密钥与充值地址来自 DeepSeek 官方说明；页面菜单变化时，可回开放平台首页寻找「API Keys」和余额相关入口。</p>
-<div class="footer"><span>智序 1.0.0 · 模型配置</span><a href="#start">回到目录</a><span>02</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 模型配置</span><a href="#start">回到目录</a><span>02</span></div></section>
 <section class="sheet" id="materials">
 <div class="kicker">材料越准确，来回核对越轻松</div><div class="chapter"><span class="number">03</span><h2>准备底稿与导入原图</h2></div>
 <div class="two"><div class="panel"><h3>已有完整底稿：优先这样做</h3><p>从 Word、记事本等地方复制正文，粘贴到输入框，再补一句想要的风格。需要原文不动，就写：「正文逐字保留，只调整排版。」</p></div><div class="panel"><h3>只有需求：也能开始</h3><p>说清主题、给谁看、希望读者做什么，并提供已知事实。可以让 AI 安排结构和配图，不必先规划每一段、每一种装饰。</p></div></div>
-<h3>先给事实，再让 AI 发挥</h3><p>校园活动常用材料包括：主办方、活动名称、时间地点、面向对象、报名方式、截止时间和已有成果。没有确认的数字、嘉宾、奖项或联系方式，不要让 AI 自己补成事实。可以直说「这项未定，请先问我」或「暂时不要写这一项」。</p>
-<p>例如：「这篇给本校大一同学看；原稿已审定，正文不要删改；整体明亮一些，分成报名、活动安排、注意事项三个部分。」这一两句话已经足够指导方向。</p>
-<h3>把真实活动照片放进文章</h3><ol class="steps"><li><strong>先把照片保存到电脑。</strong><p>在对话输入框旁点 <span class="ui">图片</span>，选择本地文件。也可以把图片文件拖入对话区，或在输入框中粘贴剪贴板里的图片。</p></li><li><strong>等缩略图出现，再补一句说明。</strong><p>看到「正在保存原图…」时先等待。写明图片用途，例如：「第一张是现场全景，放在开头；第二张是签到台，放在活动安排后。请使用这两张原图，不要重画。」选错了可以在发送前点缩略图上的 <span class="ui">移除</span>。</p></li><li><strong>与底稿或修改要求一起发送。</strong><p>每条消息最多 8 张，单张小于 32MB；支持 PNG、JPEG、WebP、GIF、BMP。仅附图还不能发送，需要同时输入文字说明。后续补图时，继续在同一会话里发送即可。</p></li></ol>
-<div class="note">软件会保存所选原图，并用独立的识别副本帮助模型理解图片。HTML 导出保留原图数据；导出整篇 PNG 时，图片会随文章一起渲染。输入图片的完整本地路径也可读取，但第一次用「图片」按钮更直观。</div>
-<div class="warning"><strong>插画与现场照片要分清。</strong>AI 可以制作主题插画和装饰，不能凭空补出真实活动记录。如果照片稍后提供，明确说「照片稍后补」；看到照片占位提示，说明照片还没补齐，导出前要用原图替换。不要把 AI 插画标成现场实拍。</div>
-<div class="footer"><span>智序 1.0.0 · 提供材料</span><a href="#start">回到目录</a><span>03</span></div></section>
+<p>活动材料应包含已知的时间、地点、主办方和参与方式。未确认的数字、奖项或联系方式，直接说明「请先问我」或「暂时不要写」，不要让 AI 补成事实。</p>
+<h3>照片先放进「待插入图片」</h3>
+<ol class="steps"><li><strong>点「待插入图片」，再点「打开文件夹」。</strong><p>入口在对话输入框的 <span class="ui">图片</span> 旁，选择面板会显示本机实际路径。把照片复制到打开的文件夹里，<strong>直接放在这一层，不要放进子文件夹</strong>。</p></li><li><strong>回到智序，点「刷新」，勾选后添加。</strong><p>可多选图片添加到当前消息。等输入框上方出现缩略图；看到「正在保存原图…」时先等待。选错了可在发送前点缩略图上的 <span class="ui">移除</span>。</p></li><li><strong>写明用途，与底稿或修改要求一起发送。</strong><p>例如：「第一张放在开头，第二张放在活动安排后，请使用原图，不要重画。」仅附图还不能发送，需要同时输入文字。</p></li></ol>
+<p class="sub">也可在 Windows 文件资源管理器地址栏粘贴这一行，按回车打开：</p>
+<div class="quote path">%USERPROFILE%\Documents\wechat-mp-workspace\待插入图片</div>
+<p class="sub">支持 PNG、JPEG、WebP、GIF、BMP；每条消息合计最多 8 张，单张原图不超过 32MB。原来的「图片」按钮、粘贴和拖入仍可使用，也可输入图片的完整本地路径。</p>
+<div class="note"><strong>放进目录不会自动发给模型。</strong>选中添加并发送消息后，图片才随该次请求使用。软件保存原图副本，并用独立的识别副本帮助模型理解图片；删除目录里的源图不会删除已保存的副本。</div>
+<div class="warning"><strong>插画与现场照片要分清。</strong>AI 插画不能标成现场实拍。看到「待补照片」时，需添加真实原图，补齐后再导出。</div>
+<div class="footer"><span>智序 1.0.1 · 提供材料</span><a href="#start">回到目录</a><span>03</span></div></section>
 <section class="sheet" id="examples">
 <div class="kicker">不用专门学提示词，照着说就可以</div><div class="chapter"><span class="number">04</span><h2>三个可复制的输入示例</h2></div>
 <p>点「复制示例」后，粘贴到智序输入框。下面的社团、时间和地点都是<strong>演示材料</strong>，请替换成你自己的事实后再发送。按 <span class="ui">Enter</span> 发送，<span class="ui">Shift + Enter</span> 换行，也可点 <span class="ui">发送</span>。</p>
@@ -72,7 +75,7 @@
 <div class="sample"><div class="sample-head"><h3>例 2 · 只有事实，请 AI 起草</h3><button class="copy" type="button" data-copy="sample-2">复制示例</button></div><div class="sample-text" id="sample-2">帮青禾摄影社写一篇招新推文，主要给大一同学看，语气亲切自然。我们每周六下午组织校园拍摄，每月有一次作品交流，新手可以参加，手机也能拍。报名方式是9月20日17:00—19:00到大学生活动中心一楼服务台现场登记。不要添加获奖经历、名额或费用信息，缺少必要事实就问我。视觉上明亮活泼，像校园票笺，配与摄影有关的插画；篇幅和结构你来安排。</div></div>
 <div class="sample"><div class="sample-head"><h3>例 3 · 实践记录，配自己的现场照片</h3><button class="copy" type="button" data-copy="sample-3">复制示例</button></div><div class="sample-text" id="sample-3">请根据下面材料写一篇社区实践回顾，给学院师生看，语气平实，不夸大成果。10月12日下午，书页同行实践小组在青禾社区阅读室，协助整理归还图书、检查书架标签，并记录需要补充的图书类别。参与者共12名，后续会把需求记录交给阅读室负责人。没有开展捐赠，也没有统计服务人数，请不要补写。整体用蓝金色书页风，章节清晰。我通过“图片”按钮附了两张现场照片，第一张是整理书架，第二张是记录表，请使用原图，放在相关内容附近，不要改画成插画。</div></div>
 <p class="sub">使用例 3 前，请先添加自己的两张照片；没有照片就删掉示例最后两句。若手册的复制按钮不可用，选中示例文字，右键复制即可。</p>
-<div class="footer"><span>智序 1.0.0 · 普通输入示例</span><a href="#start">回到目录</a><span>04</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 普通输入示例</span><a href="#start">回到目录</a><span>04</span></div></section>
 <section class="sheet" id="preview">
 <div class="kicker">先把方向说清，再一起看成稿</div><div class="chapter"><span class="number">05</span><h2>风格、等待与手机预览</h2></div>
 <h3>用一句话给风格方向</h3><p>风格不是必填表格，也没有必须先选好的模板。你可以只说「适合大学生，清楚好读」，也可以给更明确的感觉：</p>
@@ -84,7 +87,7 @@
 <h3>在右侧，像读手机文章一样检查</h3><p><span class="ui">推文预览 · 375px</span> 指的是手机阅读宽度。鼠标放进预览内上下滚动，点上方的百分比按钮可切换缩放。它是电脑里的手机尺寸预览，不是已经发布到你的手机。</p>
 <ul class="checklist"><li><strong>先看事实：</strong>人名、日期、地点、数字、报名方式是否正确。</li><li><strong>再读正文：</strong>有没有遗漏原稿、无依据的新说法、重复或不自然的句子。</li><li><strong>再看图和版式：</strong>原图是否放对位置，插画是否贴题，文字是否清晰，有没有遮挡。</li><li><strong>看完最后一屏：</strong>结尾、联系方式和照片占位是否处理好。</li></ul>
 <p class="sub">「质量检查 · 通过」是软件检查结果，不等于事实正确或审美已经合你心意。公众号后台的手机预览仍需在发布前再看一次。</p>
-<div class="footer"><span>智序 1.0.0 · 风格与预览</span><a href="#start">回到目录</a><span>05</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 风格与预览</span><a href="#start">回到目录</a><span>05</span></div></section>
 <section class="sheet" id="revise">
 <div class="kicker">把“不太对”说成具体的修改要求</div><div class="chapter"><span class="number">06</span><h2>修改、保存与重新打开</h2></div>
 <p>第一稿只是起点。在<strong>同一会话</strong>继续说哪里要改，每轮先解决最在意的一两件事。可以在预览里点一下段落或图片，把对应位置带进输入框，再补上要求；点选本身不会直接修改文章。</p>
@@ -97,7 +100,7 @@
 <ol class="steps"><li><strong>等待这一轮结束。</strong><p>右侧出现 <span class="ui">成品已验收并保存</span>，才表示本轮已保存。如果显示「写入文档库尚未确认」或保存失败，不要马上关闭软件；先尝试导出 HTML 留一份，再按提示处理。</p></li><li><strong>点顶部「文档库」，找标题并打开。</strong><p>打开文档会回到关联会话，继续发修改要求即可。同一篇文章的修改会更新原文档，不会每轮都在库里多出一篇。</p></li><li><strong>重要文章再做一次重开核对。</strong><p>确认保存后正常关闭智序，再打开，在文档库找到该稿；核对末段、原图和最近改动。准备开始另一篇时，展开会话栏，点 <span class="ui">新建</span>。</p></li></ol>
 <div class="warning"><strong>不要用「清空」开始下一篇。</strong>「清空」会清空当前会话并删除其文档；会话栏和文档库的「删除」也会连带删除关联内容，界面会要求确认。这些操作不能当作撤销改稿或关闭预览使用。</div>
 <p class="sub">若出现「已恢复上一版成品」，本轮新稿没有替换旧成品；「草稿未通过」则仍需处理问题。先看状态和具体原因，再继续修改。</p>
-<div class="footer"><span>智序 1.0.0 · 改稿与保存</span><a href="#start">回到目录</a><span>06</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 改稿与保存</span><a href="#start">回到目录</a><span>06</span></div></section>
 <section class="sheet" id="export">
 <div class="kicker">带走成稿，最后在公众号里核对</div><div class="chapter"><span class="number">07</span><h2>导出与公众号手动使用</h2></div>
 <p>确认预览是你要的版本、图片齐全，并已保存后，再使用右侧上方的导出按钮。智序不替你登录公众号、保存后台草稿或群发。</p>
@@ -107,33 +110,34 @@
 <p><span class="ui">复制 HTML</span> 复制的是源文本，不是公众号可直接粘贴的富文本。不要把它粘进公众号正文。当前没有「一键导入公众号排版」；如果需要可选择的正文，请在后台整理文字、上传图片并重新检查版式。普通复制粘贴也不能保证完整保留样式。</p>
 <h3>放到公众号：这一步由你操作</h3><ol class="steps"><li>在浏览器打开 <a href="https://mp.weixin.qq.com/">微信公众平台</a>，用有权限的账号登录，进入图文内容编辑页面。</li><li>填写文章标题、作者、摘要和封面。采用图片方案时，将导出的分页图按顺序插入正文；标题和封面需要另行设置，正文长图不会自动成为后台封面。</li><li>用后台提供的预览功能发到手机，检查图片顺序、清晰度、衔接、文字链接和二维码。遇到图片尺寸或大小限制，以后台当前提示为准。</li><li>确认内容与排版后，由你在后台保存草稿或发布。界面名称和账号权限可能不同，以实际页面为准。</li></ol>
 <div class="warning"><strong>按钮上有「草稿」时先停一下。</strong>「导出草稿 HTML」或「导出图片（草稿）」用于取回未通过检查的内容，并不表示适合发布。先处理未完成素材、缺照片或排版问题，再导出最终稿。</div>
-<div class="footer"><span>智序 1.0.0 · 导出与发布</span><a href="#start">回到目录</a><span>07</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 导出与发布</span><a href="#start">回到目录</a><span>07</span></div></section>
 <section class="sheet" id="backup">
 <div class="kicker">把常用素材留下，也把重要作品备好份</div><div class="chapter"><span class="number">08</span><h2>素材工坊与本机备份</h2></div>
-<h3>可选：做一套自己的常用插画</h3><p>第一次写稿可以先跳过素材工坊，直接在对话中提出配图要求。需要经常使用同一套素材时，再进入顶部 <span class="ui">素材工坊</span>。</p>
-<ol class="steps"><li>选择分类，例如 <span class="ui">开篇横幅</span>、<span class="ui">小节装饰</span> 或 <span class="ui">宽幅插图</span>，用文字描述内容和配色，然后点 <span class="ui">制作并入库</span>。</li><li>打开素材后，可在 <span class="ui">连续修改</span> 中写「花心改成金黄，绿色再淡一点」，点 <span class="ui">生成新版</span>。看过前后预览，满意再点 <span class="ui">采纳为新版本</span>；不满意可点 <span class="ui">放弃</span>。</li><li>之后写推文时，可在对话中说明要复用哪个素材。旧文档保留保存时的素材副本；库里更新素材不会自动替换所有旧稿，需要时再用 <span class="ui">用新版更新</span> 并检查结果。</li></ol>
-<p class="sub">工坊制作的是插画与装饰。真实照片请从对话输入框的「图片」导入。工坊里的「SVG 源」「替换源」属于进阶操作，新手无需使用。</p>
-<h3>作品到底保存在电脑哪里？</h3><p>打开 Windows 文件资源管理器，在上方地址栏粘贴下面这一行，按回车即可。<strong>这是文件夹地址，不是要运行的命令。</strong></p>
+<h3>可选：做一套自己的常用插画</h3><p>需要反复使用同一套插画时，再进入顶部 <span class="ui">素材工坊</span>；第一次写稿可直接在对话中提配图要求。</p>
+<ol class="steps"><li>选择 <span class="ui">开篇横幅</span> 等分类，描述内容和配色，点 <span class="ui">制作并入库</span>。</li><li>打开素材，在 <span class="ui">连续修改</span> 中提要求，点 <span class="ui">生成新版</span>。看过预览，满意再点 <span class="ui">采纳为新版本</span>，否则点 <span class="ui">放弃</span>。</li><li>写稿时说明要复用哪个素材。库中更新不会替换旧稿的素材副本；需要时点 <span class="ui">用新版更新</span> 并检查结果。</li></ol>
+<p class="sub">工坊制作插画与装饰。真实照片用对话区的「待插入图片」或「图片」添加；新手无需使用「SVG 源」「替换源」。</p>
+<h3>作品到底保存在电脑哪里？</h3><p>在 Windows 文件资源管理器地址栏粘贴下面这一行，按回车。<strong>这是文件夹地址，不是命令。</strong></p>
 <div class="quote path">%USERPROFILE%\Documents\wechat-mp-workspace</div>
-<p class="sub">通常对应「C:\Users\你的用户名\Documents\wechat-mp-workspace」。即使 Windows 的“文档”被移动到 OneDrive 或别的盘，当前版本仍使用上述用户目录下的 Documents。</p>
-<table><thead><tr><th>里面的名称</th><th>存放什么</th></tr></thead><tbody><tr><td class="path">sessions</td><td>对话记录</td></tr><tr><td class="path">documents</td><td>文稿与已保存版本</td></tr><tr><td class="path">assets / local-images</td><td>插画素材 / 导入的原图</td></tr><tr><td class="path">exports</td><td>导出的 HTML；图片在其中以 img- 开头的子文件夹</td></tr><tr><td class="path">settings.json</td><td>模型设置与 API Key，按明文保存</td></tr></tbody></table>
-<h3>最省心的备份方法</h3><p>确认已保存并关闭智序，<strong>复制整个 <span class="path">wechat-mp-workspace</span> 文件夹</strong>到自己的移动硬盘或受保护的备份位置，加上日期。仅备份 exports 只能留住导出文件，不能完整恢复会话续改。</p>
-<div class="warning">整份备份包含密钥和对话，请勿发到公开群或作为反馈附件。恢复旧备份前，先把当前文件夹再备一份；覆盖可能丢掉较新的作品。不会处理时先保留两份，请软件提供者协助。</div>
-<div class="note"><strong>本地保存不等于离线创作。</strong>创作、复核与改稿时，相关对话、文章和选定图片的识别副本会发送给配置的模型服务；密钥也会用于向该接口认证。只输入和选择适合交给该服务处理的材料，避免身份证号、密码和未获授权的个人信息。</div>
-<div class="footer"><span>智序 1.0.0 · 素材与备份</span><a href="#start">回到目录</a><span>08</span></div></section>
+<p class="sub">%USERPROFILE% 会替换为你的 Windows 用户目录。即使“文档”已移到 OneDrive 或别的盘，本版仍使用上述位置。</p>
+<table><thead><tr><th>里面的名称</th><th>存放什么</th></tr></thead><tbody><tr><td>待插入图片</td><td>供你复制源照片，再回智序刷新、勾选；只扫描直接一层</td></tr><tr><td class="path">local-images</td><td>程序管理的已导入原图副本；不要手动改名、替换或删除</td></tr><tr><td class="path">sessions / documents</td><td>对话记录 / 文稿与已保存版本，位置不变</td></tr><tr><td class="path">assets / exports</td><td>插画素材 / 导出文件，位置不变；图片在 exports 中以 img- 开头的子文件夹</td></tr><tr><td class="path">settings.json</td><td>模型设置与 API Key，按明文保存</td></tr></tbody></table>
+<p class="sub">移走或删除「待插入图片」中的源照片，已导入的副本和文稿仍在。不要把照片直接复制进 local-images。</p>
+<h3>最省心的备份方法</h3><p>保存后关闭智序，<strong>复制整个 <span class="path">wechat-mp-workspace</span> 文件夹</strong>到受保护的位置，加上日期。只备份 exports 不能恢复会话续改。</p>
+<div class="warning">备份包含密钥和对话，请勿公开或用作反馈附件。恢复旧备份前，先备份当前目录，避免覆盖新作品；不确定时保留两份，请软件提供者协助。</div>
+<div class="note"><strong>本地保存不等于离线创作。</strong>创作、复核与改稿会将相关对话、文章及选定图片的识别副本发送给模型服务，并用密钥认证。只提供适合交给该服务处理的材料。</div>
+<div class="footer"><span>智序 1.0.1 · 素材与备份</span><a href="#start">回到目录</a><span>08</span></div></section>
 <section class="sheet compact" id="help">
 <div class="kicker">先读提示，再做最小的一步处理</div><div class="chapter"><span class="number">09</span><h2>遇到问题这样处理</h2></div>
-<h3>发送后报密钥错误、余额不足，或一直连接不上</h3><p><strong>401 / 认证失败：</strong>重新核对 API Key 是否完整，以及接口地址是否仍为官方地址，保存后再发。<strong>402 / 余额不足：</strong>去开放平台查余额。<strong>429 / 请求过多、500 / 503：</strong>稍后重试，别连续点发送。网络错误先确认电脑能打开官方平台网页。官方解释见 <a href="https://api-docs.deepseek.com/zh-cn/quick_start/error_codes/">DeepSeek 错误码说明</a>。</p>
-<h3>提示模型不存在、不可用或没有权限</h3><p>当前版本固定使用 deepseek-flash，不能在设置中自行切换模型。即使已填密钥、已有余额，也不代表你的账号一定能调用该模型。请记录错误文字并联系软件维护者，核对服务支持情况；不要因此反复充值或尝试陌生接口。</p>
-<h3>等待很久、提示超时，或停在某个阶段</h3><p>生成带图文章可能需要几分钟。若已明确报超时，先读错误原因，检查网络后在原会话重试；可以先要求少量配图。若长期没有进展，可点 <span class="ui">停止</span>，等工作状态结束。不要把等待中的一轮当作已保存，也不要连续重新发送同一请求。</p>
-<h3>打开后白屏、黑屏，或窗口无响应</h3><p>先等片刻；若出现界面恢复提示，按提示处理。仍异常时，正常关闭后重开，并从文档库检查已存稿。若持续无法显示，可从 <a href="https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/">微软 WebView2 官方下载页</a>安装或修复对应的 Evergreen Runtime，再重开。不要为此删除作品文件夹。未发送的输入或未保存内容可能无法恢复。</p>
-<h3>素材没出来，或文章里还有「待补照片」</h3><p>看预览上方的「仍有…个素材未完成」及原因；对生成失败的素材可点旁边 <span class="ui">重试</span>，会再次调用模型。待补照片需要你从 <span class="ui">图片</span> 导入真实原图，不是点重试就能得到现场照片。补齐以后再检查、保存和导出。</p>
-<h3>明明出现了新稿，预览却还是旧的</h3><p>若显示「已恢复上一版成品」或文案复核未完成，本轮未替换正式成品。看提示列出的原因，在同一会话继续要求修正；必要时用明确标注的草稿导出入口留存候选。不要以聊天里“完成了”的文字代替右侧状态。</p>
-<h3>设置、文档库读取失败，或保存失败</h3><p>先点界面提供的 <span class="ui">重新读取</span> / <span class="ui">重试</span>。保存失败时先导出当前稿留存，检查磁盘空间和文件夹是否可写。「恢复默认」会清空本机 API Key；设置损坏时会替换旧配置，先备份再处理，不要把重置当作常规修复步骤。</p>
-<h3>内容不满意，或费用比预想多</h3><p>引用具体段落或图片，说明希望保留什么、改掉什么；已审定的底稿写明“正文逐字保留”。费用去平台查看实际用量；可以减少反复重试和不必要的配图，保持视觉复核关闭。软件不能保证每篇固定价格，也不能保证一次生成就满意。</p>
+<h3>发送后报密钥错误、余额不足，或一直连接不上</h3><p><strong>401 / 认证失败：</strong>核对 API Key 和官方接口地址，保存后再发。<strong>402 / 余额不足：</strong>去开放平台查余额。<strong>429 / 请求过多、500 / 503：</strong>稍后重试。网络错误先确认能打开官方平台网页。详见 <a href="https://api-docs.deepseek.com/zh-cn/quick_start/error_codes/">DeepSeek 错误码说明</a>。</p>
+<h3>提示模型不存在、不可用或没有权限</h3><p>本版固定使用 deepseek-flash，不能在设置中切换。已有密钥和余额不代表账号一定支持该模型；请记录错误并联系软件维护者核对，不要反复充值或尝试陌生接口。</p>
+<h3>等待很久、提示超时，或停在某个阶段</h3><p>带图文章可能需要几分钟。报超时后，检查网络再在原会话重试，也可减少配图。长期无进展可点 <span class="ui">停止</span>，等工作状态结束。等待中的一轮不等于已保存，不要重复发送。</p>
+<h3>打开后白屏、黑屏，或窗口无响应</h3><p>先等片刻并按恢复提示处理；仍异常时正常关闭后重开，检查已存稿。持续无法显示，可从 <a href="https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/">微软 WebView2 官方下载页</a>安装或修复 Evergreen Runtime。不要删除作品目录；未发送或未保存的内容可能无法恢复。</p>
+<h3>素材没出来，或文章里还有「待补照片」</h3><p>看预览上方的「仍有…个素材未完成」及原因；对生成失败的素材可点旁边 <span class="ui">重试</span>，会再次调用模型。待补照片需从 <span class="ui">待插入图片</span> 或 <span class="ui">图片</span> 添加原图并发送。目录列表没显示照片时，先点刷新，确认是支持的格式且没有放在子文件夹里。</p>
+<h3>明明出现了新稿，预览却还是旧的</h3><p>「已恢复上一版成品」或复核未完成，表示本轮未替换正式成品。按提示在同一会话修正，必要时导出标为草稿的候选。是否完成以右侧状态为准。</p>
+<h3>设置、文档库读取失败，或保存失败</h3><p>先点 <span class="ui">重新读取</span> / <span class="ui">重试</span>。保存失败先导出留存，检查磁盘空间和目录权限。「恢复默认」会清空 API Key，设置损坏时还会替换旧配置；先备份再处理。</p>
+<h3>内容不满意，或费用比预想多</h3><p>指出具体段落或图片，说明保留和修改范围；已审定底稿写明“正文逐字保留”。去平台查实际用量，减少反复重试和不必要的配图，保持视觉复核关闭。每篇费用和生成效果都不能保证。</p>
 <div class="note"><strong>需要反馈给软件提供者：</strong>记录智序版本、出错时间、刚才点了什么，以及完整错误文字。可到 <a href="https://github.com/CH3SH-LC/wechat-mp/issues">项目问题反馈页</a>提交。发截图前遮住密钥、个人信息和未公开材料；不要上传 settings.json 或整份作品目录。</div>
 <div class="sources"><strong>官方资料核对：2026-10-13。</strong>模型收费、密钥与充值入口依据 <a href="https://api-docs.deepseek.com/zh-cn/quick_start/pricing/">DeepSeek 价格说明</a>及其<a href="https://api-docs.deepseek.com/zh-cn/quick_start/error_codes/">错误码说明</a>；运行组件见 <a href="https://developer.microsoft.com/zh-cn/microsoft-edge/webview2/">Microsoft WebView2</a>。外部页面和账号权限以实际可见内容为准。</div>
-<div class="footer"><span>智序 1.0.0 · 故障处理与帮助</span><a href="#start">回到目录</a><span>09</span></div></section>
+<div class="footer"><span>智序 1.0.1 · 故障处理与帮助</span><a href="#start">回到目录</a><span>09</span></div></section>
 </main>
 <script>
 document.getElementById('print-manual').addEventListener('click',function(){window.print()});

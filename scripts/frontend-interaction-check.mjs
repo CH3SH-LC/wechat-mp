@@ -8,7 +8,7 @@ import { createJudge, guardCrashes, parseRunnerArgs } from './lib/run-result.mjs
 
 const require = createRequire(import.meta.url)
 const { outDir, base } = parseRunnerArgs()
-const judge = createJudge({ script: 'frontend-interaction-check', outDir, plannedCases: ['chat.', 'session.', 'docs.', 'settings.', 'app.'], minChecks: 67 })
+const judge = createJudge({ script: 'frontend-interaction-check', outDir, plannedCases: ['chat.', 'session.', 'docs.', 'settings.', 'app.'], minChecks: 75 })
 guardCrashes(judge)
 const check = (id, pass, evidence = '') => { judge.check(id, pass, evidence); console.log(`  ${pass ? 'PASS' : 'FAIL'} - ${id}${evidence ? ` (${evidence})` : ''}`) }
 let browser
@@ -181,6 +181,9 @@ try {
   check('settings.保存完成只写一次', await page.evaluate(() => window.__settingsWrites.length === 1))
 
   await page.evaluate(() => { window.__fixture.unmount(); document.querySelector('#fixture').remove(); document.querySelector('#fixture-opener').remove(); delete window.__TAURI_INTERNALS__; document.querySelector('#root').style.display = '' })
+  // 留出另一个真实会话，导入互斥用例才能验证“切换”而非只点当前会话。
+  await page.locator('.rail-new').click()
+  await page.waitForFunction(() => document.querySelectorAll('.sess-row').length >= 2 && !document.querySelector('.rail-new').disabled)
   await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
   await page.locator('.chat-input-row textarea').press('Enter')
   await page.locator('.work-bubble').waitFor()
@@ -195,6 +198,70 @@ try {
   await page.locator('[data-view="docs"]').click()
   await page.locator('[data-view="chat"]').click()
   check('app.工作区切换保留未发送草稿', await page.locator('.chat-input-row textarea:visible').inputValue() === '切换工作区后仍保留的未发送草稿')
+
+  // R42：完整 App 的原图导入互斥。仅延迟原图 IPC，不替换组件或 App 处理函数。
+  // 一次性桥在 import_local_image 被调用时立即移除；其他存储仍走本页原有的
+  // localStorage 适配器，避免把这项测试变成全后端桩或触发任何模型请求。
+  const importBefore = await page.evaluate(() => {
+    const sessions = JSON.parse(localStorage.getItem('wxmp-sessions-v1'))
+    return { current: sessions.current, ids: Object.keys(sessions.items).sort(),
+      messages: JSON.stringify(Object.fromEntries(Object.entries(sessions.items).map(([id, item]) => [id, item.messages]))),
+      document: JSON.parse(localStorage.getItem('wxmp-docs-v1')).docs[sessions.current].html,
+      userMessages: document.querySelectorAll('.msg-user').length,
+      draft: document.querySelector('.chat-input-row textarea').value }
+  })
+  await page.evaluate(() => {
+    window.__appImportCommands = []
+    window.__appImportRelease = null
+    window.__TAURI_INTERNALS__ = { invoke: (cmd, args) => {
+      window.__appImportCommands.push(cmd)
+      if (cmd !== 'import_local_image') throw new Error(`Unexpected image-import IPC: ${cmd}`)
+      delete window.__TAURI_INTERNALS__
+      return new Promise((resolve) => { window.__appImportRelease = () => resolve({
+        assetId: 'li-' + 'd'.repeat(64), name: args.name, mime: 'image/png', width: 1, height: 1,
+        byteLength: 68, dataUrl: args.dataUrl, modelDataUrl: args.dataUrl,
+      }) })
+    } }
+  })
+  await page.locator('.chat-pane input[type=file]').setInputFiles({ name: '导入互斥原图.png', mimeType: 'image/png',
+    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6I1cAAAAASUVORK5CYII=', 'base64') })
+  await page.waitForFunction(() => typeof window.__appImportRelease === 'function')
+  check('app.原图导入中锁住新建和其他会话切换', await page.locator('.rail-new').isDisabled() && await page.locator('.sess-open').count() >= 2 && await page.locator('.sess-open:not(:disabled)').count() === 0)
+  check('app.原图导入中锁住清空及发送', await page.locator('[data-act="clear"]').isDisabled() && await page.locator('.chat-input-row .btn-send').isDisabled())
+  await page.locator('.chat-input-row textarea:visible').press('Enter')
+  await page.locator('.rail-new').evaluate((el) => el.click())
+  await page.locator(`.sess-row:not([data-id="${importBefore.current}"]) .sess-open`).first().evaluate((el) => el.click())
+  await page.locator('[data-act="clear"]').evaluate((el) => el.click())
+  await page.locator('[data-view="docs"]').click()
+  await page.locator('.doc-open').first().waitFor()
+  check('app.原图导入中锁住文档打开', await page.locator('.doc-open').count() > 0 && await page.locator('.doc-open:not(:disabled)').count() === 0)
+  await page.locator('.doc-open').first().evaluate((el) => el.click())
+  check('app.原图导入中文档点击不回源切会话', await page.locator('[data-view="docs"]').getAttribute('aria-current') === 'page')
+  await page.locator('[data-view="chat"]').click()
+  // 超过正常自动存档防抖，确认禁止动作没有迟到的会话/正文变化。
+  await page.waitForTimeout(1100)
+  const importHeld = await page.evaluate(() => {
+    const sessions = JSON.parse(localStorage.getItem('wxmp-sessions-v1'))
+    return { current: sessions.current, ids: Object.keys(sessions.items).sort(),
+      messages: JSON.stringify(Object.fromEntries(Object.entries(sessions.items).map(([id, item]) => [id, item.messages]))),
+      document: JSON.parse(localStorage.getItem('wxmp-docs-v1')).docs[sessions.current].html,
+      userMessages: document.querySelectorAll('.msg-user').length,
+      draft: document.querySelector('.chat-input-row textarea').value,
+      working: !!document.querySelector('.work-bubble'), commands: window.__appImportCommands }
+  })
+  check('app.原图导入期间会话及成稿保持原归属', importHeld.current === importBefore.current && JSON.stringify(importHeld.ids) === JSON.stringify(importBefore.ids) && importHeld.messages === importBefore.messages && importHeld.document === importBefore.document)
+  check('app.原图导入期间Enter未发送且草稿保留', importHeld.userMessages === importBefore.userMessages && importHeld.draft === importBefore.draft && !importHeld.working && JSON.stringify(importHeld.commands) === '["import_local_image"]')
+  await page.evaluate(() => window.__appImportRelease())
+  await page.locator('.attach-chip img[alt="导入互斥原图.png"]').waitFor()
+  await page.waitForFunction(() => !document.querySelector('.rail-new').disabled)
+  check('app.原图导入完成附件仍在原会话', await page.locator('.sess-active').getAttribute('data-id') === importBefore.current && await page.locator('.attach-chip img[alt="导入互斥原图.png"]').count() === 1 && await page.locator('.chat-input-row textarea:visible').inputValue() === importBefore.draft)
+  check('app.原图导入完成恢复会话清空与发送控件', await page.locator('.rail-new').isEnabled() && await page.locator('.sess-open:disabled').count() === 0 && await page.locator('[data-act="clear"]').isEnabled() && await page.locator('.chat-input-row .btn-send').isEnabled())
+  await page.locator('[data-view="docs"]').click()
+  await page.locator('.doc-open').first().waitFor()
+  check('app.原图导入完成恢复文档打开控件', await page.locator('.doc-open:not(:disabled)').count() > 0 && await page.locator('.doc-open:disabled').count() === 0)
+  await page.locator('[data-view="chat"]').click()
+  await page.locator('.attach-del[title="移除导入互斥原图.png"]').click()
+
   if (await page.locator('.sess-btn').getAttribute('data-open') === '1') await page.locator('.sess-btn').click()
   const views = [{ width: 1500, height: 900 }, { width: 1000, height: 760 }, { width: 780, height: 760 }, { width: 390, height: 844 }]
   for (const size of views) {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -307,6 +307,13 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [sessionPending, setSessionPending] = useState(false)
   const sessionOperation = useRef(false)
+  // 原图写盘期间仅锁住会话切换/清空，避免已选择的附件被卸载丢弃。
+  const [imageImportPending, setImageImportPending] = useState(false)
+  const imageImportPendingRef = useRef(false)
+  const onImageImportingChange = useCallback((pending: boolean) => {
+    imageImportPendingRef.current = pending
+    setImageImportPending(pending)
+  }, [])
   const saveQueue = useRef(new Map<string, Promise<boolean>>())
   // 「AI 工作中」气泡：当前阶段 + 真实细节（读资料 / 思考 / 撰写 / 素材 / 排版 / 质检 / 修订 / 保存）
   const [task, setTask] = useState<TaskEvent | null>(null)
@@ -1882,7 +1889,7 @@ export default function App() {
   // 发送：直通统一回合，不设任何对话状态机（澄清与否由模型自主判断）
   const send = async (text: string) => {
     const t = text.trim()
-    if (!t || busyRef.current || sessionOperation.current) return
+    if (!t || busyRef.current || sessionOperation.current || imageImportPendingRef.current) return
     const imgs = attached
     setAttached([])
     await turn(t, imgs)
@@ -2128,7 +2135,7 @@ export default function App() {
 
   // ---------- 会话操作 ----------
   const withSessionOperation = async (action: () => Promise<void>) => {
-    if (busyRef.current || sessionOperation.current) return
+    if (busyRef.current || sessionOperation.current || imageImportPendingRef.current) return
     sessionOperation.current = true
     setSessionPending(true)
     try { await action() } catch (e) {
@@ -2180,7 +2187,7 @@ export default function App() {
   }
 
   const removeSession = async (id: string) => {
-    if (busyRef.current || sessionOperation.current) return
+    if (busyRef.current || sessionOperation.current || imageImportPendingRef.current) return
     if (!window.confirm('删除这条会话及其文档？此操作无法撤销。')) return
     await withSessionOperation(async () => {
     await saveQueue.current.get(id)
@@ -2229,7 +2236,7 @@ export default function App() {
   // 改名（会话栏双击标题触发）：只改标题，成功后才刷新列表；失败就说清楚没写进去。
   // 纯交互，不参与对话流程（铁律 6）。
   const applyRename = (id: string, title: string) => {
-    if (busyRef.current || sessionOperation.current) return
+    if (busyRef.current || sessionOperation.current || imageImportPendingRef.current) return
     void renameSession(id, title).then((ok) => {
       if (!ok) {
         console.warn('会话改名失败：未能写入本机', id)
@@ -2242,7 +2249,7 @@ export default function App() {
 
   // 清空 = 清空当前会话内容（保留会话，标题回到默认）；其文档一并移除（无产物不留在文档库）
   const clear = async () => {
-    if (busyRef.current || sessionOperation.current) return
+    if (busyRef.current || sessionOperation.current || imageImportPendingRef.current) return
     if (!window.confirm('清空当前会话及其文档？此操作无法撤销。')) return
     await withSessionOperation(async () => {
     if (currentId) {
@@ -2279,7 +2286,7 @@ export default function App() {
   }
 
   const openDocFromLib = async (id: string) => {
-    if (busyRef.current) return
+    if (busyRef.current || imageImportPendingRef.current) return
     await switchSession(id, true)
     setView('chat')
   }
@@ -2340,7 +2347,7 @@ export default function App() {
         <main className={`workspace ${railOpen ? 'rail-on' : 'rail-off'}`} hidden={view !== 'chat'}>
           {railOpen && (
             <SessionRail
-              busy={busy || sessionPending}
+              busy={busy || sessionPending || imageImportPending}
               items={sessionItems}
               currentId={currentId}
               error={sessionError}
@@ -2366,6 +2373,7 @@ export default function App() {
             task={task}
             turnStartedAt={turnStartedAt}
             images={attached}
+            onImportingChange={onImageImportingChange}
             onAttachImages={(images) => {
               if (attachmentEpochRef.current === attachmentEpoch) setAttached((prev) => [...prev, ...images].slice(0, MAX_ATTACHED_IMAGES))
             }}
@@ -2381,7 +2389,7 @@ export default function App() {
             onClear={() => void clear()}
             onPickComponent={pickComponent}
             saveError={saveError}
-            busy={busy || sessionPending}
+            busy={busy || sessionPending || imageImportPending}
             docState={deliveryState}
             verdict={deliveryVerdictState}
             exportIsDraft={deliveryState?.kind === 'draft-failed'}
@@ -2391,7 +2399,7 @@ export default function App() {
       {view === 'docs' && (
         <main className="workspace docs-workspace">
           <DocsPane
-            busy={busy || sessionPending}
+            busy={busy || sessionPending || imageImportPending}
             items={docItems}
             error={docsError}
             unreadable={docsUnreadable}

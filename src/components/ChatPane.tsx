@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { splitAssistant } from '../lib/extract.ts'
 import type { TaskEvent } from '../lib/progress.ts'
 import WorkingBubble from './WorkingBubble.tsx'
+import InsertionImagePicker from './InsertionImagePicker.tsx'
 import { getLocalImage, importLocalImage, MAX_ATTACHED_IMAGES, onLocalImageImported } from '../lib/local-images.ts'
 import type { LocalImageMeta, LocalImageRecord } from '../lib/local-images.ts'
 
@@ -35,6 +36,8 @@ interface Props {
   /** 已入库的本地原图。发送后稳定 ID 随消息存档。 */
   images?: LocalImageRecord[]
   onAttachImages?: (images: LocalImageRecord[]) => void
+  /** 原图写入期间供父层暂缓切换会话，不参与对话路由。 */
+  onImportingChange?: (importing: boolean) => void
   onRemoveImage?: (idx: number) => void
   apiRef?: React.Ref<ChatPaneApi>
 }
@@ -90,6 +93,7 @@ export default function ChatPane({
   turnStartedAt = null,
   images = [],
   onAttachImages,
+  onImportingChange,
   onRemoveImage,
   apiRef,
 }: Props) {
@@ -97,12 +101,14 @@ export default function ChatPane({
   const [openSrc, setOpenSrc] = useState<ReadonlySet<number>>(new Set())
   const [imgErr, setImgErr] = useState('')
   const [importing, setImporting] = useState(false)
+  const [insertionPickerOpen, setInsertionPickerOpen] = useState(false)
   const importingRef = useRef(false)
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
     return () => { mountedRef.current = false }
   }, [])
+  useEffect(() => { if (!active || busy || disabled) setInsertionPickerOpen(false) }, [active, busy, disabled])
   const [awayFromBottom, setAwayFromBottom] = useState(false)
   const [hasNewMessages, setHasNewMessages] = useState(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -146,6 +152,7 @@ export default function ChatPane({
     if (!files || !files.length || !onAttachImages || !active || busy || disabled || importingRef.current) return
     importingRef.current = true
     setImporting(true)
+    onImportingChange?.(true)
     setImgErr('')
     const errors: string[] = []
     const remaining = Math.max(0, MAX_ATTACHED_IMAGES - images.length)
@@ -174,7 +181,8 @@ export default function ChatPane({
       }
     } finally {
       importingRef.current = false
-      setImporting(false)
+      onImportingChange?.(false)
+      if (mountedRef.current) setImporting(false)
       if (fileRef.current) fileRef.current.value = ''
     }
   }
@@ -326,7 +334,7 @@ export default function ChatPane({
       )}
       {imgErr && <div className="attach-err" role="alert">{imgErr}</div>}
       {importing && <div className="attach-err" role="status">正在保存原图…</div>}
-      <div className="chat-input-row">
+      <div className="chat-attachment-actions">
         <input
           ref={fileRef}
           type="file"
@@ -335,9 +343,21 @@ export default function ChatPane({
           className="attach-input"
           onChange={(e) => void pickFiles(e.target.files)}
         />
-        <button className="mini attach-btn" disabled={busy || disabled || importing} title="添加本地图片（原图保存在本机，可直接插入推文）" onClick={() => fileRef.current?.click()}>
+        <button className="mini attach-btn" disabled={!active || busy || disabled || importing} title="添加本地图片（原图保存在本机，可直接插入推文）" onClick={() => fileRef.current?.click()}>
           图片
         </button>
+        <button className="mini attach-btn" disabled={!active || busy || disabled || importing || !onAttachImages} aria-haspopup="dialog" onClick={() => setInsertionPickerOpen(true)}>
+          待插入图片
+        </button>
+      </div>
+      {insertionPickerOpen && active && <InsertionImagePicker
+        availableSlots={Math.max(0, MAX_ATTACHED_IMAGES - images.length)}
+        disabled={busy || disabled || !onAttachImages}
+        importing={importing}
+        onAdd={pickFiles}
+        onClose={() => setInsertionPickerOpen(false)}
+      />}
+      <div className="chat-input-row">
         <textarea
           ref={inputRef}
           value={input}

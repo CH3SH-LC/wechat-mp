@@ -1,6 +1,6 @@
 [package]
 name = "wechat-mp-desktop"
-version = "1.0.0"
+version = "1.0.1"
 description = "智序：面向公众号创作者的本地桌面写作与排版工作台"
 authors = ["CH3SH-LC"]
 edition = "2021"
