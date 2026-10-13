@@ -62,6 +62,7 @@ export function prepToolLabel(name: string, args: unknown): string {
   if (name === 'load_knowledge') return short ? `读取知识点：${short}` : '读取知识点…'
   if (name === 'search_knowledge') return short ? `检索知识：${short}` : '检索知识…'
   if (name === 'search_assets') return short ? `检索个人素材库：${short}` : '检索个人素材库…'
+  if (name === 'read_local_image') return '读取用户提供的原图…'
   return short ? `调用 ${name}：${short}` : `调用 ${name}…`
 }
 

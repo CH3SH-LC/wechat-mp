@@ -330,13 +330,12 @@ fn to_wire(m: &ChatMsg, allow_images: bool) -> serde_json::Value {
 }
 
 /// 整段对话 → API 请求体里的 messages 数组。
-/// **只有最后一条 user 消息**允许携带图像：中间轮次的图片既不受 API 支持，也纯属重复计费。
+/// 保留调用方显式选择的用户图像；准备/撰写/修订指令追加在后面不能让原图消失。
+/// 历史图片由调用方按本次需要恢复，不在序列化层根据消息位置猜测是否需要。
 /// 这个函数是通往 API 的唯一序列化入口——不要再用 `json!({"messages": messages})` 直接塞 ChatMsg。
 fn build_messages(msgs: &[ChatMsg]) -> Vec<serde_json::Value> {
-    let last_user = msgs.iter().rposition(|m| m.role == "user");
     msgs.iter()
-        .enumerate()
-        .map(|(i, m)| to_wire(m, Some(i) == last_user))
+        .map(|m| to_wire(m, m.role == "user"))
         .collect()
 }
 
@@ -482,12 +481,13 @@ fn sse_tail_delta(buf: &str) -> Option<String> {
 /// 关键：网络 chunk 可能把多字节 UTF-8 字符（如中文）劈成两半——本函数**按字节累积**，
 /// 只对完整行一次性解码，避免对每块独立 from_utf8_lossy 造成行尾乱码（U+FFFD）。
 /// `on_meta` 另接 finish_reason / usage（修复计划阶段 1 的请求证据），正文消费者不受影响。
+/// 返回 true 表示收到了完整的 [DONE] 行；此前的正文/元数据已经回调，终止后的内容不再接收。
 fn feed_sse_bytes(
     buf: &mut Vec<u8>,
     chunk: &[u8],
     mut on_delta: impl FnMut(String),
     mut on_meta: impl FnMut(&StreamMeta),
-) {
+) -> bool {
     buf.extend_from_slice(chunk);
     loop {
         let Some(pos) = buf.iter().position(|&b| b == b'\n') else {
@@ -496,6 +496,10 @@ fn feed_sse_bytes(
         // 取出含 \n 的一整行字节（含换行；去掉结尾 \n 再整体解码，保证不劈字符）
         let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
         let line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]);
+        if line.trim().strip_prefix("data:").map(str::trim) == Some("[DONE]") {
+            buf.clear();
+            return true;
+        }
         if let Some(delta) = sse_delta(line.trim()) {
             on_delta(delta);
         }
@@ -503,6 +507,7 @@ fn feed_sse_bytes(
             on_meta(&StreamMeta { finish_reason: finish, usage });
         }
     }
+    false
 }
 
 /// 流式响应里除正文之外的元信息（修复计划阶段 1：请求证据要能落在日志里）。
@@ -592,7 +597,7 @@ async fn stream_chat_budgeted(
         .await
         .map_err(|e| format!("响应流中断：{e}"))?
     {
-        feed_sse_bytes(
+        let done = feed_sse_bytes(
             &mut buf,
             &chunk,
             |d| {
@@ -608,6 +613,11 @@ async fn stream_chat_budgeted(
                 }
             },
         );
+        // SSE completion is independent of HTTP framing or TCP keep-alive.
+        // Services without [DONE] retain the existing EOF + tail-flush path.
+        if done {
+            return Ok(collected);
+        }
     }
     // EOF 冲刷（O-8 修复）：流结束后 buffer 残留的末块（无尾部换行）也应解析
     if !buf.is_empty() {
@@ -713,7 +723,6 @@ pub async fn chat_stream(
     let model = cfg.model.clone();
     // 期望档位 → 收敛到模型真实上限（见 ModelLimits）
     let (effort, want) = turn_budget(turn.as_deref());
-    let max_tokens = clamp_to_model(want, model_limits(&cfg).await);
     // 记录的是"这次请求用了哪一档预算"——前端另有更细的阶段（撰写 / 自动修订）上报，
     // 两者不要混为一谈：本字段回答"花了多少额度"，不是"在做什么"。
     let profile = turn.as_deref().unwrap_or("default");
@@ -723,12 +732,16 @@ pub async fn chat_stream(
     let outcome = cancel::run_cancellable(
         &state,
         run_id.as_deref(),
-        stream_chat_budgeted(&cfg, messages, effort, max_tokens, &mut meta, |d| {
-            let _ = app.emit(
-                "chat-delta",
-                DeltaEvent { run_id: emit_id.clone(), delta: d },
-            );
-        }),
+        async {
+            // 上限查询也可能等待网络：必须和正文请求共用入口处的取消上下文。
+            let max_tokens = clamp_to_model(want, model_limits(&cfg).await);
+            stream_chat_budgeted(&cfg, messages, effort, max_tokens, &mut meta, |d| {
+                let _ = app.emit(
+                    "chat-delta",
+                    DeltaEvent { run_id: emit_id.clone(), delta: d },
+                );
+            }).await
+        },
     )
     .await;
     // 收尾判定必须在**写日志之前**：零正文的失败要记成 ok=false / failure=empty，
@@ -755,28 +768,130 @@ pub async fn chat_stream(
     outcome.map(|_| ())
 }
 
+// A separate review is one bounded request. It never publishes deltas: callers
+// may replace the draft only after receiving and validating the whole result.
+const EDITORIAL_REVIEW_TIMEOUT: Duration = Duration::from_secs(180);
+const EDITORIAL_TRUNCATED_ERR: &str = "成稿复核未完整返回（输出达到模型上限）";
+const EDITORIAL_FILTERED_ERR: &str = "成稿复核未完整返回（服务端过滤了内容）";
+
+fn editorial_review_failure(error: &str) -> &'static str {
+    if error == EDITORIAL_TRUNCATED_ERR || error == EDITORIAL_FILTERED_ERR {
+        "quality"
+    } else {
+        classify_error(error)
+    }
+}
+
+/// The injectable deadline is only for local fake-server tests. Production uses
+/// EDITORIAL_REVIEW_TIMEOUT, including model-limit discovery, with no retries.
+/// Review selects the existing revise budget after the three live comparisons
+/// in .local/runs/r32/editorial-revise-probe-final-1791744363734: 57.6/46.7/50.6s,
+/// all completed without truncation. Quality still needs separate acceptance;
+/// this changes only review, not the initial write budget.
+async fn request_editorial_review(
+    state: &CancelState,
+    cfg: &LlmConfig,
+    messages: Vec<ChatMsg>,
+    run_id: Option<&str>,
+    timeout: Duration,
+    meta: &mut StreamMeta,
+) -> Result<String, String> {
+    request_editorial_review_budgeted(
+        state, cfg, messages, run_id, timeout, turn_budget(Some("revise")), meta,
+    ).await
+}
+
+/// Shared transport and acceptance guards. Production uses the selected review budget;
+/// the ignored live adapter may explicitly probe another existing turn budget.
+async fn request_editorial_review_budgeted(
+    state: &CancelState,
+    cfg: &LlmConfig,
+    messages: Vec<ChatMsg>,
+    run_id: Option<&str>,
+    timeout: Duration,
+    budget: (&str, u32),
+    meta: &mut StreamMeta,
+) -> Result<String, String> {
+    cancel::run_cancellable(state, run_id, async {
+        tokio::time::timeout(timeout, async {
+            let (effort, want) = budget;
+            let max_tokens = clamp_to_model(want, model_limits(cfg).await);
+            let text = stream_chat_budgeted(cfg, messages, effort, max_tokens, meta, |_| {}).await?;
+            if text.trim().is_empty() {
+                return Err(EMPTY_REPLY_ERR.to_string());
+            }
+            match meta.finish_reason.as_deref() {
+                Some("length") => Err(EDITORIAL_TRUNCATED_ERR.to_string()),
+                Some("content_filter") => Err(EDITORIAL_FILTERED_ERR.to_string()),
+                // Some compatible services omit the reason. Preserve that as
+                // unknown; article-contract validation remains the caller's job.
+                _ => Ok(text),
+            }
+        })
+        .await
+        .map_err(|_| "请求 DeepSeek 失败：成稿复核超时，已停止等待".to_string())?
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn editorial_review(
+    state: tauri::State<'_, CancelState>,
+    messages: Vec<ChatMsg>,
+    run_id: Option<String>,
+) -> Result<String, String> {
+    let cfg = resolve_config()?;
+    let timer = ReqTimer::start();
+    let mut meta = StreamMeta::default();
+    let outcome = request_editorial_review(
+        &state,
+        &cfg,
+        messages,
+        run_id.as_deref(),
+        EDITORIAL_REVIEW_TIMEOUT,
+        &mut meta,
+    )
+    .await;
+    trace::log_request(
+        run_id.as_deref(),
+        &trace::request_record(
+            "editorial_review",
+            &cfg.model,
+            None,
+            Some(1),
+            &timer,
+            outcome.is_ok(),
+            outcome.as_ref().err().map(|e| editorial_review_failure(e)),
+            outcome.as_ref().err().map(|e| e.as_str()),
+            outcome.as_ref().ok().map(|text| text.chars().count()),
+            meta.finish_reason.as_deref(),
+            meta.usage.as_ref(),
+        ),
+    );
+    outcome
+}
+
 // ---------- 图像子智能体：gen_svg（一次生成一幅插画 SVG，非流式） ----------
 
-// 第 29 轮重写：提示从"地板清单"升级为"复杂度契约"——图片要具体、有构图层次、
-// 有结构/明暗/材质/细节密度，能被当作一幅真正的插画，而不是几个几何图形的拼贴。
+// 插画要以手机上的叙事与辨识度为目标；元素数量只能排除空图，不能代替构图质量。
 const SVG_SYSTEM_PROMPT: &str = "\
 你是公众号插画师，输出可直接内嵌在推文 HTML 里的纯 SVG 插画。要求：\n\
 1. 一次只画一张**具体可辨认、有内容可看**的插画（真实物体/场景/生灵），不是抽象几何图形、图标或贴纸。\n\
-2. **分层构图**：画面要有前景 / 中景 / 背景（或明暗两层以上）的空间感；主体放在合理的构图上，不空、不糊。\n\
-3. **物体要“长出来”而不是贴上去**：每个主要物象都要画出结构轮廓与明暗体积（受光面/背光面、深浅过渡），可加材质纹理（木纹/布料/植被/光晕等）；纯描边色块、平面剪影不算完成。\n\
-4. 画面要有**细节密度**：横幅 / 大插画通常需要 20 个以上可见元素（circle/rect/ellipse/line/path/polygon/polyline/image），小插画（inline/deco）不少于 10 个才算充实；元素 ≤6 只是系统能通过的最低门槛，不要按最低门槛画。\n\
+2. **分层构图**：先确定一个视觉主角和一个可读的动作或关系，再用前后遮挡、大小与明暗组织 1–3 个配角。每张图要解释本段的具体内容；不要无关地堆电脑、盆栽、纸张等办公符号。\n\
+3. 主要物象要有准确的结构轮廓与明暗层次。编辑插画、平面手绘也可以用清楚的块面与线条表现结构，不强加立体写实风；细节必须帮助辨认主体、动作或材质，不能靠碎点、短线凑元素数量。\n\
+4. **按最终手机尺寸设计**：wide 约 343px 宽，inline 约 300px 宽。主体应占主要空间，轮廓与关键动作缩小后仍清晰；主线比次线更深更粗，浅色只做辅助。图形元素 ≥6 只是非空门槛，不是画质目标。\n\
 5. 元素坐标落在 viewBox 范围内，必须带 viewBox。\n\
 6. SVG 内零文字、零数字、零 emoji（不出现 <text>、数字标注或 emoji 字符）。\n\
 7. 背景透明，不要铺满底色块；可用多个元素叠出场景，但背景用色块/剪影即可，主体要清晰。\n\
-8. 低饱和同色系配色，主色不超过 4 种；可用同色深浅表现体积与层次；若用户给定主题/风格词，按其气质配色。\n\
+8. 主色不超过 4 种；可用同色深浅表现层次。用户给了色号就准确沿用，主轮廓在白底上要有足够对比，不要整幅淡得看不清；给了风格词就保持相同的线条、造型与材质语言。\n\
 9. 整段回答只包含从 <svg 到 </svg> 的 SVG 原文：不解释、不用代码围栏（``` 或 markdown）、不加任何前后缀文字。\n\
 10. 若“画面内容”说明缺少落笔所必需的核心信息（主体不明 / 不知画什么动作场景 / 多个可能画面互相冲突），不要硬画——只输出一行以 CLARIFY: 开头的问题，问最关键的一点（一句话），由创作主模型补足后再画；凡能合理画出的情况一律直接画，不要为问而问。";
 
 /// 按 kind 组装用户消息（纯函数，可测；V3-R2 增 divider/heading；P1 增 photo-frame）
 fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>, hint: Option<&str>) -> Result<String, String> {
     let ctx = match kind {
-        "wide" => "整行横幅插画（建议 viewBox=\"0 0 750 220\"，横向构图铺满）",
-        "inline" => "小节旁的小插画（建议 viewBox=\"0 0 360 240\" 或 \"0 0 300 300\"）",
+        "wide" => "整行内容插画（建议 viewBox=\"0 0 750 360\"，手机上约 165px 高，给主体和动作留足高度；仅当明确要求窄分隔条时才压矮）",
+        "inline" => "正文场景插画（建议 viewBox=\"0 0 600 400\"，最终约 300px 宽；一个明确主体或动作，不要画成微小角饰）",
         "deco" => "推文气泡右下角的小装饰素材——角饰（建议 viewBox=\"0 0 300 200\"，图形集中在右下 1/3，小巧精致，如花簇/枝叶局部）",
         "divider" => "横向窄条分隔装饰素材——换场花饰/分割线（建议 viewBox=\"0 0 750 120\"，横向构图，左右对称或韵律重复，整体压扁矮，不占高度）",
         "heading" => "小节标题旁的横向装饰小插画（建议 viewBox=\"0 0 360 160\"，如花枝/书签/路标小物件，留白多、不喧宾夺主）",
@@ -805,7 +920,7 @@ fn svg_user_prompt(kind: &str, desc: &str, theme: Option<&str>, hint: Option<&st
 /// 按角色补充的**专用作画契约**（P1，2026-09-24 调查 §3）。
 /// 背景：原先把一套"插画式分层/体积/密度"要求统一套给所有 kind，小角饰也被要求画满细节；
 /// 但角饰最终只以 60px 宽显示，堆细节反而糊成一团、还会压住气泡文字。
-/// 大图角色（wide/inline）继续沿用 SVG_SYSTEM_PROMPT 的复杂度契约，**不得因统一"简化"而退化**。
+/// 大图角色（wide/inline）沿用 SVG_SYSTEM_PROMPT 的构图与手机辨识度要求。
 fn svg_kind_prompt(kind: &str) -> &'static str {
     match kind {
         "deco" => "\
@@ -835,7 +950,7 @@ fn svg_kind_prompt(kind: &str) -> &'static str {
 2. **中央约 60% 的区域必须完全透明**：不填任何颜色、不放任何元素——那块区域会放真实照片。\n\
 3. 四周绘制均匀的画框：边线或角花，框宽约 12–20 单位，四边宽度一致，看起来像一个规整的相框。\n\
 4. 只画画框本身，不要画框里的内容。元素 8–20 个，配色与推文主题一致。",
-        _ => "", // wide / inline（及未知角色）：沿用共享的复杂度契约，不额外附加
+        _ => "", // wide / inline（及未知角色）：沿用共享的内容插画要求
     }
 }
 
@@ -1358,10 +1473,11 @@ pub struct ToolCall {
 /// 工具声明（DeepSeek function-calling，OpenAI 格式）：随 prep_turn 请求发送。
 /// V3-R3：新增 search_assets（个人素材库检索）——创作配图先检索库、命中即用 [[asset]] 引用复用。
 const PREP_TOOLS: &str = r#"[
-  {"type":"function","function":{"name":"load_knowledge","description":"读取三层知识库某点文件的全文（点文件名如 style-guochao / type-promo / comp-banned / module-bubble）。创作前按需取用：内容类型模板、风格色板、合规红线、模块规范。","parameters":{"type":"object","properties":{"name":{"type":"string","description":"点文件名（去 .md 后缀），如 style-guochao"}},"required":["name"]}}},
+  {"type":"function","function":{"name":"read_local_image","description":"读取用户明确提供路径的一张本地原图，或重新查看当前会话已有的原图 assetId。返回真实图像视觉输入和可直接插入正文的 Markdown 原图引用；只能读用户指定文件，不能扫描目录或猜测路径。请将读取与其他资料工具并列调用，看到工具结果后再决定如何写稿。","parameters":{"type":"object","properties":{"path":{"type":"string","description":"用户消息中明确给出的完整本地文件路径或 file URL"},"assetId":{"type":"string","description":"当前会话原图清单中的 li- 加64位哈希 ID"}},"additionalProperties":false}}},
+  {"type":"function","function":{"name":"load_knowledge","description":"读取三层知识库某点文件的全文（点文件名如 style-guochao / writing-product / comp-banned / module-bubble）。创作前按需取用：读者与材料的写作方法、风格色板、合规边界、模块规范。","parameters":{"type":"object","properties":{"name":{"type":"string","description":"点文件名（去 .md 后缀），如 style-guochao"}},"required":["name"]}}},
   {"type":"function","function":{"name":"search_knowledge","description":"按主题检索应取用哪些点文件，返回文件名清单。创作前不确定该读哪些点时使用。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"检索主题，如 促销活动 或 咖啡店开业"}},"required":["query"]}}},
   {"type":"function","function":{"name":"search_assets","description":"检索你的个人素材库（本机已入库、可复用的具体 SVG 素材：气泡角饰/分割线/开篇横幅/小节装饰/插画等，条目带分类与语义描述）。创作需要配图素材时先检索库：命中（描述贴合）就把该行末尾给出的「引用写法」原样抄进正文复用（形如 [[asset:分类|素材ID|用途说明]]，**分类用英文键、素材用 ID，都不要改写**）；库里没有合适的才写 [[img]]/[[deco]] 占位。","parameters":{"type":"object","properties":{"query":{"type":"string","description":"想要什么素材的自然语言描述，如 右下角一朵小花的气泡角饰"},"category":{"type":"string","description":"可选：限定在某分类内找（bubble/divider/deco/banner/heading/art-inline/art-wide/photo-frame）"},"style":{"type":"string","description":"可选：风格软偏好词，如 日系"}},"required":["query"]}}},
-  {"type":"function","function":{"name":"finish_preparation","description":"结束准备阶段并声明本回合要做什么。**必须**用这个工具表达结果，不要只回复文字（尤其不要只回复 READY）。outcome 取值：reply=本回合只是回答/澄清，不写稿；compose=需求已明确，由系统发起一次正文撰写；candidate=你已经写好了完整正文，直接交稿（把完整 v2 正文放进 source）。","parameters":{"type":"object","properties":{"outcome":{"type":"string","enum":["reply","compose","candidate"],"description":"reply 普通答复/澄清；compose 交给系统撰写；candidate 你自己已给出完整正文"},"text":{"type":"string","description":"outcome=reply 时的答复或澄清内容（一段自然语言）"},"source":{"type":"string","description":"outcome=candidate 时的**单一完整 v2 正文**，不要带 ``` 围栏，不要重复贴旧稿"},"assetPolicy":{"type":"string","enum":["preserve","modify"],"description":"**必填**。本回合素材如何处理：preserve=只改文字、现有配图与其引用保持不动（不要给已有素材加 |new）；modify=本回合要修改或新增素材。缺省不允许——系统不会替你补一个默认值"},"baseRevisionId":{"type":"string","description":"可选：你看到的当前正式版本 id，用于一致性回显（不影响系统的权威版本基准）"}},"required":["outcome","assetPolicy"]}}}
+  {"type":"function","function":{"name":"finish_preparation","description":"结束准备阶段并声明本回合要做什么。**必须**用这个工具表达结果，不要只回复文字（尤其不要只回复 READY）。outcome 取值：reply=本回合只是回答/澄清，不写稿；compose=信息已足以成稿，未指定的编辑偏好由你决定，由系统发起一次正文撰写；candidate=你已经写好了完整正文，直接交稿（把完整 v2 正文放进 source）。","parameters":{"type":"object","properties":{"outcome":{"type":"string","enum":["reply","compose","candidate"],"description":"reply 普通答复/澄清；compose 交给系统撰写；candidate 你自己已给出完整正文"},"text":{"type":"string","description":"outcome=reply 时的答复或澄清内容（一段自然语言）"},"source":{"type":"string","description":"outcome=candidate 时的**单一完整 v2 正文**，不要带 ``` 围栏，不要重复贴旧稿"},"assetPolicy":{"type":"string","enum":["preserve","modify"],"description":"**必填**。本回合素材如何处理：preserve=只改文字、现有配图与其引用保持不动（不要给已有素材加 |new）；modify=本回合要修改或新增素材。缺省不允许——系统不会替你补一个默认值"},"baseRevisionId":{"type":"string","description":"可选：你看到的当前正式版本 id，用于一致性回显（不影响系统的权威版本基准）"}},"required":["outcome","assetPolicy"]}}}
 ]"#;
 
 /// 解析 DeepSeek 非流式返回体：choices[0].message 的 content 与 tool_calls（纯函数，可测）
@@ -1698,21 +1814,23 @@ mod tests {
     }
 
     #[test]
-    fn svg_prompt_requires_layered_complexity() {
-        // 第 29 轮 3.1：SVG 提示不再是"≥6 元素"地板，而是复杂度契约——分层/结构/明暗/细节密度必须有
-        assert!(SVG_SYSTEM_PROMPT.contains("分层构图"), "应要求前景/中景/背景层次");
-        assert!(SVG_SYSTEM_PROMPT.contains("结构轮廓与明暗体积"), "应要求结构轮廓与明暗体积");
-        assert!(SVG_SYSTEM_PROMPT.contains("细节密度"), "应要求细节密度");
-        assert!(SVG_SYSTEM_PROMPT.contains("20 个以上"), "横幅/大插画应引导到 20+ 元素量级");
-        assert!(SVG_SYSTEM_PROMPT.contains("≤6 只是系统能通过的最低门槛"), "应明确 ≥6 只是门槛而非目标");
+    fn svg_prompt_requires_readable_editorial_composition() {
+        // 只约束提示词契约；真正画质由实际返回图在手机尺寸下独立目视验证。
+        assert!(SVG_SYSTEM_PROMPT.contains("分层构图"));
+        assert!(SVG_SYSTEM_PROMPT.contains("结构轮廓与明暗层次"));
+        assert!(SVG_SYSTEM_PROMPT.contains("最终手机尺寸"));
+        assert!(SVG_SYSTEM_PROMPT.contains("色号就准确沿用"));
+        assert!(!SVG_SYSTEM_PROMPT.contains("20 个以上"), "不可把元素配额当作画质");
     }
 
     #[test]
     fn svg_prompt_kind_ctx_and_theme() {
         let wide = svg_user_prompt("wide", "咖啡店一角", Some("杂志"), None).expect("ok");
-        assert!(wide.contains("750 220"), "wide 应提示横幅 viewBox");
+        assert!(wide.contains("750 360"), "wide 内容图应留足主体高度");
         assert!(wide.contains("咖啡店一角"));
         assert!(wide.contains("杂志"));
+        let inline = svg_user_prompt("inline", "手整理便签", None, None).expect("ok");
+        assert!(inline.contains("600 400") && inline.contains("300px"));
         let deco = svg_user_prompt("deco", "花簇", None, None).expect("ok");
         assert!(deco.contains("角饰"));
         assert!(deco.contains("右下 1/3"));
@@ -1808,22 +1926,24 @@ mod tests {
     }
 
     #[test]
-    fn build_messages_only_lets_the_last_user_carry_images() {
+    fn build_messages_keeps_selected_images_before_prep_write_and_revision_instructions() {
         let mut old = cm("user", Some("第一轮"));
         old.images = vec!["data:image/png;base64,OLD".into()];
         let mut last = cm("user", Some("这轮"));
         last.images = vec!["data:image/png;base64,NEW".into()];
         let mut asst = cm("assistant", Some("好"));
         asst.images = vec!["data:image/png;base64,GHOST".into()];
-        let msgs = vec![cm("system", Some("S")), old, asst, last];
+        let msgs = vec![cm("system", Some("S")), old, asst, last,
+            cm("user", Some("准备阶段指令")), cm("user", Some("请按协议撰写")),
+            cm("user", Some("修订文字并保留图片"))];
         let wire = build_messages(&msgs);
-        // 首轮 user 的图片被丢弃（避免每轮重复上传、重复计费）
-        assert_eq!(wire[1]["content"], serde_json::json!("第一轮"));
+        assert_eq!(wire[1]["content"][1]["image_url"]["url"], "data:image/png;base64,OLD");
         // assistant 的 images 一律丢弃（API 只允许 user 携带图像）
         assert_eq!(wire[2]["content"], serde_json::json!("好"));
         // 末条 user 的图片折叠为内容块
         assert!(wire[3]["content"].is_array());
         assert_eq!(wire[3]["content"][1]["image_url"]["url"], "data:image/png;base64,NEW");
+        assert_eq!(wire[6]["content"], "修订文字并保留图片");
     }
 
     #[test]
@@ -2025,6 +2145,7 @@ mod tests {
             .collect();
         assert!(names.contains(&"finish_preparation".to_string()), "缺少终结工具，实测：{names:?}");
         assert!(names.contains(&"load_knowledge".to_string()), "知识工具不能丢，实测：{names:?}");
+        assert!(names.contains(&"read_local_image".to_string()), "本地图片读取工具不能丢");
         let fin = arr
             .iter()
             .find(|t| t["function"]["name"] == "finish_preparation")
@@ -2043,6 +2164,63 @@ mod tests {
             .filter_map(|x| x.as_str())
             .collect();
         assert_eq!(pol, vec!["preserve", "modify"]);
+    }
+
+    /// Explicit opt-in live acceptance adapter. Uses the production request/serialization paths;
+    /// input/output are caller-owned evidence files, with no session/document writes or key logs.
+    #[tokio::test]
+    #[ignore]
+    async fn live_quality_request_from_file() {
+        let input = std::env::var("WXMP_QUALITY_INPUT").expect("explicit input path required");
+        let output = std::env::var("WXMP_QUALITY_OUTPUT").expect("explicit output path required");
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(input).unwrap()).unwrap();
+        let cfg = resolve_config().expect("configured local model required");
+        let messages: Vec<ChatMsg> = serde_json::from_value(value["messages"].clone()).unwrap();
+        let mode = value["mode"].as_str();
+        let timer = ReqTimer::start();
+        let mut editorial_meta = StreamMeta::default();
+        let result: Result<serde_json::Value, String> = match mode {
+            Some("prep") => request_prep(&cfg, messages).await
+                .and_then(|reply| serde_json::to_value(reply).map_err(|e| e.to_string())),
+            Some("write") => {
+                let (effort, want) = turn_budget(Some("write"));
+                let limit = clamp_to_model(want, model_limits(&cfg).await);
+                let mut meta = StreamMeta::default();
+                stream_chat_budgeted(&cfg, messages, effort, limit, &mut meta, |_| {}).await
+                    .map(|text| serde_json::json!({"text":text,"model":cfg.model,"finishReason":meta.finish_reason,"usage":meta.usage}))
+            }
+            Some("editorial") | Some("editorial-revise-probe") => {
+                let review = if mode == Some("editorial") {
+                    request_editorial_review(
+                        &CancelState::default(), &cfg, messages, value["runId"].as_str(),
+                        EDITORIAL_REVIEW_TIMEOUT, &mut editorial_meta,
+                    ).await
+                } else {
+                    request_editorial_review_budgeted(
+                        &CancelState::default(), &cfg, messages, value["runId"].as_str(),
+                        EDITORIAL_REVIEW_TIMEOUT, turn_budget(Some("revise")), &mut editorial_meta,
+                    ).await
+                };
+                review.map(|text| serde_json::json!({
+                    "text":text,"model":cfg.model,"finishReason":editorial_meta.finish_reason,
+                    "usage":editorial_meta.usage,"elapsedMs":timer.ms(),"mode":mode,
+                }))
+            }
+            _ => Err("质量验收模式必须为 prep、write、editorial 或 editorial-revise-probe".to_string()),
+        };
+        let record = match &result {
+            Ok(value) => serde_json::json!({"ok":true,"result":value}),
+            // A bounded review may already have received metadata before timing
+            // out. Preserve it even on failure, without inventing missing usage.
+            Err(error) if matches!(mode, Some("editorial" | "editorial-revise-probe")) => serde_json::json!({
+                "ok":false,"error":error,"model":cfg.model,
+                "finishReason":editorial_meta.finish_reason,"usage":editorial_meta.usage,
+                "elapsedMs":timer.ms(),"mode":mode,
+            }),
+            Err(error) => serde_json::json!({"ok":false,"error":error}),
+        };
+        std::fs::write(output, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        assert!(result.is_ok(), "live request failed; see bounded evidence output");
     }
 
     #[test]
@@ -2132,14 +2310,14 @@ mod tests {
     fn chat_msg_roundtrips_tool_messages() {
         // assistant 带 tool_calls（content 为空）与 tool 结果消息应能反序列化并再序列化
         let assistant: ChatMsg = serde_json::from_str(
-            r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_x","type":"function","function":{"name":"load_knowledge","arguments":"{\"name\":\"type-promo\"}"}}]}"#,
+            r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_x","type":"function","function":{"name":"load_knowledge","arguments":"{\"name\":\"writing-product\"}"}}]}"#,
         )
         .expect("assistant tool_calls 消息应可解析");
         assert_eq!(assistant.content, None);
         assert_eq!(assistant.tool_calls.len(), 1);
         assert_eq!(assistant.tool_calls[0].function.name, "load_knowledge");
         let tool: ChatMsg = serde_json::from_str(
-            r##"{"role":"tool","tool_call_id":"call_x","content":"# type-promo ..."}"##,
+            r##"{"role":"tool","tool_call_id":"call_x","content":"# writing-product ..."}"##,
         )
         .expect("tool 结果消息应可解析");
         assert_eq!(tool.tool_call_id.as_deref(), Some("call_x"));
@@ -2360,6 +2538,358 @@ mod tests {
 
     fn cfg_for(server: &fake::Server) -> LlmConfig {
         LlmConfig { key: "sk-fake".into(), base_url: server.base_url.clone(), model: "fake-model".into() }
+    }
+
+    /// Keep the TCP connection open after a complete SSE event. If `end_body`
+    /// is false, HTTP framing stays unfinished until the test releases it.
+    async fn held_open_sse_server(
+        body: String,
+        end_body: bool,
+    ) -> (LlmConfig, tokio::sync::oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, released) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(5), async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let mut bytes = [0u8; 4096];
+                    let count = socket.read(&mut bytes).await.unwrap();
+                    assert!(count > 0, "client must send a complete HTTP request");
+                    request.extend_from_slice(&bytes[..count]);
+                    if let Some(at) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&request[..at]);
+                        let length = header.lines().filter_map(|line| line.split_once(':'))
+                            .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                            .and_then(|(_, value)| value.trim().parse::<usize>().ok()).unwrap_or(0);
+                        if request.len() >= at + 4 + length { break; }
+                    }
+                }
+                socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n").await.unwrap();
+                socket.write_all(format!("{:x}\r\n", body.len()).as_bytes()).await.unwrap();
+                socket.write_all(body.as_bytes()).await.unwrap();
+                socket.write_all(b"\r\n").await.unwrap();
+                if end_body { socket.write_all(b"0\r\n\r\n").await.unwrap(); }
+                socket.flush().await.unwrap();
+                let _ = released.await;
+                if !end_body {
+                    // The client may already have finished at [DONE] or its
+                    // outer test deadline. Cleanup must tolerate that close.
+                    let _ = socket.write_all(b"0\r\n\r\n").await;
+                    let _ = socket.flush().await;
+                }
+            }).await.expect("local SSE fixture must remain bounded");
+        });
+        (LlmConfig { key: "sk-fake".into(), base_url: format!("http://{address}"), model: "fake-model".into() }, release, server)
+    }
+
+    #[tokio::test]
+    async fn stream_done_returns_before_http_body_eof() {
+        let (cfg, release, server) = held_open_sse_server(fake::sse_body(&["完整", "成稿"]), false).await;
+        let mut meta = StreamMeta::default();
+        let mut deltas = String::new();
+        let result = tokio::time::timeout(Duration::from_secs(1), stream_chat_budgeted(
+            &cfg, vec![msg("user", "x")], "max", 100, &mut meta, |delta| deltas.push_str(&delta),
+        )).await;
+        let _ = release.send(());
+        server.await.unwrap();
+        // These assertions distinguish a missed terminal marker from a server
+        // that never delivered the response. They also document the red case.
+        assert_eq!(deltas, "完整成稿", "all content arrived before the deadline");
+        assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+        assert!(result.is_ok(), "received complete text, stop, usage and [DONE], but still waited for HTTP EOF");
+        assert_eq!(result.unwrap().unwrap(), "完整成稿");
+    }
+
+    #[test]
+    fn stream_done_marker_handles_split_bytes_and_ignores_trailing_events() {
+        let stream = format!("{}data: {{\"choices\":[{{\"delta\":{{\"content\":\"不应追加\"}}}}]}}\n\n",
+            fake::sse_body(&["完整成稿"]));
+        for size in [1, 2, 3, 7, stream.len()] {
+            let mut buffer = Vec::new();
+            let mut text = String::new();
+            let mut meta = StreamMeta::default();
+            let mut done = false;
+            for chunk in stream.as_bytes().chunks(size) {
+                done = feed_sse_bytes(&mut buffer, chunk, |delta| text.push_str(&delta), |part| {
+                    if part.finish_reason.is_some() { meta.finish_reason = part.finish_reason.clone(); }
+                    if part.usage.is_some() { meta.usage = part.usage.clone(); }
+                });
+                if done { break; }
+            }
+            assert!(done, "terminal marker survives chunk size {size}");
+            assert!(buffer.is_empty());
+            assert_eq!(text, "完整成稿");
+            assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+            assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_done_http_eof_control_ignores_tcp_keep_alive() {
+        let (cfg, release, server) = held_open_sse_server(fake::sse_body(&["完整成稿"]), true).await;
+        let mut meta = StreamMeta::default();
+        let result = tokio::time::timeout(Duration::from_secs(1), stream_chat_budgeted(
+            &cfg, vec![msg("user", "x")], "max", 100, &mut meta, |_| {},
+        )).await;
+        let _ = release.send(());
+        server.await.unwrap();
+        assert_eq!(result.expect("complete HTTP body does not require TCP close").unwrap(), "完整成稿");
+        assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+    }
+
+    #[tokio::test]
+    async fn stream_done_absent_keeps_waiting_for_http_eof() {
+        let body = fake::sse_body(&["完整成稿"]).replace("data: [DONE]\n\n", "");
+        let (cfg, release, server) = held_open_sse_server(body, false).await;
+        let mut meta = StreamMeta::default();
+        let (waited, result) = {
+            let request = stream_chat_budgeted(&cfg, vec![msg("user", "x")], "max", 100, &mut meta, |_| {});
+            tokio::pin!(request);
+            let early = tokio::time::timeout(Duration::from_millis(200), &mut request).await;
+            let _ = release.send(());
+            match early {
+                Ok(result) => (false, Ok(result)),
+                Err(_) => (true, tokio::time::timeout(Duration::from_secs(1), &mut request).await),
+            }
+        };
+        server.await.unwrap();
+        assert!(waited, "without [DONE], finish_reason alone must not discard a later usage chunk");
+        assert_eq!(result.expect("EOF releases compatible streams without [DONE]").unwrap(), "完整成稿");
+        assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+    }
+
+    #[tokio::test]
+    async fn stream_done_absent_preserves_unterminated_eof_metadata_tail() {
+        let s = fake::Server::start(Duration::ZERO, |_| {
+            (200, fake::sse_body(&["完整成稿"]).replace("data: [DONE]\n\n", "").trim_end().to_string())
+        });
+        let mut meta = StreamMeta::default();
+        let text = stream_chat_budgeted(&cfg_for(&s), vec![msg("user", "x")], "max", 100, &mut meta, |_| {})
+            .await.expect("EOF without [DONE] remains compatible");
+        assert_eq!(text, "完整成稿");
+        assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+    }
+
+    #[tokio::test]
+    async fn editorial_review_revise_probe_uses_explicit_budget_and_shared_guards() {
+        use std::sync::{Arc, Mutex};
+        let received = Arc::new(Mutex::new(None));
+        let capture = received.clone();
+        let s = fake::Server::start(Duration::ZERO, move |request| {
+            let body = request.split_once("\r\n\r\n").unwrap().1;
+            *capture.lock().unwrap() = Some(serde_json::from_str::<serde_json::Value>(body).unwrap());
+            (200, fake::sse_body(&["半篇成稿"]).replace("\"stop\"", "\"length\""))
+        });
+        let mut meta = StreamMeta::default();
+        let error = request_editorial_review_budgeted(
+            &CancelState::default(), &cfg_for(&s), vec![msg("user", "x")], None,
+            EDITORIAL_REVIEW_TIMEOUT, turn_budget(Some("revise")), &mut meta,
+        ).await.expect_err("the probe keeps the same truncated-output guard");
+        let body = received.lock().unwrap().clone().unwrap();
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["max_tokens"], 32_000);
+        assert_eq!(error, EDITORIAL_TRUNCATED_ERR);
+        assert_eq!(meta.finish_reason.as_deref(), Some("length"));
+        assert_eq!(s.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn editorial_review_returns_whole_text_with_selected_budget_and_real_metadata() {
+        use std::sync::{Arc, Mutex};
+        use std::sync::atomic::Ordering;
+        for (ceiling, expected_budget) in [(12_000, 12_000), (100_000, 32_000)] {
+            let received = Arc::new(Mutex::new(None));
+            let capture = received.clone();
+            let s = fake::Server::start_with_models(Duration::ZERO, move |request| {
+                let body = request.split_once("\r\n\r\n").expect("request body").1;
+                *capture.lock().unwrap() = Some(serde_json::from_str::<serde_json::Value>(body).unwrap());
+                (200, fake::sse_body(&["完整", "成稿"]))
+            }, fake::models_body(ceiling));
+            let cfg = cfg_for(&s);
+            let mut meta = StreamMeta::default();
+            let text = request_editorial_review(
+                &CancelState::default(), &cfg, vec![msg("user", "初稿与复核要求")],
+                Some("editorial-ok"), EDITORIAL_REVIEW_TIMEOUT, &mut meta,
+            ).await.expect("complete review");
+            assert_eq!(text, "完整成稿");
+            assert_eq!(meta.finish_reason.as_deref(), Some("stop"));
+            assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+            let body = received.lock().unwrap().clone().expect("one request received");
+            assert_eq!(body["model"], "fake-model");
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["reasoning_effort"], "high");
+            assert_eq!(body["max_tokens"], expected_budget);
+            assert_eq!(body["messages"][0]["content"], "初稿与复核要求");
+            assert_eq!(s.hits.load(Ordering::SeqCst), 1, "no automatic second review");
+        }
+        assert_eq!(EDITORIAL_REVIEW_TIMEOUT, Duration::from_secs(180));
+    }
+
+    #[tokio::test]
+    async fn editorial_review_rejects_blank_and_incomplete_results_without_losing_metadata() {
+        for (text, reason, error, failure) in [
+            ("", "stop", EMPTY_REPLY_ERR, "empty"),
+            ("   ", "stop", EMPTY_REPLY_ERR, "empty"),
+            ("半篇成稿", "length", EDITORIAL_TRUNCATED_ERR, "quality"),
+            ("部分成稿", "content_filter", EDITORIAL_FILTERED_ERR, "quality"),
+        ] {
+            let s = fake::Server::start(Duration::ZERO, move |_| {
+                (200, fake::sse_body(&[text]).replace("\"stop\"", &format!("\"{reason}\"")))
+            });
+            let mut meta = StreamMeta::default();
+            let err = request_editorial_review(
+                &CancelState::default(), &cfg_for(&s), vec![msg("user", "x")],
+                Some("editorial-rejected"), EDITORIAL_REVIEW_TIMEOUT, &mut meta,
+            ).await.expect_err("invalid draft must not be returned");
+            assert_eq!(err, error);
+            assert_eq!(editorial_review_failure(&err), failure);
+            assert_eq!(meta.finish_reason.as_deref(), Some(reason));
+            assert_eq!(meta.usage.as_ref().and_then(|u| u["total_tokens"].as_u64()), Some(11));
+            assert_eq!(s.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn editorial_review_does_not_invent_missing_metadata() {
+        let s = fake::Server::start(Duration::ZERO, |_| {
+            (200, "data: {\"choices\":[{\"delta\":{\"content\":\"完整成稿\"}}]}\n\ndata: [DONE]\n\n".into())
+        });
+        let mut meta = StreamMeta::default();
+        let text = request_editorial_review(
+            &CancelState::default(), &cfg_for(&s), vec![msg("user", "x")],
+            None, EDITORIAL_REVIEW_TIMEOUT, &mut meta,
+        ).await.expect("provider may omit metadata");
+        assert_eq!(text, "完整成稿");
+        assert!(meta.finish_reason.is_none());
+        assert!(meta.usage.is_none());
+    }
+
+    #[tokio::test]
+    async fn editorial_review_http_errors_keep_existing_classification_and_never_retry() {
+        for (status, failure) in [(401, "auth"), (429, "network"), (500, "network")] {
+            let s = fake::Server::start(Duration::ZERO, move |_| (status, "service error".into()));
+            let err = request_editorial_review(
+                &CancelState::default(), &cfg_for(&s), vec![msg("user", "x")],
+                Some("editorial-http"), EDITORIAL_REVIEW_TIMEOUT, &mut StreamMeta::default(),
+            ).await.expect_err("HTTP failure");
+            assert_eq!(editorial_review_failure(&err), failure);
+            assert!(err.contains(&status.to_string()));
+            assert_eq!(s.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn editorial_review_deadline_includes_model_limit_lookup() {
+        let s = fake::Server::start_with_models_fn(Duration::ZERO,
+            |_| (200, fake::sse_body(&["must not request"])),
+            || {
+                std::thread::sleep(Duration::from_secs(3));
+                fake::models_body(100_000)
+            },
+        );
+        let timer = std::time::Instant::now();
+        let err = request_editorial_review(
+            &CancelState::default(), &cfg_for(&s), vec![msg("user", "x")],
+            Some("editorial-limit-timeout"), Duration::from_millis(500), &mut StreamMeta::default(),
+        ).await.expect_err("deadline includes /models");
+        assert!(timer.elapsed() < Duration::from_secs(2));
+        assert_eq!(editorial_review_failure(&err), "network");
+        assert!(err.contains("成稿复核超时"));
+        assert_eq!(s.models_hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(s.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn editorial_review_deadline_stops_waiting_for_completion() {
+        let s = fake::Server::start(Duration::from_secs(3), |_| (200, fake::sse_body(&["late"])));
+        let timer = std::time::Instant::now();
+        let err = request_editorial_review(
+            &CancelState::default(), &cfg_for(&s), vec![msg("user", "x")],
+            Some("editorial-response-timeout"), Duration::from_millis(500), &mut StreamMeta::default(),
+        ).await.expect_err("deadline includes response");
+        assert!(timer.elapsed() < Duration::from_secs(2));
+        assert_eq!(editorial_review_failure(&err), "network");
+        assert_eq!(s.hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn editorial_review_prior_cancellation_prevents_any_request() {
+        let s = fake::Server::start(Duration::ZERO, |_| (200, fake::sse_body(&["must not request"])));
+        let state = CancelState::default();
+        state.cancel("editorial-already-stopped");
+        let err = request_editorial_review(
+            &state, &cfg_for(&s), vec![msg("user", "x")],
+            Some("editorial-already-stopped"), EDITORIAL_REVIEW_TIMEOUT, &mut StreamMeta::default(),
+        ).await.expect_err("already stopped run must stay stopped");
+        assert_eq!(err, cancel::CANCELLED);
+        assert_eq!(editorial_review_failure(&err), "cancel");
+        assert_eq!(s.models_hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(s.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn editorial_review_run_cancellation_interrupts_model_limit_lookup() {
+        use std::sync::atomic::Ordering;
+        let s = fake::Server::start_with_models_fn(Duration::ZERO,
+            |_| (200, fake::sse_body(&["must not request"])),
+            || {
+                std::thread::sleep(Duration::from_secs(3));
+                fake::models_body(100_000)
+            },
+        );
+        let state = std::sync::Arc::new(CancelState::default());
+        let cancelling_state = state.clone();
+        let started = s.models_hits.clone();
+        let cancelling = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while started.load(Ordering::SeqCst) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }).await.expect("model lookup should begin");
+            cancelling_state.cancel("editorial-cancel-lookup");
+        });
+        let timer = std::time::Instant::now();
+        let err = request_editorial_review(
+            &state, &cfg_for(&s), vec![msg("user", "x")],
+            Some("editorial-cancel-lookup"), EDITORIAL_REVIEW_TIMEOUT, &mut StreamMeta::default(),
+        ).await.expect_err("cancel during model lookup");
+        cancelling.await.unwrap();
+        assert_eq!(err, cancel::CANCELLED);
+        assert!(timer.elapsed() < Duration::from_secs(2));
+        assert_eq!(s.hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn editorial_review_recovery_cancellation_interrupts_completion_without_run_id() {
+        use std::sync::atomic::Ordering;
+        let s = fake::Server::start(Duration::from_secs(3), |_| (200, fake::sse_body(&["late"])));
+        let state = std::sync::Arc::new(CancelState::default());
+        let cancelling_state = state.clone();
+        let started = s.hits.clone();
+        let cancelling = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while started.load(Ordering::SeqCst) == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            }).await.expect("completion should begin");
+            cancelling_state.cancel_all();
+        });
+        let timer = std::time::Instant::now();
+        let err = request_editorial_review(
+            &state, &cfg_for(&s), vec![msg("user", "x")],
+            None, EDITORIAL_REVIEW_TIMEOUT, &mut StreamMeta::default(),
+        ).await.expect_err("recovery must cancel detached review");
+        cancelling.await.unwrap();
+        assert_eq!(err, cancel::CANCELLED);
+        assert!(timer.elapsed() < Duration::from_secs(2));
+        assert_eq!(s.hits.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -2765,85 +3295,7 @@ mod tests {
         assert_eq!(NONSTREAM_EFFORT, "high");
     }
 
-    /// 与前端 prep.ts PREP_INSTRUCTION 对齐的规约（前端在 TS 中注入，测试在此复刻）
-    const PREP_RULE: &str = "你的任务是：若创作需求尚不明确 → 仅输出你的澄清问题（一段话）并结束；若已明确 → 先用知识工具（load_knowledge / search_knowledge）取用本次创作真正需要的点文件，取完只输出 READY（仅此一词），不要撰写正文。稍后会另发指令让你开始撰写正文。";
-
-    #[tokio::test]
-    #[ignore = "需要真实 DeepSeek API 与密钥"]
-    async fn live_clarify_tools_then_digest_write() {
-        let cfg = resolve_config().expect("应能解析到密钥配置");
-        let system = "你是公众号推文创作助手，可用知识工具 load_knowledge / search_knowledge。\n知识注册表（目录）：视觉/风格：style-japanese(日系)、style-guochao(国潮)、style-tech(科技)；文本/内容类型：type-promo(促销)、type-tutorial(干货)；文本/文案：copy-tpl-promo(促销模板)；文本/合规：comp-banned(违禁词表)。\n规则：需求尚不明确时只用一段话问清关键问题（含问号），不要写正文；需求已明确时先用知识工具取用相关点文件，取完只输出 READY。";
-
-        // 1) 模糊请求 → 模型应先澄清（第 23 轮 persona v5：需求未齐不产出）
-        let vague = request_prep(
-            &cfg,
-            vec![
-                msg("system", system),
-                msg("user", "帮我写一篇推文，主题是新书上市"),
-                msg("user", PREP_RULE),
-            ],
-        )
-        .await
-        .expect("澄清请求应成功");
-        let vague_text = vague.text.unwrap_or_default();
-        // 语义就是 is_empty()（原写法 `!vague.calls.is_empty() == false` 虽然断言正确，
-        // 但双重否定极易被后来者误读成反义而改错，直接写成肯定式）
-        assert!(vague.calls.is_empty(), "模糊请求不应直接取工具: {vague_text}");
-        assert!(vague_text.contains('？') || vague_text.contains('?'), "应输出澄清问题: {vague_text}");
-        println!("LIVE CLARIFY: {vague_text}");
-
-        // 2) 明确创作 → 模型调用知识工具（第 25 轮）
-        let detailed = request_prep(
-            &cfg,
-            vec![
-                msg("system", system),
-                msg("user", "写一篇咖啡店开业宣传推文，日系风，800 字左右，直接写"),
-                msg("user", PREP_RULE),
-            ],
-        )
-        .await
-        .expect("明确请求 prep 应成功");
-        assert!(!detailed.calls.is_empty(), "明确创作应触发知识工具");
-        let names: Vec<String> = detailed.calls.iter().map(|c| c.name.clone()).collect();
-        println!("LIVE TOOL CALLS: {names:?} args={:?}", detailed.calls.iter().map(|c| &c.args).collect::<Vec<_>>());
-
-        // 3) 模拟前端执行工具 → 拼 digest → 不带工具历史的流式续写（验证无 400 风险路径）
-        let mut digest = String::from("\n");
-        for c in &detailed.calls {
-            let body = if c.name.contains("style") {
-                "日系风色板：底色#faf3e3、主色#c29b6b、点缀#8fa37a；纸感材质，圆角 12px。"
-            } else if c.name.contains("type") {
-                "促销类结构：banner → 钩子段 → 2-3 小节（各配组件+素材）→ 1 个关键气泡 → 平实号召。"
-            } else if c.name.contains("copy-tpl") {
-                "成稿模板骨架：开篇利益点 3 秒钩子；正文 1500-2500 字、短段落+小标题。"
-            } else if c.name.contains("comp") {
-                "合规红线：禁用 最/第一/国家级/100%/绝对化 措辞与医疗疗效承诺。"
-            } else {
-                "模块规范：气泡 KEY 用纯色 + 右下角饰。"
-            };
-            digest.push_str(&format!("\n【{} {}】\n{}\n", c.name, c.args, body));
-        }
-        let write = format!(
-            "{} 开始撰写正文：只输出一个 ```v2 代码块；第一行声明 [[theme:日系]]；正文用 v2 排版语法（banner/steps/气泡/图位 [[img:wide|说明]]），不用 emoji。",
-            digest
-        );
-        let mut got = String::new();
-        let reply = stream_chat_budgeted(
-            &cfg,
-            vec![msg("system", system), msg("user", "写一篇咖啡店开业宣传推文，日系风，800 字左右，直接写"), msg("user", &write)],
-            "max",
-            64000,
-            &mut StreamMeta::default(),
-            |d| got.push_str(&d),
-        )
-        .await
-        .expect("带知识摘要的流式续写应成功（验证无工具历史 400）");
-        assert_eq!(reply, got);
-        assert!(reply.trim().len() > 120, "续写过短: {}", reply.len());
-        assert!(reply.contains("```v2"), "应产出 v2 围栏正文");
-        assert!(reply.contains("[[theme"), "正文应声明风格 theme");
-        println!("LIVE WRITE: len={} v2=true theme=true head={}", reply.len(), reply.chars().take(80).collect::<String>());
-    }
+    // R36: 旧 READY/固定文案模板的 live 测试已退役；真实写作验收使用前端生产消息组装。
 
     #[tokio::test]
     #[ignore = "需要真实 DeepSeek API 与密钥"]
@@ -2871,5 +3323,47 @@ mod tests {
         let n = tag_re.find_iter(&svg).count();
         println!("LIVE SVG: elements={n} len={} head={}", svg.len(), svg.chars().take(60).collect::<String>());
         assert!(n >= 10, "可见图形元素应 ≥10（复杂度契约），实际 {n}");
+    }
+
+    /// 一次真实作画抽样：走生产配置、提示词和网络函数；不读写用户文章或素材库。
+    /// 文件落在项目诊断目录供手机尺寸目视，技术成功不等同于审美通过。
+    #[tokio::test]
+    #[ignore = "需要真实模型；生成一幅 SVG 到项目 .local，需另做独立目视"]
+    async fn live_editorial_hero_sample() {
+        let cfg = resolve_config().expect("应能解析到模型配置");
+        let user = svg_user_prompt("wide",
+            "智序本地推文创作工具的自我介绍主图。用一个连续的编辑过程构图：左侧两三张错落的材料纸页，中间占主画面的是打开的笔记本电脑与一只正在整理纸页的手，右侧竖立的手机显示排好版的文章缩影（仅用段落线与一个插图块表达，无文字）。一条克制的弧线把材料、编辑、成稿连接起来。明确主次、主体完整，避免平均排列成三个图标；不要盆栽、漂浮星星、无意义碎点。透明背景，viewBox 0 0 750 360，左右各留约35单位边距。主轮廓#26332E，墨绿#2F6656，少量暖赭#A57A3C，高光#DCE4DE；画中物体允许实心填色。主轮廓4–6单位，次线2–3单位，手机缩小后仍能辨认。",
+            Some("克制的现代编辑插画，白纸、墨绿和暖赭，清晰块面与少量手绘线条"), None).expect("prompt");
+        let model = image_model();
+        let started = std::time::Instant::now();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap()
+            .join(".local/runs/r31-quality");
+        let sample_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = root.join(format!("live-hero-{sample_id}"));
+        std::fs::create_dir_all(&dir).expect("创建项目诊断目录");
+        // 先失效旧选择；失败或中断绝不能让渲染器读到上一次成功图。
+        let selection = root.join("live-hero-selection.json");
+        std::fs::write(&selection, serde_json::to_vec_pretty(&serde_json::json!({"status":"running", "directory":dir})).unwrap()).expect("保存当前抽样状态");
+        std::fs::write(dir.join("live-hero-request.txt"), format!("{SVG_SYSTEM_PROMPT}\n\n{user}")).expect("保存公开作画说明");
+        let result = match raw_completion(&cfg, model.clone(), vec![msg("system", SVG_SYSTEM_PROMPT), msg("user", &user)]).await {
+            Ok(result) => result,
+            Err(error) => {
+                let failure = serde_json::json!({ "model": model, "elapsed_ms": started.elapsed().as_millis(), "error": error, "visual_acceptance": "no image returned" });
+                std::fs::write(dir.join("live-hero-failure.json"), serde_json::to_vec_pretty(&failure).unwrap()).expect("保存失败回执");
+                std::fs::write(&selection, serde_json::to_vec_pretty(&serde_json::json!({"status":"failed", "directory":dir})).unwrap()).expect("保存失败状态");
+                panic!("真实插画请求失败，项目诊断目录已保存原因");
+            }
+        };
+        std::fs::write(dir.join("live-hero-response.txt"), &result.text).expect("保存实际响应");
+        let receipt = serde_json::json!({ "model": model, "elapsed_ms": started.elapsed().as_millis(),
+            "finish_reason": result.finish_reason, "usage": result.usage,
+            "response_bytes": result.text.len(), "visual_acceptance": "pending" });
+        std::fs::write(dir.join("live-hero-receipt.json"), serde_json::to_vec_pretty(&receipt).unwrap()).expect("保存回执");
+        assert!(extract_clarify(&result.text).is_none(), "画面说明完整，不应澄清");
+        let svg = extract_svg(&result.text).expect("模型应返回 SVG，原响应已保留");
+        std::fs::write(dir.join("live-hero.svg"), &svg).expect("保存 SVG");
+        assert!(svg.contains("viewBox="), "必须声明画布");
+        std::fs::write(&selection, serde_json::to_vec_pretty(&serde_json::json!({"status":"returned", "directory":dir})).unwrap()).expect("保存成功选择");
+        println!("LIVE EDITORIAL: response_bytes={} elapsed_ms={} visual=pending", result.text.len(), started.elapsed().as_millis());
     }
 }

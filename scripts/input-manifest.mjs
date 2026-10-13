@@ -31,15 +31,20 @@ if (!outFile) {
 }
 
 /** 产物 / 依赖 / VCS：不属于"输入" */
-const EXCLUDE_DIRS = new Set(['node_modules', 'dist', '.git', 'target', '.vite', '.pnpm-store', 'coverage'])
+const EXCLUDE_DIRS = new Set(['node_modules', 'dist', 'dist-ssr', '.git', 'target', '.vite', '.pnpm-store', 'coverage'])
+// 项目级归档和运行证据不参与构建；不要按 .md 后缀全局排除，否则会漏掉运行时知识语料。
+const EXCLUDE_PATHS = new Set(['.local', 'docs', 'src-tauri/gen'])
+const ROOT_DOCS = new Set(['CLAUDE.md', 'GOAL.md', 'PROGRESS.md', 'PROGRESS-LITE.md', 'REQUIREMENTS.md', 'STRUCTURE.md', 'README.md', 'RELEASE-NOTES.md'])
 /** 明确的**产物**文件（即便在根目录下也不计入输入清单） */
-const EXCLUDE_FILES = [/\.exe$/i, /\.msi$/i, /\.nsis\.zip$/i]
+const EXCLUDE_FILES = [/\.exe$/i, /\.msi$/i, /\.nsis\.zip$/i, /\.pdb$/i, /\.tsbuildinfo$/i, /\.log$/i, /\.tmp-/i]
 /** 已知的敏感文件：只记"存在"，**绝不**记录内容或哈希以外的东西（哈希本身不泄露密钥） */
-const SENSITIVE = [/credential/i, /\.env$/i, /secret/i]
+const SENSITIVE = [/credential/i, /(^|\/)\.env(?:\.|$)/i, /secret/i]
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir)) {
     const abs = join(dir, name)
+    const rel = relative(root, abs).split(sep).join('/')
+    if (EXCLUDE_PATHS.has(rel) || ROOT_DOCS.has(rel) || resolve(abs) === resolve(outFile)) continue
     let st
     try {
       st = statSync(abs)
@@ -74,7 +79,7 @@ for (const abs of files) {
 function execSyncQuiet(cmd) {
   // 用 child_process 同步执行，失败就返回 unknown（不抛出、不把 stderr 泄漏进报告）
   try {
-    return String(execSync(cmd, { stdio: ['ignore', 'pipe', 'ignore'] })).trim()
+    return String(execSync(cmd, { cwd: root, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })).trim()
   } catch {
     return 'unknown'
   }
@@ -96,6 +101,7 @@ const manifest = {
   gitHead: execSyncQuiet('git rev-parse HEAD'),
   tooling,
   excludedDirs: [...EXCLUDE_DIRS],
+  excludedPaths: [...EXCLUDE_PATHS, ...ROOT_DOCS],
   excludedArtifactPatterns: EXCLUDE_FILES.map((r) => String(r)),
   sensitiveFilesSkipped: sensitiveSkipped,
   fileCount: entries.length,

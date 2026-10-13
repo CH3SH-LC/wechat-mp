@@ -362,6 +362,20 @@ const PERSIST_CASES = [
     why: 'exit=0、主判定 PASS、报告也写着 PASS',
   },
   {
+    id: '创建判定器不得删除超过 24 小时的证据',
+    setup: (dir) => mkdirSync(dir, { recursive: true }),
+    program: PRELUDE +
+      `import { mkdirSync, writeFileSync, utimesSync } from 'node:fs';\n` +
+      `import { join } from 'node:path';\n` +
+      `process.env.WXMP_LOCAL_DIR = join(dir, 'local');\n` +
+      `const prior = join(process.env.WXMP_LOCAL_DIR, 'runs', 'unfinished');\n` +
+      `mkdirSync(prior, { recursive: true });\nwriteFileSync(join(prior, 'evidence.txt'), 'unresolved evidence');\n` +
+      `const old = new Date(Date.now() - 3 * 86400000);\nutimesSync(prior, old, old);\n` +
+      `const j = createJudge({ script: 'preserve-evidence', outDir: dir, plannedCases: ['case'] });\nj.check('case', true);\nj.finish();\n`,
+    assert: (r, dir) => r.exit === 0 && existsSync(join(dir, 'local', 'runs', 'unfinished', 'evidence.txt')) && readFileSync(join(dir, 'local', 'runs', 'unfinished', 'evidence.txt'), 'utf8') === 'unresolved evidence',
+    why: '目录年龄不是结案证明；新检查必须保留历史原始证据',
+  },
+  {
     id: '必需检查条数下界（minChecks）不足时不是 PASS',
     setup: (dir) => mkdirSync(dir, { recursive: true }),
     program: PRELUDE + `const j = createJudge({ script: 'min-checks', outDir: dir, plannedCases: [], minChecks: 3 });\nj.check('only-one', true);\nj.finish();\n`,

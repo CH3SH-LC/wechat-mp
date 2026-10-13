@@ -87,7 +87,7 @@ pub fn save_settings_to(dir: &std::path::Path, s: &AppSettings) -> Result<String
     std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败：{e}"))?;
     let path = dir.join("settings.json");
     let json = serde_json::to_string_pretty(s).map_err(|e| format!("序列化失败：{e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("写入设置失败：{e}"))?;
+    crate::documents::atomic_write_file(&path, json.as_bytes()).map_err(|e| format!("写入设置失败：{e}"))?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -145,6 +145,27 @@ mod tests {
         assert_eq!(loaded.model_vision, "deepseek-flash");
         assert!(loaded.vision_review);
         assert!(loaded.load_error.is_none(), "正常文件不该带诊断信息");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_atomic_replace_preserves_settings_and_retry_succeeds() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("wxmp-settings-atomic-{}", std::process::id()));
+        let old = AppSettings { api_key: "old-key".into(), ..Default::default() };
+        save_settings_to(&dir, &old).unwrap();
+        let path = dir.join("settings.json");
+        let before = std::fs::read(&path).unwrap();
+        // 禁止替换但允许原地写，能证伪“直接 write 也能保护旧文件”的旧实现。
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(3).open(&path).unwrap();
+        let new = AppSettings { api_key: "new-key".into(), ..Default::default() };
+        assert!(save_settings_to(&dir, &new).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        drop(lock);
+        assert!(std::fs::read_dir(&dir).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains(".tmp-")));
+        save_settings_to(&dir, &new).unwrap();
+        assert_eq!(read_settings_at(&dir).unwrap().api_key, "new-key");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -8,7 +8,7 @@
 //   · repair-report.md   —— 前后对比与请求统计
 //
 // 边界（计划明确要求）：
-//   · **只读**真实作品：不读写 C:/Users/Lenovo/Documents/wechat-mp-workspace 下的任何文件；
+//   · 真实作品隔离：不读写用户 Documents/wechat-mp-workspace 下的任何文件；
 //   · **不覆盖原稿**：产物只写在仓库内的 docs/artifacts/ 下；
 //   · **不联网、不调模型**：缺少的素材走浏览器演示池（inTauri 为假），只用于展示链路，不冒充真实模型产物。
 import { resetStub } from './lib/ls-stub.mjs'
@@ -16,6 +16,7 @@ import { failingDoc, failingSource, fixtureAssets, seedFixtureAssets } from './l
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { resolveOutDir } from './lib/run-result.mjs'
 
 const { composeMarkdown } = await import('../src/lib/compose.ts')
 const { emptyMaterializeInfo, materializePlaceholders } = await import('../src/lib/image-agent.ts')
@@ -26,7 +27,7 @@ const { newRunId, clearTraceBuffer, traceBuffer, summarize, clip } = await impor
 const here = dirname(fileURLToPath(import.meta.url))
 // 2026-10-09：默认落点收进项目内 `.local/`——以前默认写 `docs/artifacts/2026-09-28-repair/`，
 // 而那里是**受版本控制**的冻结样例，于是每跑一次就把两个已提交文件改脏（新运行 ID 流水）。
-const outDir = join(here, '..', '.local', 'runs', 'fixture-repair')
+const outDir = resolveOutDir('fixture-repair')
 mkdirSync(outDir, { recursive: true })
 
 // ---- 修复前（来自当时保存的告警与绑定，不重新解读、不修饰） ----

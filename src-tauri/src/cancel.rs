@@ -51,9 +51,15 @@ impl CancelFlag {
 }
 
 /// 进程内取消表（Tauri managed state）
-#[derive(Default)]
 pub struct CancelState {
     inner: Mutex<Inner>,
+    recovery: watch::Sender<u64>,
+}
+
+impl Default for CancelState {
+    fn default() -> Self {
+        Self { inner: Mutex::new(Inner::default()), recovery: watch::channel(0).0 }
+    }
 }
 
 #[derive(Default)]
@@ -85,6 +91,18 @@ impl CancelState {
         self.flag(run_id).fire();
     }
 
+    /// A replaced WebView cannot receive results for its old runs. Stop local
+    /// waits before recovering it; new run IDs remain usable after recovery.
+    pub fn cancel_all(&self) {
+        let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // 每次恢复推进代数，唤醒所有已进入的调用，包括素材工坊没有 runId 的任务。
+        // 新订阅者从当前代数开始，因此恢复之后的新调用不继承全局取消。
+        self.recovery.send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        for flag in g.flags.values() {
+            flag.fire();
+        }
+    }
+
     pub fn is_cancelled(&self, run_id: &str) -> bool {
         self.inner
             .lock()
@@ -107,28 +125,40 @@ impl CancelState {
 pub const CANCELLED: &str = "已取消（用户停止）";
 
 /// 把一次异步调用包成"可取消"：取消发生即立刻返回 `Err(CANCELLED)`，不等服务端。
-/// `run_id` 为 None（旧调用路径）时原样等待，行为与改动前一致。
-pub async fn run_cancellable<T, F>(
+/// `run_id` 为 None 的工坊调用也响应全局恢复取消；普通按回合停止仍只影响相应 runId。
+/// 在函数调用时同步订阅，而非等 future 首次被 poll，避免入口与实际等待之间漏掉恢复。
+pub fn run_cancellable<T, F>(
     state: &CancelState,
     run_id: Option<&str>,
     fut: F,
-) -> Result<T, String>
+) -> impl Future<Output = Result<T, String>>
 where
     F: Future<Output = Result<T, String>>,
 {
-    let Some(id) = run_id else {
-        return fut.await;
-    };
-    let flag = state.flag(id);
-    // 先订阅再读当前值：若取消发生在两次调用之间，`borrow()` 会看到 true 并立即返回；
-    // 若发生在之后，`changed()` 会唤醒。两个窗口都覆盖，不会漏。
-    let mut rx = flag.subscribe();
-    if *rx.borrow() {
-        return Err(CANCELLED.to_string());
-    }
-    tokio::select! {
-        r = fut => r,
-        _ = rx.changed() => Err(CANCELLED.to_string()),
+    let mut recovery_rx = state.recovery.subscribe();
+    let flag = run_id.map(|id| state.flag(id));
+    let mut rx = flag.as_ref().map(|flag| flag.subscribe());
+    async move {
+        // 保持 sender 存活，取消表淘汰旧条目时不能把仍在等待的任务当作通道关闭。
+        let _keep_flag = flag;
+        if recovery_rx.has_changed().unwrap_or(true)
+            || rx.as_ref().map(|rx| *rx.borrow()).unwrap_or(false)
+        {
+            return Err(CANCELLED.to_string());
+        }
+        tokio::select! {
+            // 同时就绪时优先取消，避免恢复后仍提交已经就绪的旧结果。
+            biased;
+            _ = recovery_rx.changed() => Err(CANCELLED.to_string()),
+            _ = async {
+                if let Some(rx) = rx.as_mut() {
+                    let _ = rx.changed().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => Err(CANCELLED.to_string()),
+            r = fut => r,
+        }
     }
 }
 
@@ -194,6 +224,78 @@ mod tests {
         assert!(st.is_cancelled("r3"));
         st.reset("r3");
         assert!(!st.is_cancelled("r3"), "新一轮不得继承上一轮的取消状态");
+    }
+
+    #[test]
+    fn recovery_cancels_existing_runs_but_allows_new_runs() {
+        let st = CancelState::default();
+        let first = st.flag("old-a");
+        let second = st.flag("old-b");
+        let mut receiver = first.subscribe();
+        st.cancel_all();
+        assert!(first.is_cancelled() && second.is_cancelled());
+        assert!(receiver.has_changed().unwrap());
+        assert!(*receiver.borrow_and_update());
+        assert!(*second.subscribe().borrow());
+        assert!(!st.flag("new-c").is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn recovery_cancels_anonymous_tasks_during_preflight() {
+        let st = CancelState::default();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let requested = std::sync::atomic::AtomicBool::new(false);
+        let operation = run_cancellable(&st, None, async {
+            let _ = entered_tx.send(());
+            // 等价于 /models 之类的前置等待：恢复后不能继续发出真正的生成请求。
+            std::future::pending::<()>().await;
+            requested.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, String>(7)
+        });
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(operation, async { entered_rx.await.unwrap(); st.cancel_all(); })
+        }).await.expect("恢复取消应结束前置等待");
+        assert_eq!(result.unwrap_err(), CANCELLED);
+        assert!(!requested.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn recovery_before_first_poll_is_observed_for_named_and_anonymous_tasks() {
+        for run_id in [None, Some("old-unpolled")] {
+            let st = CancelState::default();
+            let entered = std::sync::atomic::AtomicBool::new(false);
+            let operation = run_cancellable(&st, run_id, async {
+                entered.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok::<_, String>(7)
+            });
+            st.cancel_all();
+            assert_eq!(operation.await.unwrap_err(), CANCELLED);
+            assert!(!entered.load(std::sync::atomic::Ordering::SeqCst), "旧任务不能开始前置查询");
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_does_not_poison_new_tasks_or_reset_existing_contexts() {
+        let st = CancelState::default();
+        let old = run_cancellable(&st, Some("old"), async { Ok::<_, String>(1) });
+        st.cancel_all();
+        assert_eq!(run_cancellable(&st, Some("old"), async { Ok::<_, String>(2) }).await.unwrap_err(), CANCELLED);
+        assert_eq!(run_cancellable(&st, Some("new"), async { Ok::<_, String>(3) }).await.unwrap(), 3);
+        assert_eq!(run_cancellable(&st, None, async { Ok::<_, String>(4) }).await.unwrap(), 4);
+        st.reset("old");
+        assert_eq!(run_cancellable(&st, Some("old"), async { Ok::<_, String>(5) }).await.unwrap(), 5);
+        assert_eq!(old.await.unwrap_err(), CANCELLED, "reset 只用于新调用，不能复活恢复前的等待");
+    }
+
+    #[tokio::test]
+    async fn stopping_one_run_does_not_cancel_anonymous_or_other_runs() {
+        let st = CancelState::default();
+        let anonymous = run_cancellable(&st, None, async { Ok::<_, String>(1) });
+        let other = run_cancellable(&st, Some("other"), async { Ok::<_, String>(2) });
+        st.cancel("stopped");
+        assert_eq!(anonymous.await.unwrap(), 1);
+        assert_eq!(other.await.unwrap(), 2);
+        assert_eq!(run_cancellable(&st, Some("stopped"), async { Ok::<_, String>(3) }).await.unwrap_err(), CANCELLED);
     }
 
     #[test]

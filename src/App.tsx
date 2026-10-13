@@ -23,6 +23,8 @@ import type { AssetLedger } from './lib/asset-ledger.ts'
 import { clip, newRunId, setTraceSink, trace } from './lib/trace.ts'
 import { getAsset } from './lib/asset-library.ts'
 import { renderArtPlaceholders } from './lib/artRender.ts'
+import { getLocalImage, localImageContext, localImageIdsFromHtml, localImageMeta, MAX_ATTACHED_IMAGES, missingLocalImageIds, renderLocalImages, savedLocalImageIds } from './lib/local-images.ts'
+import type { LocalImageRecord } from './lib/local-images.ts'
 import { checkHtml, QualityResult } from './lib/quality.ts'
 import { ChatMsg, DeltaPayload, cancelChatRun, inTauri, sendChatRust, sendChatMock } from './lib/chat.ts'
 import { isCreateRequest } from './lib/needs.ts'
@@ -30,6 +32,8 @@ import type { TaskEvent, TaskPhase } from './lib/progress.ts'
 import { runPrep, writeInstruction } from './lib/prep.ts'
 import type { AssetPolicy, PrepOutcome } from './lib/prep.ts'
 import { MAX_AUTO_REVISES, buildReviseContent } from './lib/revise.ts'
+import { assertEditorialImagesPreserved, buildEditorialReviewMessages, parseEditorialReview, restoreEditorialMaterials } from './lib/editorial.ts'
+import productFacts from './knowledge/产品/zhixu-product-facts.md?raw'
 import { structureDiff } from './lib/edit-diff.ts'
 import {
   bodyIntegrity,
@@ -58,7 +62,7 @@ const PREP_EVERY_TURN = true
 
 // 交付门禁的实现版本标识：写进每一版文档，使"这一版是按哪套规则验收的"事后可查（计划 §4）。
 // 改动检查口径时**必须**同步递增——否则旧稿会被误读成"按新规则验收过"。
-const VALIDATION_VERSION = 'dq-2026-09-29'
+const VALIDATION_VERSION = 'dq-2026-10-12-r32-editorial'
 
 // 第 23 轮：界面无模式/风格控件——类型与风格由模型按已澄清需求自决（persona 约束），
 // 渲染主题一律取正文 [[theme:名称]] 声明（含 [[palette]] 自定义色板），不再从 UI 传入。
@@ -120,8 +124,12 @@ function projectionFrom(units: AuthorUnit[] | null, htmlFallback: string): BodyP
 async function renderV2(v2: string): Promise<{ html: string; warnings: string[] } | null> {
   const r = composeMarkdown(v2, {})
   if (!r) return null
-  const html = r.arts.length ? await renderArtPlaceholders(r.html, r.arts) : r.html
+  const html = await renderArticleAssets(r.html, r.arts)
   return { html, warnings: r.warnings }
+}
+
+async function renderArticleAssets(html: string, arts: { svg: string }[]): Promise<string> {
+  return renderLocalImages(arts.length ? await renderArtPlaceholders(html, arts) : html)
 }
 
 // 素材解析结果 → 用户可见警告。文案刻意分成三类，且只有第一类进"可修复"清单：
@@ -244,6 +252,7 @@ function candidateFingerprint(c: { source: string; html: string }): string {
 const NOT_TEXT_FIXABLE = new Set([
   'asset.required-incomplete',
   'asset.rejected',
+  'asset.local-image-unreadable',
   'raster.not-passed',
   'photo.pending',
   'version.mismatch',
@@ -290,14 +299,23 @@ export type DocDisplayState =
   | { kind: 'repairing'; attempt: number } // 修复中
 
 export default function App() {
+  // 原生恢复验收需要证明 React 已实际挂载；只发送固定事件，不发送作品内容。
+  useEffect(() => {
+    if (inTauri()) void invoke('desktop_frontend_ready').catch(() => {})
+  }, [])
   const [msgs, setMsgs] = useState<DisplayMsg[]>([])
   const [busy, setBusy] = useState(false)
+  const [sessionPending, setSessionPending] = useState(false)
+  const sessionOperation = useRef(false)
+  const saveQueue = useRef(new Map<string, Promise<boolean>>())
   // 「AI 工作中」气泡：当前阶段 + 真实细节（读资料 / 思考 / 撰写 / 素材 / 排版 / 质检 / 修订 / 保存）
   const [task, setTask] = useState<TaskEvent | null>(null)
   // 本轮开始时间戳，供气泡显示已耗时
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
-  // P2：随下一条消息发送的参考图（data URL，仅本轮有效；消费后清空）
-  const [attached, setAttached] = useState<string[]>([])
+  // 原图已入库；待发附件携带展示缩图，发送后稳定 ID 随消息存档。
+  const [attached, setAttached] = useState<LocalImageRecord[]>([])
+  const attachmentEpochRef = useRef(0)
+  const attachmentEpoch = attachmentEpochRef.current
   const [html, setHtml] = useState<string | null>(null)
   const [quality, setQuality] = useState<QualityResult | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
@@ -332,6 +350,7 @@ export default function App() {
 
   // V3：顶栏工作区切换（对话 / 文档库 / 素材工坊）；文档库数据（文档默认自动保存、就地刷新）
   const [view, setView] = useState<'chat' | 'docs' | 'assets'>('chat')
+  const [assetsVisited, setAssetsVisited] = useState(false)
   const [docItems, setDocItems] = useState<DocMetaL[]>([])
   // 文档库读取失败的原因（null = 未失败）：与"还没有文档"分开显示
   const [docsError, setDocsError] = useState<string | null>(null)
@@ -512,7 +531,7 @@ export default function App() {
   const applySession = async (item: SessionItem) => {
     const mapped: DisplayMsg[] = item.messages
       .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'error')
-      .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content }))
+      .map((m) => ({ id: m.id, role: m.role as DisplayMsg['role'], content: m.content, localImages: m.localImages }))
     // 避免恢复后的消息 id 与 idSeq 计数器冲突（React key 唯一性）
     const maxId = mapped.reduce((acc, m) => Math.max(acc, m.id), 0)
     if (maxId >= idSeq) idSeq = maxId + 1
@@ -567,7 +586,7 @@ export default function App() {
       } else {
         const c = resolvePreview(last.content)
         if (c) {
-          const html2 = c.arts.length ? await renderArtPlaceholders(c.html, c.arts) : c.html
+          const html2 = await renderArticleAssets(c.html, c.arts)
           if (artSeqRef.current === seq) {
             setHtml(html2)
             setQuality(checkHtml(html2))
@@ -587,6 +606,10 @@ export default function App() {
   }
 
   const clearAllChat = () => {
+    ++artSeqRef.current
+    ++attachmentEpochRef.current
+    msgsRef.current = []
+    setAttached([])
     setMsgs([])
     setHtml(null)
     setQuality(null)
@@ -649,28 +672,33 @@ export default function App() {
   }
 
   const saveCurrent = (id: string, messages: DisplayMsg[]) => {
-    void saveSession(id, { mode: 'auto', style: 'auto', messages }).then((ok) => {
+    const previous = saveQueue.current.get(id) || Promise.resolve(true)
+    const next = previous.catch(() => false).then(() => saveSession(id, { mode: 'auto', style: 'auto', messages })).then((ok) => {
       if (!ok) {
         console.warn('会话存档失败：本次消息未写入本机', id)
         noteArchiveFailure()
       }
       refreshItems()
+      return ok
     })
+    saveQueue.current.set(id, next)
+    void next.finally(() => { if (saveQueue.current.get(id) === next) saveQueue.current.delete(id) })
+    return next
   }
 
   // 变更自动存档（防抖 700ms，绑定当前会话）
   useEffect(() => {
-    if (!currentId || !msgs.length) return
+    if (!currentId || !msgs.length || sessionPending) return
     const id = currentId
     const timer = window.setTimeout(() => {
       saveCurrent(id, msgs)
     }, 700)
     return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, currentId])
+  }, [msgs, currentId, sessionPending])
 
   const persistNow = (id: string, messages: DisplayMsg[]) => {
-    saveCurrent(id, messages)
+    return saveCurrent(id, messages)
   }
 
   // ---------- 对话 ----------
@@ -698,10 +726,10 @@ export default function App() {
     const c = resolvePreview(draft)
     if (c) {
       const seq = ++artSeqRef.current
-      if (c.arts.length) {
-        void renderArtPlaceholders(c.html, c.arts).then((html2) => {
+      if (c.arts.length || c.html.includes('local-image://')) {
+        void renderArticleAssets(c.html, c.arts).then((html2) => {
           if (artSeqRef.current === seq) setHtml(html2)
-        })
+        }).catch((e) => { if (artSeqRef.current === seq) setWarnings([`图片读取未完成：${errSummary(e)}`]) })
       } else {
         setHtml(c.html)
       }
@@ -760,12 +788,10 @@ export default function App() {
   // ---------- 对话回合（统一 persona，模型自主判断；禁止任何前端对话状态机）----------
   // 第 25 轮：system 只注入轻量"知识注册表"，不再 bigram 注入正文；桌面创作前经 prep_turn
   // 让模型决定"取哪些知识点 / 是否澄清"（工具取用循环非对话路由，不改变用户可见回合）。
-  const turn = async (raw: string, images: string[] = []): Promise<void> => {
+  const turn = async (raw: string, images: LocalImageRecord[] = []): Promise<void> => {
     if (busyRef.current) return
-    // 参考图只在本轮有效：显示文本里留一句说明，图片本身不进会话存档（sessions 结构不变）
-    const content = images.length ? `${raw}
-（附参考图 ${images.length} 张）` : raw
-    const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content }
+    const content = raw
+    const userMsg: DisplayMsg = { id: idSeq++, role: 'user', content, localImages: images.length ? images.map(localImageMeta) : undefined }
     const history: DisplayMsg[] = msgsRef.current
     setMsgs([...history, userMsg, { id: idSeq++, role: 'assistant', content: '' }])
 
@@ -847,15 +873,50 @@ export default function App() {
         `revisionId: ${priorAccepted.revisionId || '(未知)'}\n` +
         `修改请基于下面这份正文；其中 [[asset:分类|素材ID|用途说明]] 是已固化素材的稳定引用，` +
         `**原样照抄分类与 ID**。用户只说改文字时，不要给已有素材加 |new，也不要改成 [[img]]/[[deco]] 占位。\n` +
+        `local-image://li-… 是用户原图的稳定引用，保留 ID 与图片，不得换成生成插画、照片占位或磁盘路径。\n` +
         '```\n' + priorAccepted.source + '\n```'
+    }
+
+    // 当前原图先入库再发送；续改从成品稳定引用恢复看图上下文，而非依赖上轮临时 base64。
+    const visibleImages = [...images]
+    const seenImageIds = new Set(images.map((image) => image.assetId))
+    const knownImages = [...history.flatMap((m) => m.localImages || []), ...(userMsg.localImages || [])]
+    const priorImageIds = [...new Set(savedLocalImageIds(priorAccepted?.source || ''))]
+    const knownImageIds = new Set([...knownImages.map((image) => image.assetId), ...priorImageIds])
+    const imageNames = new Map(knownImages.map((image) => [image.assetId, image.name]))
+    const imageContext = () => {
+      const hidden = [...knownImageIds].filter((id) => !seenImageIds.has(id))
+      return localImageContext(visibleImages) + (hidden.length ? '\n\n【本次未附视觉副本的原图清单】\n' + hidden.map((id) =>
+        `${JSON.stringify(imageNames.get(id) || '当前文章已保存的原图')}：![图片说明](local-image://${id})`,
+      ).join('\n') + '\n这些原图仍可按原引用保留和排版，但本次请求没有附它们的画面，不能凭清单声称看过；需要判断画面时用 read_local_image 按 assetId 换批查看。本次可见图与上面的可见清单一一对应。' : '')
+    }
+    try {
+      const previousImageIds = priorImageIds.filter((id) => !seenImageIds.has(id)).slice(0, Math.max(0, MAX_ATTACHED_IMAGES - visibleImages.length))
+      for (const id of previousImageIds) {
+        if (seenImageIds.has(id)) continue
+        const record = await getLocalImage(id)
+        visibleImages.push(record)
+        imageNames.set(id, record.name)
+        seenImageIds.add(id)
+      }
+    } catch (e) {
+      const noteText = `准备原图失败：${errSummary(e)}。本轮未调用模型，已有文章保持不变。`
+      setAssistantText(noteText)
+      setSaveError(noteText)
+      busyRef.current = false
+      setBusy(false)
+      setTask(null)
+      setTurnStartedAt(null)
+      if (currentId) await persistNow(currentId, [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: noteText }])
+      return
     }
 
     const baseMsgs: ChatMsg[] = [
       { role: 'system', content: system },
       ...history
         .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      { role: 'user', content, images: images.length ? images : undefined },
+        .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content + localImageContext(m.localImages || [], false) })),
+      { role: 'user', content: content + imageContext(), images: visibleImages.length ? visibleImages.map((image) => image.modelDataUrl) : undefined },
     ]
 
     // 创作前置（P1，2026-09-24 调查 §5）：把知识/素材工具提供出来；取不取、要不要澄清、要不要写稿，
@@ -870,12 +931,14 @@ export default function App() {
     const hasPriorDoc = Boolean(priorIsAccepted && priorAccepted && priorAccepted.source)
     const needPrep = inTauri() && (PREP_EVERY_TURN || isCreateRequest(raw))
     /** 模型声明的素材操作；缺省按"文档里已有绑定 → 保持不动"，避免缺省值把既有配图重画一遍 */
-    const hasPriorBindings = Boolean(priorAccepted?.bindings?.length)
+    const hasPriorBindings = Boolean(priorAccepted?.bindings?.length || savedLocalImageIds(priorAccepted?.source || '').length)
     let assetPolicy: AssetPolicy = hasPriorBindings ? 'preserve' : 'modify'
     /** prep 直接给稿时用它跳过撰写请求；null 表示要正常发起一次撰写 */
     let directSource: string | null = null
 
     let streamMsgs: ChatMsg[] = baseMsgs
+    // 只向编辑传递模型本轮实际取用的完整事实资料；不按用户主题词猜测或注入无关产品介绍。
+    let editorialFacts: ChatMsg[] = []
     if (needPrep) {
       let prep: PrepOutcome
       try {
@@ -883,6 +946,24 @@ export default function App() {
           onProgress: setTask,
           runId: ledger.runId,
           hasPriorBindings,
+          localImages: [...knownImages, ...visibleImages.map(localImageMeta)],
+          knownLocalImageIds: [...knownImageIds],
+          visibleImageIds: visibleImages.map((image) => image.assetId),
+          onLocalImage: (image: LocalImageRecord) => {
+            userMsg.localImages = [...(userMsg.localImages || []).filter((item) => item.assetId !== image.assetId), localImageMeta(image)]
+            setMsgs((prev) => prev.map((m) => m.id === userMsg.id ? { ...m, localImages: userMsg.localImages } : m))
+            const at = visibleImages.findIndex((item) => item.assetId === image.assetId)
+            if (at >= 0) visibleImages.splice(at, 1)
+            visibleImages.push(image)
+            if (visibleImages.length > MAX_ATTACHED_IMAGES) visibleImages.shift()
+            seenImageIds.clear()
+            for (const item of visibleImages) seenImageIds.add(item.assetId)
+            knownImageIds.add(image.assetId)
+            imageNames.set(image.assetId, image.name)
+            const latestUser = baseMsgs[baseMsgs.length - 1]
+            latestUser.content = content + imageContext()
+            latestUser.images = visibleImages.map((item) => item.modelDataUrl)
+          },
         })
       } catch (err) {
         // 准备阶段失败**不再**降级成"无 prep 直接撰写"——那是把网络/鉴权错误转换成一次没被授权的创作
@@ -976,33 +1057,36 @@ export default function App() {
         }
       }
 
-      if (prep.mode === 'prep' && prep.kind === 'candidate') {
-        // 模型已经给出**完整正文**：直接进入下面的统一交付流程，不再花一次请求重写同稿（F3）。
+      if (prep.mode === 'prep' && (prep.kind === 'candidate' || prep.kind === 'compose')) {
         assetPolicy = prep.assetPolicy
-        trace({
-          kind: 'note',
-          runId: ledger.runId,
-          stage: 'validation',
-          ok: true,
-          note: `准备阶段直接给出完整正文（${prep.source.length} 字，模型显式声明 candidate），进入统一交付门禁`,
-        })
-        directSource = prep.source
-      } else if (prep.mode === 'prep' && prep.kind === 'compose') {
-        assetPolicy = prep.assetPolicy
-        // 把实际取用知识点摘要 + 撰写指令拼进流式续写（不透传工具回合消息）
-        // 第 29 轮：persona 已精简，v2 契约迁知识库——digest 若缺 engine-write-protocol 则强制附加
-        // F1（2026-10-03）：原措辞「作为本次创作依据，冲突以库为准」把"写作知识"抬成了**事实来源**——
-        // 知识文件提供的是写法与例子，不能覆盖用户材料。这里按"语法/表达"与"事实"分开表述。
-        let digestNote = prep.digest
-          ? `\n\n## 已取用写作知识（来自知识工具：只约束引擎语法、排版与表达方式；其中的示例不构成本稿事实，本稿事实以用户材料或明确确认为准）\n${prep.digest}\n`
-          : ''
-        if (!digestNote.includes('engine-write-protocol')) {
-          const proto = await loadEngineProtocol()
-          if (proto) {
-            digestNote += `\n\n## 排版引擎协议（必读：v2 语法/美术占位/风格声明/质量底线；冲突以本协议为准——**但本协议只决定语法与样式，不决定本稿事实**）\n${proto}\n`
-          }
+        if (prep.digest?.includes(productFacts)) {
+          editorialFacts = [{ role: 'user', content: '本应用已核实产品事实（仅在文中涉及本产品时作为事实依据）：\n' + productFacts }]
         }
-        streamMsgs = [...baseMsgs, { role: 'user', content: digestNote + writeInstruction(hasPriorDoc) }]
+        // candidate 与 compose 共用后续请求上下文：直接给稿也可能触发自动修订，不能丢掉知识。
+        // 权威协议始终从本地附加全文；digest 可能只有检索到的名字，不能据此跳过。
+        // F1（2026-10-03）：原措辞「作为本次创作依据，冲突以库为准」把"写作知识"抬成了**事实来源**——
+        // 写作模板和例子不能覆盖用户材料；明确标注的应用产品事实按其资料身份作为能力依据。
+        const proto = await loadEngineProtocol()
+        // 只按可信原文逐字去重；检索结果仅提到文件名时不会命中。
+        const knowledgeDigest = proto ? (prep.digest || '').split(proto).join('（引擎协议全文见下方可信原文）') : prep.digest
+        let digestNote = knowledgeDigest
+          ? `\n\n## 已取用写作知识与事实资料（按资料身份使用：写作模板、语法与风格规范只决定写法，其中的示例及旧稿不构成本稿事实；明确标注的应用产品事实可作为相应产品能力的依据。用户材料或明确确认优先，不用知识示例覆盖或补定本次事实）\n${knowledgeDigest}\n`
+          : ''
+        if (proto) {
+          digestNote += `\n\n## 排版引擎协议（必读：v2 语法/美术占位/风格声明/质量底线；冲突以本协议为准——**但本协议只决定语法与样式，不决定本稿事实**）\n${proto}\n`
+        }
+        streamMsgs = [...baseMsgs, { role: 'user', content: digestNote + (prep.kind === 'compose' ? writeInstruction(hasPriorDoc) : '') }]
+        if (prep.kind === 'candidate') {
+          // 已有完整正文直接进入门禁；上面的上下文只供必要的自动修订，不额外发起撰写。
+          trace({
+            kind: 'note',
+            runId: ledger.runId,
+            stage: 'validation',
+            ok: true,
+            note: `准备阶段直接给出完整正文（${prep.source.length} 字，模型显式声明 candidate），进入统一交付门禁`,
+          })
+          directSource = prep.source
+        }
       }
     }
 
@@ -1049,6 +1133,84 @@ export default function App() {
         }
         return copy
       })
+    }
+    // 用户已授权：对生成的正文自动复核一次；reply 已在上面返回，不参与意图判断。
+    // 只提供用户原始材料、可见图和事实依据，避免旧写作指令/语法示例干扰审稿。
+    const draftSplit = splitAssistant(draftRaw)
+    const editorialSource = directSource ?? (!draftSplit.v2Ambiguous ? draftSplit.v2 : null)
+    if (inTauri() && editorialSource) {
+      if (!busyRef.current || runIdRef.current !== ledger.runId) return
+      setTask({ phase: 'revise', text: '复核文案的内容、表达与事实…' })
+      // 撰写流可能已显示初稿。停止审稿时立即恢复旧成品，不能只保护磁盘而留下未审稿预览。
+      stopRef.current = { cancel: () => {
+        if (runIdRef.current !== ledger.runId) return
+        ++artSeqRef.current
+        setHtml(priorIsAccepted && priorAccepted?.html ? priorAccepted.html : null)
+        setQuality(priorIsAccepted && priorAccepted?.html ? checkHtml(priorAccepted.html) : null)
+        setWarnings(priorIsAccepted ? priorAccepted?.warnings || [] : [])
+        setDeliveryState(priorIsAccepted ? { kind: 'restored' } : { kind: 'draft-failed', blockers: 1 })
+        setDeliveryVerdictState(null)
+        setDraftHtml(null)
+        setSaveError('已停止文案复核，本轮未更新成品。初稿仍保留在对话记录中。')
+      } }
+      try {
+        // 编辑与作者使用同一份本地可信协议；不从写作摘要或旧稿推断语法。
+        const engineProtocol = await loadEngineProtocol()
+        if (!busyRef.current || runIdRef.current !== ledger.runId) return
+        if (!engineProtocol?.trim()) throw new Error('未能加载完整排版引擎协议，未开始文案复核')
+        const reviewedRaw = await invoke<string>('editorial_review', {
+          runId: ledger.runId,
+          messages: buildEditorialReviewMessages({
+            request: content,
+            source: editorialSource,
+            engineProtocol,
+            priorSource: hasPriorDoc ? priorAccepted?.source : null,
+            contextMessages: [
+              ...baseMsgs.filter((message) => message.role === 'user'),
+              ...editorialFacts,
+            ],
+          }),
+        })
+        // 停止后可能已有新回合；旧响应不得更新任何界面或保存结果。
+        if (!busyRef.current || runIdRef.current !== ledger.runId) return
+        stopRef.current = null
+        const reviewed = restoreEditorialMaterials(editorialSource, parseEditorialReview(reviewedRaw))
+        assertEditorialImagesPreserved(editorialSource, reviewed)
+        directSource = reviewed
+        draftRaw = wrapAsAssistantReply(reviewed)
+        draftRef.current = draftRaw
+        setAssistantText(draftRaw)
+        trace({ kind: 'note', runId: ledger.runId, phase: 'editorial', stage: 'validation', ok: true,
+          note: '独立文案复核完成；继续进行排版、原图及保存检查，不代表事实已获外部核实' })
+      } catch (error) {
+        if (!busyRef.current || runIdRef.current !== ledger.runId) return
+        stopRef.current = null
+        const note = `文案复核未完成：${errSummary(error)}。初稿保留在对话记录中，本轮未更新成品。`
+        const savedText = draftRaw + '\n\n' + note
+        draftRef.current = savedText
+        setAssistantText(savedText)
+        setSaveError(note)
+        setDeliveryState(priorIsAccepted ? { kind: 'restored' } : { kind: 'draft-failed', blockers: 1 })
+        setDeliveryVerdictState(null)
+        setDraftHtml(null)
+        if (priorIsAccepted && priorAccepted?.html) {
+          ++artSeqRef.current
+          setHtml(priorAccepted.html)
+          setQuality(checkHtml(priorAccepted.html))
+          setWarnings(priorAccepted.warnings || [])
+        }
+        trace({ kind: 'note', runId: ledger.runId, phase: 'editorial', stage: 'rollback', ok: false,
+          failure: 'unknown', note: '复核失败：保留对话初稿，不生成素材或提交文稿', error: clip(String(error), 160) })
+        if (currentId) await persistNow(currentId, [...history, userMsg, { id: idSeq - 1, role: 'assistant', content: savedText }])
+        if (runIdRef.current === ledger.runId) {
+          busyRef.current = false
+          setBusy(false)
+          awaitingTokenRef.current = false
+          setTask(null)
+          setTurnStartedAt(null)
+        }
+        return
+      }
     }
     let aborted = false
     // 停止原因（写进日志，供"为什么没有继续修"事后可查）
@@ -1114,7 +1276,7 @@ export default function App() {
           ]
         : []
       const matInfo: MaterializeInfo = emptyMaterializeInfo()
-      let source = raw
+      let source = v2 ?? extractHtml(raw)?.html ?? raw
       let html: string
       let warnings: string[]
       let composeIssues: ReturnType<typeof composeMarkdown>['issues'] = []
@@ -1175,6 +1337,27 @@ export default function App() {
         composeIssues = c.issues
         rejectedArts = c.rejectedArts
         authorUnits = c.authorUnits
+      }
+
+      // 原图物化属于交付门禁：缺失、错误或模型编造的 ID 必须可见失败，禁止降级成空图/生成图。
+      const authorizedImageIds = knownImageIds
+      const renderedImageIds = localImageIdsFromHtml(html)
+      const unauthorized = renderedImageIds.filter((id) => !authorizedImageIds.has(id))
+      try {
+        if (unauthorized.length) throw new Error(`正文引用了未提供的本地图片：${unauthorized.join('、')}`)
+        html = await renderLocalImages(html)
+      } catch (e) {
+        const message = `本地原图未能插入：${errSummary(e)}。已有成品保持不变。`
+        warnings.push(message)
+        composeIssues.push({ code: 'asset.local-image-unreadable', severity: 'blocking', message, line: 0, endLine: 0 })
+      }
+      if (assetPolicy === 'preserve' && priorAccepted?.source) {
+        const missing = missingLocalImageIds(savedLocalImageIds(priorAccepted.source), renderedImageIds)
+        if (missing.length) {
+          const message = `本轮要求保留素材，但候选删除或替换了 ${missing.length} 处本地原图。请恢复原来的 local-image:// 引用。`
+          warnings.push(message)
+          composeIssues.push({ code: 'asset.local-image-removed', severity: 'blocking', message, line: 0, endLine: 0, evidence: missing.join(',') })
+        }
       }
 
       // 阶段 3 第 6 条：完成状态以**绑定与实际渲染**为准，不采信助手一句"修好了"。
@@ -1327,7 +1510,8 @@ export default function App() {
       setTask({ phase: 'compose', text: '排版与质检…' })
       let cand: Candidate | null = null
       try {
-        cand = await evaluate(round, draftRaw, repairBaseline, directSource)
+        // candidate 的显式正文只属于首轮；修订流必须解析本轮新稿，不能继续套用旧正文。
+        cand = await evaluate(round, draftRaw, repairBaseline, round === 0 ? directSource : null)
       } catch (e) {
         // evaluate 里的素材解析整体失败已经走过 fail(e)（解锁输入、显示原因），这里只需收口：
         // 让异常**不要**逃出 turn()——否则会变成 unhandled rejection，回合永远卡在忙碌态。
@@ -1341,7 +1525,7 @@ export default function App() {
         const final = resolvePreview(draftRaw)
         if (final) {
           const seq = ++artSeqRef.current
-          const html2 = final.arts.length ? await renderArtPlaceholders(final.html, final.arts) : final.html
+          const html2 = await renderArticleAssets(final.html, final.arts)
           if (artSeqRef.current === seq) {
             setHtml(html2)
             setQuality(checkHtml(html2))
@@ -1698,7 +1882,7 @@ export default function App() {
   // 发送：直通统一回合，不设任何对话状态机（澄清与否由模型自主判断）
   const send = async (text: string) => {
     const t = text.trim()
-    if (!t || busyRef.current) return
+    if (!t || busyRef.current || sessionOperation.current) return
     const imgs = attached
     setAttached([])
     await turn(t, imgs)
@@ -1771,7 +1955,7 @@ export default function App() {
       })
       setTask({ phase: 'compose', text: '排版与渲染素材…' })
       const r = composeMarkdown(matured, {})
-      const html2 = r.arts.length ? await renderArtPlaceholders(r.html, r.arts) : r.html
+      const html2 = await renderArticleAssets(r.html, r.arts)
       // 与 turn() 同一口径：排版层拒收也要回写台账（重试路径不得绕过）
       applyRejectedArts(ctx.ledger, r.rejectedArts, inf)
       // 与 turn() **同一口径**：台账是跨轮累计的，"必需素材位"要按**本候选自己的正文**来数。
@@ -1943,8 +2127,24 @@ export default function App() {
   }
 
   // ---------- 会话操作 ----------
+  const withSessionOperation = async (action: () => Promise<void>) => {
+    if (busyRef.current || sessionOperation.current) return
+    sessionOperation.current = true
+    setSessionPending(true)
+    try { await action() } catch (e) {
+      setNotice(`会话操作失败：${errSummary(e)}。当前内容仍保留，请重试。`)
+    } finally {
+      sessionOperation.current = false
+      setSessionPending(false)
+    }
+  }
+
   const newSession = async () => {
-    if (busyRef.current) return
+    await withSessionOperation(async () => {
+    if (currentId && !(await persistNow(currentId, msgsRef.current))) {
+      setNotice('当前会话保存失败，暂未新建会话。请重试。')
+      return
+    }
     const id = await createSession()
     if (!id) {
       // 没建出来就别说建好了（也不切换当前会话）
@@ -1954,11 +2154,16 @@ export default function App() {
     clearAllChat()
     setCurrentId(id)
     refreshItems()
+    })
   }
 
-  const switchSession = async (id: string) => {
-    if (busyRef.current || id === currentId) return
-    if (currentId) persistNow(currentId, msgsRef.current)
+  const switchSession = async (id: string, reload = false) => {
+    if (id === currentId && !reload) return
+    await withSessionOperation(async () => {
+    if (currentId && !(await persistNow(currentId, msgsRef.current))) {
+      setNotice('当前会话保存失败，暂未切换。请重试。')
+      return
+    }
     const item = await openSession(id)
     if (!item.ok) {
       // 读不出来就留在原会话，只提示（不切过去看一个空白界面）
@@ -1966,23 +2171,32 @@ export default function App() {
       setNotice(`打开会话失败：${item.error}`)
       return
     }
+    // 先绑定消息所属 ID；素材恢复失败也不能让新会话消息被自动保存进旧会话。
+    setCurrentId(id)
     clearAllChat()
     await applySession(item.item)
-    setCurrentId(id)
     refreshItems()
+    })
   }
 
   const removeSession = async (id: string) => {
+    if (busyRef.current || sessionOperation.current) return
+    if (!window.confirm('删除这条会话及其文档？此操作无法撤销。')) return
+    await withSessionOperation(async () => {
+    await saveQueue.current.get(id)
     // V3-R1：删除会话连带删除其默认文档（文档 id == 会话 id，避免残留"幽灵文档"）
     const docOk = await deleteDocument(id)
-    if (!docOk) console.warn('删除文档失败（会话删除继续）：', id)
+    if (!docOk) {
+      setNotice('文档删除失败，会话已保留。请重试。')
+      return
+    }
     refreshDocs()
     const r = await deleteSession(id)
     if (!r.ok) {
       // 删除失败：**只提示**——不清空会话栏、不清当前对话、不新建会话。
       // 旧实现会 setSessionItems([]) 并 clearAllChat()，点一次删除看起来像"所有会话都被删了"。
       console.warn('删除会话失败：', r.error)
-      setNotice(`删除会话失败：${r.error}`)
+      setNotice(`文档已删除，但会话删除失败：${r.error}。会话内容仍保留，可重试删除。`)
       return
     }
     setSessionItems(r.list.items)
@@ -1990,6 +2204,7 @@ export default function App() {
     setSessionStateWarning(r.list.stateWarning)
     if (r.list.current && r.list.current !== currentId) {
       const item = await openSession(r.list.current)
+      setCurrentId(r.list.current)
       clearAllChat()
       if (!item.ok) {
         console.warn('打开会话失败：', item.error)
@@ -1997,7 +2212,6 @@ export default function App() {
       } else {
         await applySession(item.item)
       }
-      setCurrentId(r.list.current)
     } else if (!r.list.current) {
       clearAllChat()
       const nid = await createSession()
@@ -2009,11 +2223,13 @@ export default function App() {
       setCurrentId(nid)
     }
     refreshItems()
+    })
   }
 
   // 改名（会话栏双击标题触发）：只改标题，成功后才刷新列表；失败就说清楚没写进去。
   // 纯交互，不参与对话流程（铁律 6）。
   const applyRename = (id: string, title: string) => {
+    if (busyRef.current || sessionOperation.current) return
     void renameSession(id, title).then((ok) => {
       if (!ok) {
         console.warn('会话改名失败：未能写入本机', id)
@@ -2025,16 +2241,24 @@ export default function App() {
   }
 
   // 清空 = 清空当前会话内容（保留会话，标题回到默认）；其文档一并移除（无产物不留在文档库）
-  const clear = () => {
-    if (busyRef.current) return
-    clearAllChat()
+  const clear = async () => {
+    if (busyRef.current || sessionOperation.current) return
+    if (!window.confirm('清空当前会话及其文档？此操作无法撤销。')) return
+    await withSessionOperation(async () => {
     if (currentId) {
-      void deleteDocument(currentId).then((ok) => {
-        if (!ok) console.warn('清空时删除文档失败：', currentId)
-      })
+      await saveQueue.current.get(currentId)
+      if (!(await deleteDocument(currentId))) {
+        setNotice('文档删除失败，当前内容已保留。请重试。')
+        return
+      }
       refreshDocs()
-      persistNow(currentId, [])
+      if (!(await persistNow(currentId, []))) {
+        setNotice('文档已删除，但会话清空未写入本机。当前消息仍保留，请重试。')
+        return
+      }
     }
+    clearAllChat()
+    })
   }
 
   // ---------- 使用手册（发布轮；桌面版顶栏入口，手册 HTML 随安装包发布） ----------
@@ -2050,12 +2274,13 @@ export default function App() {
   // ---------- V3 顶栏工作区 ----------
   const goView = (v: 'chat' | 'docs' | 'assets') => {
     if (v === 'docs') refreshDocs()
+    if (v === 'assets') setAssetsVisited(true)
     setView(v)
   }
 
   const openDocFromLib = async (id: string) => {
     if (busyRef.current) return
-    if (id !== currentId) await switchSession(id)
+    await switchSession(id, true)
     setView('chat')
   }
 
@@ -2071,19 +2296,21 @@ export default function App() {
             className="mini sess-btn"
             data-ready={currentId ? 1 : 0}
             data-open={railOpen ? 1 : 0}
+            aria-expanded={railOpen}
+            aria-controls="session-sidebar"
             onClick={() => setRailOpen((v) => !v)}
           >
             {railOpen ? '收起会话栏' : '展开会话栏'}
           </button>
         </div>
-        <nav className="view-tabs">
-          <button className={`view-tab ${view === 'chat' ? 'view-tab-active' : ''}`} data-view="chat" onClick={() => goView('chat')}>
+        <nav className="view-tabs" aria-label="工作区">
+          <button className={`view-tab ${view === 'chat' ? 'view-tab-active' : ''}`} data-view="chat" aria-current={view === 'chat' ? 'page' : undefined} onClick={() => goView('chat')}>
             对话
           </button>
-          <button className={`view-tab ${view === 'docs' ? 'view-tab-active' : ''}`} data-view="docs" onClick={() => goView('docs')}>
+          <button className={`view-tab ${view === 'docs' ? 'view-tab-active' : ''}`} data-view="docs" aria-current={view === 'docs' ? 'page' : undefined} onClick={() => goView('docs')}>
             文档库
           </button>
-          <button className={`view-tab ${view === 'assets' ? 'view-tab-active' : ''}`} data-view="assets" onClick={() => goView('assets')}>
+          <button className={`view-tab ${view === 'assets' ? 'view-tab-active' : ''}`} data-view="assets" aria-current={view === 'assets' ? 'page' : undefined} onClick={() => goView('assets')}>
             素材工坊
           </button>
         </nav>
@@ -2103,17 +2330,17 @@ export default function App() {
           纯展示，不参与对话流程（铁律 6）；用户可关闭。
           样式类 .app-notice 由 App.css 提供（不在本轮改动范围内，已记入 PROGRESS）。 */}
       {notice && (
-        <div className="app-notice" data-notice="1">
+        <div className="app-notice" data-notice="1" role="alert">
           <span className="app-notice-text">{notice}</span>
           <button className="mini app-notice-close" onClick={() => setNotice(null)}>
             关闭
           </button>
         </div>
       )}
-      {view === 'chat' ? (
-        <main className={`workspace ${railOpen ? 'rail-on' : 'rail-off'}`}>
+        <main className={`workspace ${railOpen ? 'rail-on' : 'rail-off'}`} hidden={view !== 'chat'}>
           {railOpen && (
             <SessionRail
+              busy={busy || sessionPending}
               items={sessionItems}
               currentId={currentId}
               error={sessionError}
@@ -2127,6 +2354,9 @@ export default function App() {
             />
           )}
           <ChatPane
+            key={currentId || 'loading'}
+            active={view === 'chat'}
+            disabled={sessionPending}
             apiRef={chatRef}
             msgs={msgs}
             busy={busy}
@@ -2136,7 +2366,9 @@ export default function App() {
             task={task}
             turnStartedAt={turnStartedAt}
             images={attached}
-            onAttachImages={(urls) => setAttached((prev) => [...prev, ...urls].slice(0, 4))}
+            onAttachImages={(images) => {
+              if (attachmentEpochRef.current === attachmentEpoch) setAttached((prev) => [...prev, ...images].slice(0, MAX_ATTACHED_IMAGES))
+            }}
             onRemoveImage={(i) => setAttached((prev) => prev.filter((_, k) => k !== i))}
           />
           <PreviewPane
@@ -2146,19 +2378,20 @@ export default function App() {
             assetIssues={assetIssues}
             retrying={retrying}
             onRetryAsset={(id) => void retryAsset(id)}
-            onClear={clear}
+            onClear={() => void clear()}
             onPickComponent={pickComponent}
             saveError={saveError}
-            busy={busy}
+            busy={busy || sessionPending}
             docState={deliveryState}
             verdict={deliveryVerdictState}
             exportIsDraft={deliveryState?.kind === 'draft-failed'}
             draftHtml={draftHtml}
           />
         </main>
-      ) : view === 'docs' ? (
+      {view === 'docs' && (
         <main className="workspace docs-workspace">
           <DocsPane
+            busy={busy || sessionPending}
             items={docItems}
             error={docsError}
             unreadable={docsUnreadable}
@@ -2167,8 +2400,9 @@ export default function App() {
             onDelete={(id) => void removeSession(id)}
           />
         </main>
-      ) : (
-        <main className="workspace docs-workspace">
+      )}
+      {assetsVisited && (
+        <main className="workspace docs-workspace" hidden={view !== 'assets'}>
           <AssetWorkshop />
         </main>
       )}

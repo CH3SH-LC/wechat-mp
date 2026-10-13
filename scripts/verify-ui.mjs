@@ -125,6 +125,7 @@ try {
   )
 }
 const page = await browser.newPage({ viewport: { width: 1500, height: 900 } })
+page.on('dialog', (dialog) => dialog.accept())
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message))
 page.on('console', (m) => {
   if (m.type() === 'error' && !m.text().includes('favicon')) errors.push('console: ' + m.text())
@@ -148,8 +149,8 @@ async function waitStreamDone(timeout = 30000) {
 
 // 第 29 轮：删用户可见 mock 按钮后，场景改用输入框直接发文本驱动（mock 链路仍在，语义不变）
 async function sendPrompt(text) {
-  await page.locator('textarea').fill(text)
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill(text)
+  await page.locator('.chat-input-row textarea').press('Enter')
 }
 
 // 场景跑法（S1 用）：发一条提示 → 等流结束 → 读质量条。`expectFail` 只决定等哪个类名。
@@ -324,8 +325,8 @@ try {
 try {
   await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForSelector('.chat-head .badge', { timeout: 20000 })
-  await page.locator('textarea').fill('演示质量检查：请故意输出包含 emoji、渐变与外链图的推文（违规输出检测）')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('演示质量检查：请故意输出包含 emoji、渐变与外链图的推文（违规输出检测）')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForTimeout(800)
   const s2info = await page.evaluate(async () => {
@@ -436,8 +437,8 @@ try {
   }
 
   // 在 B 会话输入并生成（内容独立于 A）
-  await page.locator('textarea').fill('写一篇毕业季活动推文，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇毕业季活动推文，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   const userB = await page.locator('.msg-user').last().innerText()
   const bOk = userB.includes('毕业季')
@@ -528,8 +529,8 @@ try {
     }
   }
   const sendLine = async (text) => {
-    await page.locator('textarea').fill(text)
-    await page.locator('textarea').press('Enter')
+    await page.locator('.chat-input-row textarea').fill(text)
+    await page.locator('.chat-input-row textarea').press('Enter')
   }
   const waitTurn = async () => {
     await page.waitForSelector('.work-bubble', { timeout: 10000 }).catch(() => {})
@@ -627,8 +628,8 @@ try {
   await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
   await page.locator('.session-rail .rail-new').click()
   await page.waitForSelector('.chat-empty', { timeout: 10000 })
-  await page.locator('textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
 
   let settled = false
   for (let i = 0; i < 80; i++) {
@@ -693,8 +694,8 @@ try {
   await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
   await page.locator('.session-rail .rail-new').click()
   await page.waitForSelector('.chat-empty', { timeout: 10000 })
-  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
 
@@ -749,8 +750,8 @@ try {
   await page.waitForSelector('.session-rail .sess-row', { timeout: 10000 })
   await page.locator('.session-rail .rail-new').click()
   await page.waitForSelector('.chat-empty', { timeout: 10000 })
-  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
   await page.waitForTimeout(800) // 等默认文档自动落盘
@@ -900,9 +901,9 @@ try {
     return top ? top.id : ''
   })
   await page
-    .locator('textarea')
+    .locator('.chat-input-row textarea')
     .fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写（素材库复用气泡角饰）')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForSelector('.quality-strip.q-ok', { timeout: 20000 })
   await page.waitForTimeout(900) // 等文档自动落盘（含固化快照）
@@ -1043,11 +1044,11 @@ try {
   await waitStreamDone()
   await page.waitForSelector('.phone iframe', { timeout: 15000 })
   const usersBefore = await page.locator('.msg-user').count()
-  const draftBefore = await page.locator('textarea').inputValue()
+  const draftBefore = await page.locator('.chat-input-row textarea').inputValue()
   const frame = page.frameLocator('.phone iframe')
   await frame.locator('section > *').first().click({ force: true })
   await page.waitForTimeout(400)
-  const draftAfter = await page.locator('textarea').inputValue()
+  const draftAfter = await page.locator('.chat-input-row textarea').inputValue()
   const usersAfter = await page.locator('.msg-user').count()
   const gotRef = draftAfter.includes('预览第') && draftAfter.length > draftBefore.length
   console.log(`  ${gotRef ? 'PASS' : 'FAIL'} - S15 preview click inserts component anchor (draft="${draftAfter.slice(0, 30)}")`)
@@ -1065,8 +1066,8 @@ try {
 try {
   await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForSelector('.chat-head .badge', { timeout: 20000 })
-  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800字左右，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800字左右，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   let sawProgress = false
   try {
     await page.waitForSelector('.work-bubble', { timeout: 8000 })
@@ -1135,8 +1136,8 @@ try {
     }
     requestAnimationFrame(tick)
   })
-  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800字左右，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800字左右，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   const { phases, committed, times } = await page.evaluate(() => ({
     phases: window.__phases,
@@ -1182,8 +1183,8 @@ try {
     }
   }
   await ensureEmptyS18()
-  await page.locator('textarea').fill('写一篇素材故障样例的推文，校园风，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇素材故障样例的推文，校园风，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   // 自动修订不会清掉它（重写正文解决不了素材问题），等清单稳定出现
   await page.waitForSelector('.asset-issues', { timeout: 15000 })
@@ -1362,8 +1363,8 @@ try {
     requestAnimationFrame(tick)
   })
   // 「自检缺组件」这句会走两轮（首稿不达标 → 自动修订），html 出现后仍在生成中的窗口最长
-  await page.locator('textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   let settled = false
   for (let i = 0; i < 100; i++) {
     const ok = await page.locator('.quality-strip.q-ok').count()
@@ -1387,8 +1388,8 @@ try {
     settled && live.length > 0 && allThreeOff,
     `采到 ${live.length} 个生成中且有稿子的状态读数，三键禁用=${allThreeOff}；序列 ${seq}`,
   )
-  const clearOn = live.every((f) => f.clear === false)
-  checkS20('生成中「清空」保持可用', live.length > 0 && clearOn, `样本 ${live.length} 帧`)
+  const clearOn = live.every((f) => f.clear === true)
+  checkS20('生成中「清空」禁用，避免删除正在保存的会话', live.length > 0 && clearOn, `样本 ${live.length} 帧`)
   // 收尾：生成结束后可导出（否则"禁用"可能其实是永久禁用）
   const after = await page.locator('[data-act="export-html"]').evaluate((el) => ({ disabled: !!el.disabled, html: !!document.querySelector('.preview-body iframe') }))
   checkS20('生成结束后导出恢复可用（有稿子为前提）', after.html && !after.disabled, JSON.stringify(after))
@@ -1521,8 +1522,8 @@ try {
     })
 
   // ① 先出一版好稿 → 成品
-  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForTimeout(1200)
   const s22a = await readState()
@@ -1531,8 +1532,8 @@ try {
   checkS22('落盘文档标记为已验收', s22a.accepted === true)
 
   // ② 同一会话再出一版过不了门禁的稿子（引用不存在的素材 → 阻断）
-  await page.locator('textarea').fill('再写一篇素材故障样例的推文，校园风，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('再写一篇素材故障样例的推文，校园风，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForTimeout(2000)
   const s22b = await readState()
@@ -1584,8 +1585,8 @@ try {
   checkS23('前提：新会话没有已验收成品历史', s23pre.hasDoc === false, `doc=${s23pre.cur} hasDoc=${s23pre.hasDoc} accepted=${s23pre.accepted}`)
 
   // 同一会话**第一轮**就产出过不了门禁的稿子（素材侧问题，重写正文解决不了）
-  await page.locator('textarea').fill('写一篇素材故障样例的推文，校园风，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇素材故障样例的推文，校园风，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForTimeout(1500)
 
@@ -1687,8 +1688,8 @@ try {
   await page.waitForSelector('.chat-empty', { timeout: 10000 })
 
   // 第一回合：正常成稿（成品）
-  await page.locator('textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇新生入学典礼的宣传类推文，校园风，800 字左右，直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForSelector('.quality-strip.q-ok', { timeout: 15000 })
   await page.waitForTimeout(1200)
@@ -1701,8 +1702,8 @@ try {
   )
 
   // 第二回合：另一版内容（不取消就会提交新成品），流未结束时点停止
-  await page.locator('textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await page.waitForSelector('.btn-stop', { timeout: 10000 })
   await page
     .waitForFunction(
@@ -1767,8 +1768,8 @@ try {
   await page.screenshot({ path: `${outDir}/wxmp-desktop-S24-cancel.png` })
 
   // 对照项：同一提示语**不取消**时确实会提交新成品（证明上面的"未变"可证伪）
-  await page.locator('textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
-  await page.locator('textarea').press('Enter')
+  await page.locator('.chat-input-row textarea').fill('写一篇军训慰问推文（自检缺组件），直接写')
+  await page.locator('.chat-input-row textarea').press('Enter')
   await waitStreamDone()
   await page.waitForTimeout(1500)
   const doc3 = await readDocRec()
@@ -1843,7 +1844,7 @@ try {
   if (!s25) {
     checkS25('预览 iframe 可取到内容', false, '取不到 iframe 或 contentDocument')
   } else {
-    checkS25('手机壳渲染宽度是 375px', s25.phoneW === 375, `phone=${s25.phoneW}px`)
+    checkS25('正文视口实际宽度是 375px（不把手机壳计入正文）', s25.iframeW === 375 && Number.parseFloat(s25.bodyW) === 375, `phone=${s25.phoneW}px iframe=${s25.iframeW}px body=${s25.bodyW}`)
     checkS25(
       'wrapSrcDoc 注入的预览 body 宽度声明是 375px',
       /body\{[^}]*width:375px/.test(s25.injectedStyle),

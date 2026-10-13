@@ -28,6 +28,7 @@ import {
   issueFingerprint,
   issuesFromBody,
   issuesFromMaterial,
+  issuesFromSoft,
   issuesFromRaster,
   issuesFromRejected,
   issuesFromVersion,
@@ -36,6 +37,7 @@ import {
   requiredSlotsFromEntries,
   slotIndexFromLedger,
   softFacts,
+  photoSlots,
   stageOfCode,
 } from '../src/lib/delivery-quality.ts'
 
@@ -598,6 +600,15 @@ console.log('\n[⑫ 正文边界不确定必须可见（不得静默提交截断
     Boolean(ISSUE_CODES.parseAmbiguous) && repairKindFor(ISSUE_CODES.parseAmbiguous, 'blocking') === 'reparse',
     ISSUE_CODES.parseAmbiguous,
   )
+}
+
+{
+  const source = `# 原图文章\n\n![现场图片](local-image://li-${'a'.repeat(64)})\n\n正文。`
+  const facts = softFacts({ source, plainText: '完整的内容。'.repeat(150) })
+  const issues = issuesFromSoft(facts)
+  check('R32 原图参与图片内容统计', facts.localImageCount === 1, String(facts.localImageCount))
+  check('R32 已有原图不再提示缺少美术素材或要求新增插画', !issues.some((i) => i.code === ISSUE_CODES.componentsTip || i.code === ISSUE_CODES.componentsPhotoOnlyTip), JSON.stringify(issues.map((i) => i.code)))
+  check('R32 原图引用不等于待补照片位', photoSlots(source).length === 0, '')
 }
 
 console.log('')

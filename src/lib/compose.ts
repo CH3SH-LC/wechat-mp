@@ -8,11 +8,13 @@ import { parsePaletteDirective, resolveTheme, themeDeclaration } from './palette
 import type { StylePalette } from './palettes.ts'
 import { checkSvgQuality } from './svg-quality.ts'
 import { MARK_KEYS, MARK_ALIAS, SEMANTIC_MARK, markDataUrl, resolveMark, themeMark } from './marks.ts'
+import { isNativeOrnament, ornamentDataUrl } from './ornaments.ts'
+import type { NativeOrnament, OrnamentRole } from './ornaments.ts'
 
 export interface ComposeDesign {
   key: 'text' | 'promo'
   label: string
-  /** 组件语言（R17）：由 `[[boxes:名]]` 或主题映射决定，见 `resolveBoxScheme` */
+  /** 组件语言：仅由 `[[boxes:…]]` 决定，与主题配色正交。 */
   scheme: string
   [k: string]: string
 }
@@ -50,42 +52,19 @@ const DESIGNS: Record<'text' | 'promo', ComposeDesign> = {
 
 // 按主题覆盖设计键（第 17 轮：风格色板落地；未选主题返回默认双色系）
 // 第 23 轮：正文 [[palette]] 自定义色板可覆盖预置色板或独立配色（风格不限预置）
-const THEME_TEXT_KEYS = ['accent', 'accentDark', 'heading', 'soft', 'soft2', 'border', 'hl']
-const THEME_PROMO_KEYS = ['orange', 'amber', 'teal', 'ink', 'soft', 'soft2', 'border', 'hl']
-
 function makeDesign(modeKey: 'text' | 'promo', pal?: StylePalette, custom?: Record<string, string>): ComposeDesign {
   const base = DESIGNS[modeKey]
   const d: ComposeDesign = { ...base }
   if (pal) {
-    d.bg = pal.bg
-    // R26：语义色**也归配色**——否则"换个风格"气泡颜色几乎不变（它们原本是 `DESIGNS` 里的固定常量）。
-    // 两种模式都覆盖：气泡在文字类与宣传类里都会出现。
-    d.sub = pal.sub
-    d.tip = pal.tip
-    d.warn = pal.warn
-    d.danger = pal.danger
-    if (modeKey === 'text') {
-      d.accent = pal.accent
-      d.accentDark = pal.accentDark
-      d.heading = pal.heading
-      d.soft = pal.soft
-      d.soft2 = pal.soft2
-      d.border = pal.border
-      d.hl = pal.hl
-    } else {
-      d.orange = pal.orange
-      d.amber = pal.amber
-      d.teal = pal.teal
-      d.ink = pal.ink
-      d.soft = pal.soft
-      d.soft2 = pal.soft2
-      d.border = pal.border
-      d.hl = pal.hl
-    }
+    // R35：两种模式都覆盖全部语义色。气泡、链接、card 在 promo 下也消费
+    // accent/heading；只写 orange/ink 会让亮色主题混入默认陶土橙。
+    const { key: _key, label: _label, ...colors } = pal
+    Object.assign(d, colors)
   }
   if (custom) {
-    const keys = modeKey === 'text' ? ['bg', ...THEME_TEXT_KEYS] : ['bg', ...THEME_PROMO_KEYS]
-    for (const k of keys) if (custom[k]) d[k] = custom[k]
+    // parsePaletteDirective 已只接收白名单色号；两种文章模式都尊重显式语义色。
+    // 过去正文/气泡颜色不在覆盖表中，导致用户给了色号仍混入默认橙绿。
+    for (const [key, color] of Object.entries(custom)) d[key] = color
   }
   return d
 }
@@ -133,9 +112,14 @@ function escapeHtml(s: string): string {
 
 function inline(s: string, d: ComposeDesign): string {
   let t = String(s)
+  // 行内代码是字面内容，不得在随后的 Markdown 图片/链接转换中变成真实节点。
+  const codeSlots: string[] = []
+  let codeMarker = '\u0000WXCODE'
+  while (t.includes(codeMarker)) codeMarker += '_'
   t = t.replace(/==([^=]+)==/g, '<span style="background:' + d.hl + ';padding:0 2px;border-radius:2px">$1</span>')
   t = t.replace(/`([^`]+)`/g, (_m, c: string) => {
-    return '<span style="background-color:' + d.codeBg + ';border-radius:3px;padding:1px 5px;font-family:Consolas,Menlo,monospace;font-size:14px;color:' + d.accent + '">' + c + '</span>'
+    const index = codeSlots.push('<span style="background-color:' + d.codeBg + ';border-radius:3px;padding:1px 5px;font-family:Consolas,Menlo,monospace;font-size:14px;color:' + d.accent + '">' + c + '</span>') - 1
+    return codeMarker + index + '\u0000'
   })
   t = t.replace(/\[\[badge:([^\]]+)\]\]/g, (_m, text: string) => {
     // R20：徽章形态复用**语义标签词汇** `label` 轴（eyebrow 字距标签 / chip 胶囊 / mono 等宽 /
@@ -166,11 +150,16 @@ function inline(s: string, d: ComposeDesign): string {
   })
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   t = t.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
+  t = t.replace(new RegExp(codeMarker + '(\\d+)\\u0000', 'g'), (_all, index: string) => codeSlots[Number(index)])
   return t
 }
 
 function P(d: ComposeDesign, extra?: string): string {
-  return '<p style="margin:0 0 16px;font-size:16px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px' + (extra || '') + '">'
+  return '<p style="margin:0 0 16px;font-size:' + bodySize(d, 16) + 'px;line-height:1.75;color:' + d.text + ';word-break:break-word;letter-spacing:0.5px' + (extra || '') + '">'
+}
+
+function bodySize(d: ComposeDesign, fallback: number): number {
+  return isNativeOrnament(faceOf(d).shape) ? 17 : fallback
 }
 
 // v10.1 起宣传类普通段落也进"文字容器"（消除裸文字）；**R21 起撤回**——每段套一层浅色面板
@@ -184,7 +173,7 @@ function timelineBlock(d: ComposeDesign, items: string[]): string {
   return '<section style="margin:0 0 16px;padding-left:22px;border-left:' + rail + 'px solid ' + c + '">' + items.map((it, idx) => {
     const inner = '<span style="position:absolute;left:-27px;top:15px;width:10px;height:10px;border-radius:50%;background:' + c + '"></span>' +
       '<span style="display:inline-block;color:' + c + ';font-size:13px;font-weight:700;margin-bottom:4px' + FACE_FONT_CSS[t.title] + '">' + (idx + 1) + '</span>' +
-      '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
+      '<p style="margin:0;font-size:' + bodySize(d, 15) + 'px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>'
     return surface({
       t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
       bottom: 11, decoImg: '', quote: false, inner, margin: '0 0 14px',
@@ -193,6 +182,7 @@ function timelineBlock(d: ComposeDesign, items: string[]): string {
 }
 
 function laceDivider(d: ComposeDesign): string {
+  if (isNativeOrnament(faceOf(d).ornament)) return divider(d, '---')
   const c = d.key === 'promo' ? d.orange : '#c3ccd8'
   return '<section style="display:flex;align-items:center;margin:24px 0">' +
     '<span style="flex:1;height:1px;background:' + c + ';opacity:.5"></span>' +
@@ -216,7 +206,7 @@ function titleBlockStyled(d: ComposeDesign, text: string, style: string, artUrls
   const span = (color: string) => '<span style="' + styleOf('font-size:' + fs + 'px', 'font-weight:700', 'letter-spacing:2px', 'color:' + color, font) + '">' + h + '</span>'
   if (style === 'box') {
     return '<section style="' + styleOf('margin:28px 0 16px', 'text-align:center', 'border:2px solid ' + c,
-      'border-radius:' + (t.radius || 12) + 'px', d.soft2 ? 'background:' + d.soft2 : '', 'padding:12px 22px') + '">' + span(ink) + '</section>'
+      'border-radius:' + (t.radius || 12) + 'px', 'padding:12px 22px') + '">' + span(ink) + '</section>'
   }
   if (style === 'vine') {
     if (artUrls && artUrls['vine-divider']) {
@@ -247,7 +237,7 @@ function colsBlock(d: ComposeDesign, items: string[]): string {
   const cell = (it: string, extraStyle: string) => surface({
     t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
     bottom: 11, decoImg: '', quote: false,
-    inner: '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>',
+    inner: '<p style="margin:0;font-size:' + bodySize(d, 15) + 'px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>',
     margin: '0', extraStyle,
   })
   // **几列由内容长度决定，不由项数硬定**（2026-10-11 完整 demo 读图实测）：
@@ -272,7 +262,7 @@ function flatListBlock(d: ComposeDesign, items: string[]): string {
   return items.map((it) => surface({
     t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d),
     bottom: 11, decoImg: '', quote: false,
-    inner: '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>',
+    inner: '<p style="margin:0;font-size:' + bodySize(d, 15) + 'px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</p>',
   })).join('')
 }
 
@@ -281,15 +271,15 @@ function imgrowBlock(_d: ComposeDesign, items: { src: string; alt: string }[]): 
   const pct = n >= 3 ? '33.3%' : '50%'
   return '<section style="margin:0 0 16px;display:flex;align-items:flex-start">' + items.map((it, idx) => {
     const mr = idx === n - 1 ? '' : 'margin-right:8px;'
-    return '<img src="' + it.src + '" alt="' + it.alt + '" style="width:' + pct + ';max-width:100%;border-radius:8px;' + mr + 'display:block" />'
+    return '<img src="' + escapeHtml(it.src) + '" alt="' + escapeHtml(it.alt) + '" style="width:' + pct + ';max-width:100%;height:auto;border-radius:8px;' + mr + 'display:block" />'
   }).join('') + '</section>'
 }
 
 function imgcardBlock(d: ComposeDesign, img: { src: string; alt: string }, captions: string[]): string {
   const cap = captions.map((l) => escapeHtml(l)).join('<br/>')
   return '<section style="margin:0 0 16px;background:#ffffff;border:1px solid ' + d.border + ';border-radius:12px;overflow:hidden">' +
-    '<img src="' + img.src + '" alt="' + img.alt + '" style="width:100%;max-width:100%;display:block" />' +
-    (cap ? '<section style="padding:8px 12px;font-size:13px;line-height:1.5;color:' + d.sub + ';background:' + d.soft2 + '">' + cap + '</section>' : '') +
+    '<img src="' + escapeHtml(img.src) + '" alt="' + escapeHtml(img.alt) + '" style="width:100%;max-width:100%;height:auto;display:block" />' +
+    (cap ? '<section style="padding:8px 12px;font-size:13px;line-height:1.5;color:' + d.sub + '">' + cap + '</section>' : '') +
     '</section>'
 }
 
@@ -326,6 +316,8 @@ const BUBBLE_LABEL: Record<BubbleKind, string> = {
 //   fill 底色 none/tint/wash/paper ｜ label 语义标签形态 eyebrow/chip/mono/none
 //   title 标题字体 sans/serif/mono ｜ size 标题字号 15/17/19
 //   deco 装饰词汇 brackets/tape/quote（可多选）｜ pad 内距 tight/normal/loose
+//   scale 标题层级 standard/display ｜ align 标题对齐 auto/left/center
+//   ornament 标题与分割线线饰 none/confetti/dots/speed
 //
 // **冲突消解必须留在引擎里**：模型没有义务记住"圆角会连坐 border-left 端点"这类实现细节，
 // 它只需要说"我要左竖线"，引擎自己把圆角夹到 0。
@@ -335,6 +327,9 @@ export type FaceLabel = 'eyebrow' | 'chip' | 'mono' | 'none'
 export type FaceFont = 'sans' | 'serif' | 'mono'
 export type FacePad = 'tight' | 'normal' | 'loose'
 export type FaceDeco = 'brackets' | 'tape' | 'quote'
+export type FaceScale = 'standard' | 'display'
+export type FaceAlign = 'auto' | 'left' | 'center'
+export type FaceOrnament = 'none' | 'confetti' | 'dots' | 'speed' | NativeOrnament
 /**
  * 角标落点：四角 + 四边中点（R22；用户原话"顶端／左上角／右侧／左侧／右下角都可以"）
  */
@@ -353,9 +348,11 @@ export type FaceMarkAt = 'tl' | 'tr' | 'bl' | 'br' | 't' | 'r' | 'b' | 'l'
  *   side    竖排标签式：左侧一列**竖排**语义字 + 右侧文字 + 左细线
  *   quote   引文式：46px 出血大引号 + 衬线正文，无框
  *   bracket 角括号式：只有左上/右下两个 L 形角括号，文字内缩
- * 八种都遵守"整篇无底色"（R23）——结构只由**线、留白、字号字重、记号**构成。
+ *   tab     跨边框题签：可换行题签 + 细框正文
+ *   panel   双层纸框：章节题头 + 连续图文正文
+ * 底色由 fill 单独控制，浅底与细框可以组合；默认仍为无底色。
  */
-export type FaceShape = 'rail' | 'medal' | 'index' | 'cap' | 'hanger' | 'side' | 'quote' | 'bracket'
+export type FaceShape = 'rail' | 'medal' | 'index' | 'cap' | 'hanger' | 'side' | 'quote' | 'bracket' | 'tab' | 'panel' | NativeOrnament
 
 export interface FaceTokens {
   radius: number
@@ -373,23 +370,19 @@ export interface FaceTokens {
   markat: FaceMarkAt
   /** 气泡骨架（R24）：默认左竖线式 */
   shape: FaceShape
+  /** 标题层级：display 只放大横幅及一级/二级标题，不放大正文。 */
+  scale: FaceScale
+  /** 标题对齐：auto 保留 frame 的原有行为。 */
+  align: FaceAlign
+  /** 标题与分割线的窄幅线饰；与配色、框架、气泡骨架分别选择。 */
+  ornament: FaceOrnament
 }
 
-/**
- * 默认语言（编辑感）：**无底色 + 规则承担语义**。
- *
- * `fill: 'none'` 是关键决定——"一层面板铺满整段"正是被点名的"AI 味"长相：
- * 全包裹 + 圆角 + 纯浅色底，三者凑齐就成模板腔。默认语言里气泡**不铺底**，
- * 靠**左侧规则的粗细/颜色**与**标签的形态**表达轻重，文字直接落在纸面上。
- * 需要面板的语言（`soft` 的浅底、`sticker` 的手账底）由预置或 `fill=` 显式声明。
- *
- * `deco` 去掉 `brackets`：对角角括号是模板工具最常见的"加戏"，默认不该有；
- * 轴仍然留着，模型点名要才画。
- */
+/** 中性默认保持无底色的编辑版式；浅底、纸面与细框由显式设计轴选择。 */
 const FACE_DEFAULT: FaceTokens = {
   radius: 0, frame: 'line', barW: 3, fill: 'none',
   label: 'eyebrow', title: 'sans', size: 15, deco: ['quote'], pad: 'normal',
-  mark: '', markat: 'tl', shape: 'rail',
+  mark: '', markat: 'tl', shape: 'rail', scale: 'standard', align: 'auto', ornament: 'none',
 }
 
 /** R17 的五个"固定语言"= 轴组合的**别名**（预置是示例，不是上限） */
@@ -399,6 +392,11 @@ export const FACE_PRESETS: Record<string, FaceTokens> = {
   magazine: { ...FACE_DEFAULT, frame: 'stack', fill: 'none', title: 'serif', size: 17, deco: ['quote'] },
   sticker: { ...FACE_DEFAULT, radius: 14, frame: 'dash', fill: 'tint', label: 'chip', deco: ['tape'] },
   tech: { ...FACE_DEFAULT, frame: 'edge', fill: 'tint', label: 'mono', deco: [] },
+  tab: { ...FACE_DEFAULT, shape: 'tab', frame: 'edge', fill: 'tint', radius: 8, size: 17, deco: [], pad: 'loose' },
+  panel: { ...FACE_DEFAULT, shape: 'panel', frame: 'stack', fill: 'paper', radius: 8, title: 'serif', size: 17, deco: [], pad: 'loose' },
+  botanical: { ...FACE_DEFAULT, shape: 'botanical', ornament: 'botanical', frame: 'none', fill: 'paper', radius: 0, title: 'serif', size: 17, label: 'none', mark: 'none', deco: [], pad: 'normal', align: 'center' },
+  ticket: { ...FACE_DEFAULT, shape: 'ticket', ornament: 'ticket', frame: 'none', fill: 'tint', radius: 0, title: 'sans', size: 17, label: 'none', mark: 'none', deco: [], pad: 'normal', align: 'left' },
+  ribbon: { ...FACE_DEFAULT, shape: 'ribbon', ornament: 'ribbon', frame: 'none', fill: 'tint', radius: 0, title: 'serif', size: 17, label: 'none', mark: 'none', deco: [], pad: 'normal', align: 'left' },
 }
 
 /** 预置名（英文键 / 中文名 / 常见同义）→ 英文键 */
@@ -408,6 +406,11 @@ const FACE_PRESET_ALIAS: Record<string, string> = {
   magazine: 'magazine', 杂志: 'magazine', 版式: 'magazine',
   sticker: 'sticker', 手账: 'sticker', 手帳: 'sticker', 贴纸: 'sticker',
   tech: 'tech', 科技: 'tech', 极客: 'tech',
+  tab: 'tab', 题签: 'tab',
+  panel: 'panel', 纸笺: 'panel',
+  botanical: 'botanical', 花笺: 'botanical',
+  ticket: 'ticket', 票笺: 'ticket',
+  ribbon: 'ribbon', 缎带: 'ribbon',
 }
 
 /** 轴值的中文同义（模型用中文写值也认——与 [[theme:名称]] 同口径，避免静默落空） */
@@ -415,7 +418,7 @@ const FACE_VALUE_ALIAS: Record<string, string> = {
   直角: '0', 小圆角: '4', 圆角: '8', 大圆角: '14', 胶囊: '14',
   竖线: 'line', 竖条: 'line', 线: 'line', 底色: 'plane', 面: 'plane',
   虚线: 'dash', 夹线: 'rules', 双线: 'stack', 细边: 'edge', 无: 'none',
-  浅: 'tint', 更浅: 'tint', 淡: 'tint', 深: 'wash', 纸: 'paper',
+  浅: 'tint', 更浅: 'tint', 淡: 'tint', 浅底: 'tint', 深: 'wash', 淡染: 'wash', 纸: 'paper', 纸面: 'paper',
   字距标签: 'eyebrow', 小标签: 'eyebrow', 胶囊标签: 'chip', 等宽: 'mono',
   衬线: 'serif', 无衬线: 'sans', 角括号: 'brackets', 胶带: 'tape', 引号: 'quote',
   紧: 'tight', 常规: 'normal', 松: 'loose',
@@ -437,6 +440,13 @@ const FACE_VALUE_ALIAS: Record<string, string> = {
   竖排式: 'side', 竖排标签式: 'side',
   引文式: 'quote', 引语式: 'quote', 金句式: 'quote',
   角括号式: 'bracket', 括号式: 'bracket',
+  题签: 'tab', 题签式: 'tab', 跨框题签: 'tab',
+  纸笺: 'panel', 纸笺式: 'panel', 章节卡: 'panel',
+  标准: 'standard', 海报: 'display', 自动: 'auto', 左对齐: 'left', 居中: 'center',
+  几何: 'confetti', 撞色几何: 'confetti', 网点: 'dots', 速度线: 'speed',
+  花笺: 'botanical', 花笺式: 'botanical', 花枝: 'botanical',
+  票笺: 'ticket', 票笺式: 'ticket', 票孔: 'ticket',
+  缎带: 'ribbon', 缎带式: 'ribbon', 绶带: 'ribbon',
 }
 
 const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: string[]) => boolean }> = {
@@ -453,7 +463,10 @@ const FACE_AXES: Record<string, { pick: string[]; apply: (t: FaceTokens, vals: s
   mark: { pick: [...MARK_KEYS, 'none'], apply: (t, v) => { t.mark = v[0]; return true } },
   markat: { pick: ['tl', 'tr', 'bl', 'br', 't', 'r', 'b', 'l'], apply: (t, v) => { t.markat = v[0] as FaceMarkAt; return true } },
   // R24：气泡骨架。`rail` 是默认；其余七种是**结构不同**的骨架，不是换图案。
-  shape: { pick: ['rail', 'medal', 'index', 'cap', 'hanger', 'side', 'quote', 'bracket'], apply: (t, v) => { t.shape = v[0] as FaceShape; return true } },
+  shape: { pick: ['rail', 'medal', 'index', 'cap', 'hanger', 'side', 'quote', 'bracket', 'tab', 'panel', 'botanical', 'ticket', 'ribbon'], apply: (t, v) => { t.shape = v[0] as FaceShape; return true } },
+  scale: { pick: ['standard', 'display'], apply: (t, v) => { t.scale = v[0] as FaceScale; return true } },
+  align: { pick: ['auto', 'left', 'center'], apply: (t, v) => { t.align = v[0] as FaceAlign; return true } },
+  ornament: { pick: ['none', 'confetti', 'dots', 'speed', 'botanical', 'ticket', 'ribbon'], apply: (t, v) => { t.ornament = v[0] as FaceOrnament; return true } },
 }
 
 /** 把 `[[boxes:]]` 的**载荷**解析成轴取值（载荷形如 `soft;radius=4;label=chip`） */
@@ -580,16 +593,15 @@ const FLAT_SHELL: Record<FaceFrame, ShellKind> = {
 function shellFor(t: FaceTokens, k: BubbleKind | 'flat'): Shell {
   const brackets = t.deco.includes('brackets')
   const heavy = k === 'warn' || k === 'danger'
-  if (k === 'flat') return { kind: FLAT_SHELL[t.frame], barW: t.barW, strong: true, bracket: false, rail: false }
+  if (k === 'flat') return { kind: t.frame === 'plane' && t.fill === 'none' ? 'box' : FLAT_SHELL[t.frame], barW: t.barW, strong: true, bracket: false, rail: false }
   switch (t.frame) {
-    // `plane` = "没有边框、只靠底色成块"——**底色被禁之后这条语言在气泡上就不成立了**
-    // （2026-10-11 用户口径："整篇无任何色块"）。所以气泡的 `plane` 降级到 `line` 那一套
-    // **线条阶梯**：气泡必须有"线"才立得住，不能靠色块存在。
-    // 容器的 `plane` 不同（见 `FLAT_SHELL`）——容器没有底线，就是**纯内容**（列表/并排文字）。
+    // 有底色时由浅色纸面成块；无底色时保留线条，避免 plane 失去边界。
     case 'plane':
+      if (t.fill !== 'none') return { kind: 'none', barW: t.barW, strong: false, bracket: false, rail: false }
+      return shellFor({ ...t, frame: 'line' }, k)
     case 'line':
       // 编辑感的轻重阶梯：**竖线越来越粗、越来越实，重语义再夹上下细线**——
-      // 而不是"轻语义铺浅底、重语义套整圈框"。全包裹的框正是被点名的模板腔。
+      // 浅底由 fill 独立决定，不改变这套语义阶梯。
       if (k === 'key') return { kind: 'rules', barW: t.barW, strong: false, bracket: false, rail: false }
       if (heavy) return { kind: 'bar', barW: t.barW + 2, strong: true, bracket: brackets && k === 'danger', rail: true }
       if (k === 'tip') return { kind: 'bar', barW: t.barW + 1, strong: true, bracket: false, rail: false }
@@ -602,31 +614,16 @@ function shellFor(t: FaceTokens, k: BubbleKind | 'flat'): Shell {
   }
 }
 
-/**
- * 底色轴 → 实际颜色。**2026-10-11 起恒为 `''`（永远不铺底）**。
- *
- * 用户当日指令（原文）："为什么依旧是纯色圆角矩形气泡？完全禁止掉这种气泡设计"，
- * 追问后选择的口径是**最彻底的那一档**——"**整篇无任何色块**"：气泡与容器**全部不铺底**。
- * 所以 `fill` 轴（`none/tint/wash/paper`）在**块级**上已**失效**（仍解析、不再输出底色），
- * 页面底色永远是纸。保留函数与轴是为了不让旧正文报"未知轴"。
- *
- * **边界**（这条禁令管的是"面"，不是"点"）：块级（气泡 / 卡片 / 分栏 / 步骤 / 时间线 /
- * 边框容器 / 引用 / 色带）一律无底色；**记号级**仍可有色——22px 角标徽章、语义标签 chip、
- * 行内 `[[badge:]]`、小标题序号徽章、分割线圆点。它们不是"色块"，是信息记号。
- */
-function fillOf(_t: FaceTokens, _c: string, _heavy: boolean, _d: ComposeDesign): string {
+/** 浅底只由显式 fill 开启；none 对气泡和普通容器都明确不铺底。 */
+function fillOf(t: FaceTokens, c: string, _heavy: boolean, _d: ComposeDesign): string {
+  if (t.fill === 'tint') return rgba(c, 0.055)
+  if (t.fill === 'wash') return rgba(c, 0.1)
+  if (t.fill === 'paper') return '#fffaf3'
   return ''
 }
 
-/**
- * **非强调容器**（卡片 / 段落 / 分栏 / 时间线 / 列表 / 色带）的底色。
- *
- * 默认语言 `fill: 'none'` 是给**气泡**定的（见 `FACE_DEFAULT` 注释）；容器不一样——
- * 它们本来就靠"成块"与正文区分，`plane` 语言更是只靠底色、连边框都没有，
- * 真给成透明就会整块消失。所以轴说 `none` 时，容器仍补一层极浅的底（约 5.5%）。
- */
 function flatFill(t: FaceTokens, c: string, heavy: boolean, d: ComposeDesign): string {
-  return fillOf(t, c, heavy, d) // 恒为 ''
+  return fillOf(t, c, heavy, d)
 }
 
 const FACE_FONT_CSS: Record<FaceFont, string> = {
@@ -672,8 +669,8 @@ function faceTitle(t: FaceTokens, ttl: string, color: string): string {
     : ''
 }
 
-function faceBody(html: string, color: string): string {
-  return html ? '<p style="margin:0;font-size:14px;line-height:1.75;color:' + color + '">' + html + '</p>' : ''
+function faceBody(html: string, color: string, size = 14): string {
+  return html ? '<p style="margin:0;font-size:' + size + 'px;line-height:1.75;color:' + color + '">' + html + '</p>' : ''
 }
 
 // ---------- 装饰件（标题 / 横幅 / 分割线 / 徽章）也读**同一套**设计轴 ----------
@@ -696,6 +693,217 @@ function decoInk(d: ComposeDesign): string {
 function decoColor2(d: ComposeDesign): string {
   return d.key === 'promo' ? d.amber : d.accentDark
 }
+
+/** R39 的绘图仅占独立留白带；正文与长标题永远不在 SVG 内，也不被装饰挤成窄栏。 */
+function nativeDrawing(d: ComposeDesign, kind: NativeOrnament, role: OrnamentRole, align = 'center'): string {
+  const width = role === 'fold' ? '12%' : role === 'hero' || role === 'divider' || role === 'paper' || role === 'edge' || (kind === 'ribbon' && role === 'footer') ? '100%' : '48%'
+  return '<img src="' + ornamentDataUrl(kind, role, decoColor(d), d.amber || decoColor2(d), d.teal || decoColor(d)) +
+    '" alt="" style="display:block;width:' + width + ';max-width:100%;height:auto;margin:' +
+    (align === 'left' ? '0 auto 0 0' : align === 'right' ? '0 0 0 auto' : '0 auto') + '" />'
+}
+
+/** 后层是独立空纸页：正文高度由前页自然撑开，10px 露边不占用正文行宽之外的额外侧栏。 */
+function backedPaper(d: ComposeDesign, t: FaceTokens, inner: string, base: string, edge: string): string {
+  const painted = t.fill !== 'none'
+  return '<section style="' + base + 'position:relative;padding:0 10px 10px 0">' +
+    '<span aria-hidden="true" style="display:block;position:absolute;left:10px;right:0;top:10px;bottom:0;border:1px solid ' + rgba(edge, .6) + ';border-radius:2px 2px 12px 2px' + (painted ? ';background:' + rgba(edge, .24) : '') + '"></span>' +
+    '<section style="position:relative' + (painted ? ';background:' + d.bg : '') + '">' + inner + '</section></section>'
+}
+
+// 原生标题继承旧标题的短句/日期分组，再保护较长中文分句的短尾。
+// inline-block 优先整体换行；max-width + normal 允许窄到容不下该组时内部换行，不用 nowrap 撑破纸页。
+const NATIVE_TITLE_UNIT_STYLE = 'display:inline-block;max-width:100%;white-space:normal;overflow-wrap:anywhere;vertical-align:baseline'
+function nativeTitleText(text: string): string {
+  const keep = (s: string) => '<span data-wx-title-unit="true" style="' + NATIVE_TITLE_UNIT_STYLE + '">' + escapeHtml(s) + '</span>'
+  const legacy = (s: string) => displayTitleText(s).replace(/<span style="white-space:nowrap">/g, '<span data-wx-title-unit="true" style="' + NATIVE_TITLE_UNIT_STYLE + '">')
+  const parts = (text: string) => (text.match(/[^，、。！？：；,!?;:·|]+[，、。！？：；,!?;:·|]?|[，、。！？：；,!?;:·|]/gu) || [text]).map(part => {
+    const width = [...part.trim().replace(/[，、。！？：；,!?;:·|]$/u, '')].reduce((n, ch) => n + (/^[\x00-\x7f]$/.test(ch) ? .5 : 1), 0)
+    if (width > 0 && width <= 6) return keep(part)
+    const tail = /([\p{Script=Han}]{2,4}[，、。！？：；,!?;:·|]?\s*)$/u.exec(part)
+    return tail ? legacy(part.slice(0, tail.index)) + keep(tail[0]) : legacy(part)
+  }).join('')
+  // 时间冒号不是语义分隔；日期及其星期补充也优先视为一个可退让的阅读单位。
+  return text.split(/((?:\d{4}年)?\d{1,2}月\d{1,2}日(?:[（(][^）)\r\n]{1,6}[）)])?|\d{1,2}:\d{2}(?:[–—-]\d{1,2}:\d{2})?)/u)
+    .map((part, i) => i % 2 ? keep(part) : parts(part)).join('')
+}
+
+/** 断行包装不属于作者文字；取文字投影时去包装，不在字间插入新的空格。 */
+function unwrapNativeTitleUnits(html: string): string {
+  return html.replace(/<span data-wx-title-unit="true" style="[^"]*">([\s\S]*?)<\/span>/g, '$1')
+}
+
+/** 同一预置的整篇标题/章题使用独立轮廓；不沿用提示框的闭合外框。 */
+function nativeHeading(d: ComposeDesign, t: FaceTokens, kind: NativeOrnament, text: string, level: number, counter: number | null, sub = ''): string {
+  const hero = level === 1
+  const c = decoColor(d)
+  const stage = hero && kind === 'botanical' && t.fill !== 'none'
+  // 已有中文或阿拉伯章序属于原文，保留它，关闭系统附加编号。
+  const numbered = /^(?:第[一二三四五六七八九十百零〇\d]+[章节部分篇]|[一二三四五六七八九十百零〇\d]+\s*[、.．）)]|[（(][一二三四五六七八九十百零〇\d]+[）)])/u.test(text.trim())
+  const num = !hero && counter !== null && !numbered
+    ? '<span style="display:inline-block;margin:0 9px 0 0;font-size:18px;line-height:1.45;letter-spacing:1px;color:' + chipColor(c) + ';font-family:Consolas,Menlo,monospace">' + String(counter).padStart(2, '0') + '</span>' : ''
+  const fs = kind === 'ribbon' ? (hero ? (t.scale === 'display' ? 36 : 32) : 20) : hero ? (t.scale === 'display' ? 32 : 28) : 22
+  const tag = 'h' + level
+  const titleColor = stage ? '#fffaf3' : decoInk(d)
+  const title = '<' + tag + ' style="margin:0;font-size:' + fs + 'px;line-height:1.45;font-weight:' + (kind === 'ribbon' && hero ? 900 : 800) + ';color:' + titleColor + FACE_FONT_CSS[t.title] + ';word-break:break-word;overflow-wrap:anywhere;text-wrap:balance">' + (kind === 'ribbon' ? num.replace('color:' + chipColor(c), 'color:' + chipColor(d.amber || c)) : num) + nativeTitleText(text) + '</' + tag + '>'
+  const subtitle = sub ? '<p style="margin:12px 0 0;font-size:14px;line-height:1.7;color:' + (stage ? '#f0e7cd' : chipColor(d.sub)) + ';word-break:break-word;overflow-wrap:anywhere;text-wrap:balance">' + nativeTitleText(sub) + '</p>' : ''
+  const align = titleAlignment(t, kind === 'botanical' ? 'center' : 'left')
+  const content = title + subtitle
+  const margin = hero ? '22px 0 28px' : kind === 'ribbon' ? '28px 0 14px' : '32px 0 22px'
+  if (kind === 'botanical') {
+    const frame = hero ? 'border:1px solid ' + rgba(c, .42) + ';border-radius:140px 140px 3px 3px;padding:16px 18px 24px;' + (stage ? 'background:' + chipColor(c) + ';' : '') : 'padding:0 4px;'
+    const drawingColors: ComposeDesign = stage ? { ...d, accent: '#f4e5bd', orange: '#f4e5bd', accentDark: '#f4e5bd', amber: '#edd290', teal: '#c3d3b7' } : d
+    return '<section style="margin:' + margin + ';' + frame + align + '">' + nativeDrawing(drawingColors, kind, hero ? 'hero' : 'section') +
+      '<section style="margin:' + (hero ? '4px' : '8px') + ' 0 0">' + content + '</section>' +
+      (stage ? '<section style="margin:14px -18px -24px">' + nativeDrawing({ ...drawingColors, accent: d.bg, orange: d.bg }, kind, 'edge') + '</section>' : '') + '</section>'
+  }
+  if (kind === 'ticket') {
+    if (hero) return backedPaper(d, t, nativeDrawing(d, kind, 'hero') + '<section style="padding:5px 16px 19px;border-left:1px solid ' + rgba(c, .55) + ';border-right:1px solid ' + rgba(c, .55) + ';border-bottom:1px solid ' + rgba(c, .55) + '">' + content + '</section>', 'margin:' + margin + ';' + align + ';', d.amber || c)
+    return '<section style="margin:' + margin + ';' + align + ';border-bottom:2px solid ' + rgba(c, .65) + '"><section style="display:inline-block;max-width:100%;box-sizing:border-box;padding:9px 16px 8px;border:1px solid ' + rgba(c, .65) + ';border-bottom:0;border-radius:14px 14px 0 0' + (t.fill !== 'none' ? ';background:' + rgba(d.amber || c, .22) : '') + '">' + content + '</section></section>'
+  }
+  const gold = d.amber || c
+  if (hero) return '<section data-wx-ribbon="masthead" style="margin:' + margin + ';' + align + '">' + nativeDrawing(d, kind, 'hero') +
+    '<section style="padding:7px 4px 18px;border-bottom:1px solid ' + rgba(gold, .65) + '">' + content + '</section>' +
+    '<section aria-hidden="true" style="width:24%;margin:3px 0 0;border-bottom:1px solid ' + rgba(c, .65) + '"></section></section>'
+  return '<section data-wx-ribbon="chapter" style="margin:' + margin + ';' + align + '"><section style="padding:9px 13px 10px;border-left:4px solid ' + chipColor(c) + ';border-top:1px solid ' + rgba(gold, .7) + ';border-bottom:1px solid ' + rgba(c, .3) +
+    (t.fill !== 'none' ? ';background:' + rgba(c, .045) : '') + '">' + content +
+    '</section>' + nativeDrawing(d, kind, 'fold', 'left') + '</section>'
+}
+
+/** 三种单层纸面骨架，装饰和可选外来角饰均进入正常文流；保留原文和原图顺序。 */
+function nativePaper(d: ComposeDesign, t: FaceTokens, kind: NativeOrnament, title: string, body: string, label: string, fill: string, decoSrc = '', mark: { key: string; at: FaceMarkAt } | null = null, margin = '12px 0 24px', extra = ''): string {
+  const c = decoColor(d)
+  const bg = fill ? ';background:' + fill : ''
+  const head = title ? '<p style="margin:0;font-size:' + (t.size + 1) + 'px;line-height:1.6;font-weight:700;color:' + d.heading + FACE_FONT_CSS[t.title] + ';word-break:break-word;overflow-wrap:anywhere">' + title + '</p>' : ''
+  const foreign = decoSrc ? '<section style="margin:10px 0 0"><img src="' + decoSrc + '" alt="" style="display:block;width:60px;max-width:100%;height:auto;max-height:56px;margin:0 0 0 auto" /></section>' : ''
+  const markAt = mark?.at || 'tl'
+  const markSlot = markAt === 'bl' || markAt === 'b' || markAt === 'br' ? 'bottom' : markAt === 'l' || markAt === 'r' ? 'middle' : 'top'
+  const markAlign = markAt === 't' || markAt === 'b' ? 'center' : markAt === 'tr' || markAt === 'r' || markAt === 'br' ? 'right' : 'left'
+  const markBand = (slot: 'top' | 'middle' | 'bottom') => mark && markSlot === slot
+    ? '<section data-wx-mark-at="' + markAt + '" style="margin:0 0 10px;text-align:' + markAlign + ';line-height:0"><span style="display:inline-block;border:1px solid ' + rgba(c, .45) + ';border-radius:50%;padding:5px"><img src="' + markDataUrl(mark.key, chipColor(c)) + '" alt="" style="display:block;width:22px;height:22px" /></span></section>' : ''
+  const topMark = markBand('top'), middleMark = markBand('middle'), bottomMark = markBand('bottom')
+  const base = 'margin:' + margin + ';box-sizing:border-box;word-break:break-word;' + extra
+  if (kind === 'botanical') {
+    return backedPaper(d, t, nativeDrawing(d, kind, 'paper') +
+      '<section style="border-left:1px solid ' + rgba(c, .4) + ';border-right:1px solid ' + rgba(c, .4) + ';border-bottom:1px solid ' + rgba(c, .4) + bg + '">' +
+      '<section style="padding:4px 16px 12px">' + topMark + label + (head ? '<section style="margin:0 0 12px">' + head + '</section>' : '') + middleMark + body + foreign + bottomMark + '</section>' +
+      '<section style="padding:0 16px 4px">' + nativeDrawing(d, kind, 'footer', 'right') + '</section></section>', base, d.amber || c)
+  }
+  if (kind === 'ticket') {
+    return backedPaper(d, t, nativeDrawing(d, kind, 'paper') + '<section style="border-left:1px solid ' + rgba(c, .35) + ';border-right:1px solid ' + rgba(c, .35) + ';border-bottom:1px solid ' + rgba(c, .35) + bg + '">' +
+      (head || label || topMark ? '<section style="padding:6px 16px 0">' + topMark + label + head + '</section>' : '') +
+      '<section style="padding:0 8px">' + nativeDrawing(d, kind, 'divider') + '</section>' +
+      '<section style="padding:0 16px 10px">' + middleMark + body + foreign + bottomMark + '</section><section style="padding:0 16px 6px">' + nativeDrawing(d, kind, 'footer', 'right') + '</section></section>', base, d.amber || c)
+  }
+  const gold = d.amber || c
+  // 显式角标是题头/页脚的一部分；不再套圆形徽章，避免与纸页折角争夺视觉中心。
+  const pageMark = mark ? '<span data-wx-mark-at="' + markAt + '" style="display:inline-block;flex:0 0 auto;line-height:0;padding:2px 6px 6px;border-bottom:2px solid ' + rgba(gold, .7) + '"><img src="' + markDataUrl(mark.key, chipColor(c)) + '" alt="" style="display:block;width:22px;height:22px" /></span>' : ''
+  const headingText = label + head
+  const titleMark = markSlot === 'top' ? pageMark : ''
+  const titleRow = titleMark && markAt !== 't'
+    ? '<section style="display:flex;align-items:flex-start;gap:9px">' + (markAt === 'tl' ? titleMark : '') + '<section style="flex:1;min-width:0">' + headingText + '</section>' + (markAt === 'tr' ? titleMark : '') + '</section>'
+    : (titleMark ? '<section style="margin:0 0 6px;text-align:center">' + titleMark + '</section>' : '') + headingText
+  const flowMark = (slot: 'middle' | 'bottom') => markSlot === slot && pageMark ? '<section style="margin:' + (slot === 'middle' ? '0 0 10px' : '10px 0 0') + ';text-align:' + markAlign + '">' + pageMark + '</section>' : ''
+  return '<section data-wx-ribbon="paper" style="' + base + 'position:relative;padding:0 6px 6px 0">' +
+    '<span aria-hidden="true" style="display:block;position:absolute;left:6px;right:0;top:6px;bottom:0;border:1px solid ' + rgba(gold, .5) + (fill ? ';background:' + rgba(gold, .1) : '') + '"></span>' +
+    '<section style="position:relative' + bg + '">' + nativeDrawing(d, kind, 'paper') +
+    '<section style="border-left:1px solid ' + rgba(c, .5) + ';border-right:1px solid ' + rgba(c, .5) + '">' +
+    (titleRow ? '<section style="margin:0 14px 13px;padding:0 0 10px;border-bottom:1px solid ' + rgba(gold, .5) + '">' + titleRow + '</section>' : '') +
+    '<section style="padding:0 14px 2px">' + flowMark('middle') + body + foreign + flowMark('bottom') + '</section></section>' + nativeDrawing(d, kind, 'footer') + '</section></section>'
+}
+/**
+ * R35：按落点分配装饰职责，避免每个标题重复同一串图案。
+ * hero 是标题旁独占 54px 的几何侧栏；section 是单处小记号；divider 才是横向节奏。
+ * 侧栏内的定位只占它自己的盒子，不覆盖文字/原图；所有内容容器均不铺底。
+ */
+function ornamentHtml(d: ComposeDesign, t: FaceTokens, role: 'hero' | 'section' | 'divider' = 'section'): string {
+  if (t.ornament === 'none') return ''
+  if (isNativeOrnament(t.ornament)) return nativeDrawing(d, t.ornament, role)
+  const c = decoColor(d)
+  const c2 = d.amber || decoColor2(d)
+  const c3 = d.teal || c
+  const unit = (css: string) => '<span style="display:inline-block;box-sizing:border-box;vertical-align:middle;' + css + '"></span>'
+  if (role === 'hero') {
+    let drawing = ''
+    if (t.ornament === 'confetti') {
+      drawing = unit('position:absolute;right:0;top:2px;width:32px;height:32px;border:5px solid ' + c + ';border-radius:50%') +
+        unit('position:absolute;left:4px;top:43px;width:16px;height:16px;border:4px solid ' + c2 + ';transform:rotate(45deg)') +
+        unit('position:absolute;right:2px;bottom:8px;width:34px;height:10px;border-top:4px solid ' + c3 + ';border-bottom:2px solid ' + c3 + ';transform:rotate(-14deg)') +
+        unit('position:absolute;left:5px;top:9px;width:6px;height:6px;background:' + c3 + ';border-radius:50%')
+    } else if (t.ornament === 'dots') {
+      for (let row = 0; row < 5; row++) for (let col = 0; col < 4; col++) {
+        drawing += unit('position:absolute;left:' + (col * 12 + (row % 2 ? 4 : 0)) + 'px;top:' + (row * 10) +
+          'px;width:5px;height:5px;border-radius:50%;background:' + (col < 2 ? c3 : c))
+      }
+      drawing += unit('position:absolute;left:12px;bottom:5px;width:29px;height:29px;border:4px solid ' + c2 + ';transform:rotate(-9deg)')
+    } else {
+      drawing = [42, 34, 24].map((w, i) => unit('position:absolute;left:' + (3 + i * 9) + 'px;top:' + (14 + i * 26) +
+        'px;width:' + w + 'px;height:8px;border-top:4px solid ' + (i === 1 ? c2 : c) + ';border-bottom:2px solid ' +
+        (i === 1 ? c2 : c) + ';transform:rotate(-28deg)')).join('')
+    }
+    return '<span style="display:block;position:relative;flex-shrink:0;width:54px;height:90px;line-height:0">' + drawing + '</span>'
+  }
+  let parts = ''
+  if (role === 'section') {
+    switch (t.ornament) {
+      case 'confetti':
+        parts = unit('width:42px;height:6px;border-bottom:3px solid ' + c3 + ';margin-right:8px') +
+          unit('width:8px;height:8px;border:2px solid ' + c + ';border-radius:50%')
+        break
+      case 'dots':
+        parts = [0, 1, 2, 3, 4].map((i) => unit('width:' + (i === 0 ? 7 : 4) + 'px;height:' + (i === 0 ? 7 : 4) +
+          'px;border-radius:50%;background:' + (i === 0 ? c : c3) + ';margin-right:6px')).join('')
+        break
+      case 'speed':
+        parts = unit('width:36px;height:6px;border-top:3px solid ' + c + ';border-bottom:1px solid ' + c2 + ';transform:skewX(-24deg);margin-left:2px')
+        break
+    }
+  } else {
+    switch (t.ornament) {
+      case 'confetti':
+        parts = unit('width:13px;height:13px;border:3px solid ' + c + ';border-radius:50%;margin:0 10px 0 2px') +
+          unit('width:24px;height:8px;border-top:3px solid ' + c3 + ';border-bottom:3px solid ' + c3 + ';transform:rotate(-12deg);margin-right:12px') +
+          unit('width:11px;height:11px;border:3px solid ' + c2 + ';transform:rotate(45deg);margin:0 4px')
+        break
+      case 'dots':
+        for (let row = 0; row < 2; row++) {
+          let dots = ''
+          for (let col = 0; col < 7; col++) dots += unit('width:4px;height:4px;border-radius:50%;background:' + (col < 4 ? c : c3) + ';margin-right:5px')
+          parts += '<span style="display:block;height:7px;line-height:0;' + (row ? 'margin-left:4px' : '') + '">' + dots + '</span>'
+        }
+        break
+      case 'speed':
+        parts = [34, 22, 12].map((w, i) => unit('width:' + w + 'px;height:6px;border-top:3px solid ' +
+          (i === 1 ? c2 : c) + ';border-bottom:1px solid ' + (i === 1 ? c2 : c) + ';transform:skewX(-24deg);margin:0 5px')).join('')
+        break
+    }
+  }
+  return '<span style="display:inline-block;max-width:100%;line-height:0;vertical-align:middle">' + parts + '</span>'
+}
+
+/** 海报以标题为主，装饰最多占 54px + 12px 间距；375px 下仍为长标题保留约 7 个汉字的行宽。 */
+function heroTitle(d: ComposeDesign, t: FaceTokens, text: string): string {
+  const ornament = ornamentHtml(d, t, 'hero')
+  if (!ornament) return text
+  return '<section style="display:flex;align-items:center;min-width:0">' +
+    '<section style="flex:1;min-width:0">' + text + '</section>' +
+    '<section style="flex-shrink:0;margin-left:12px">' + ornament + '</section></section>'
+}
+
+/** 海报标题保留短分句与日期的阅读单位，不改文字；长句仍可自由换行。 */
+function displayTitleText(text: string): string {
+  const keep = (s: string) => '<span style="white-space:nowrap">' + escapeHtml(s) + '</span>'
+  return (text.match(/[^，、。！？：；,!?;:]+[，、。！？：；,!?;:]?|[，、。！？：；,!?;:]/gu) || [text]).map(part => {
+    const phrase = part.replace(/[，、。！？：；,!?;:]$/u, '')
+    const width = [...phrase].reduce((n, ch) => n + (/^[\x00-\x7f]$/.test(ch) ? 0.5 : 1), 0)
+    if (width > 0 && width <= 4) return keep(part)
+    return part.split(/((?:\d{4}年)?\d{1,2}月\d{1,2}日)/u).map((s, i) => i % 2 ? keep(s) : escapeHtml(s)).join('')
+  }).join('')
+}
+
+function titleAlignment(t: FaceTokens, fallback: 'left' | 'center'): string {
+  return 'text-align:' + (t.align === 'auto' ? fallback : t.align)
+}
+
 /** 装饰件的内距（走 `pad` 轴，与 `surface()` 同口径） */
 function decoPad(t: FaceTokens): string {
   const p = t.pad === 'tight' ? 10 : t.pad === 'loose' ? 16 : 13
@@ -712,7 +920,8 @@ function headPad(t: FaceTokens): string {
 /** 装饰件字号：等级基础值 + 字号轴档差（`size` 15/17/19 → 0/+2/+4），仍在正文之上 */
 function headSize(level: number, t: FaceTokens): number {
   const base: Record<number, number> = { 1: 22, 2: 20, 3: 18, 4: 17, 5: 16, 6: 15 }
-  return (base[level] || 18) + (t.size - 15)
+  const lift = t.scale === 'display' ? (level === 1 ? 8 : level === 2 ? 5 : 0) : 0
+  return (base[level] || 18) + (t.size - 15) + lift
 }
 /** 序号徽章的圆角跟随 `radius` 轴（与 `steps()` 同口径：圆润语言给圆泡，直角语言给方泡） */
 function counterBadge(n: number, t: FaceTokens, c: string): string {
@@ -740,6 +949,8 @@ interface SurfaceOpts {
   extraStyle?: string
   /** 覆盖按轴算出的内距（R24 的骨架各自有不同内距：flex 两栏 / 悬挂标签的左侧留白等） */
   padOverride?: string
+  /** 双层纸框内外之间的呼吸间距；旧 stack 保持 3px。 */
+  stackGap?: number
   /**
    * 角标（R22）：`key` 是 marks.ts 的规范键（null = 不画）。
    * 角标是**不透明**徽章，骑在框线上、把该处框线盖住 ⇒ 框线**天然"略去一部分"**，
@@ -757,7 +968,7 @@ function secBox(margin: string, style: string, inner: string): string {
  * 把「壳 + 轴」合成一段微信安全 HTML。
  *
  * **冲突消解在这里，不在模型那边**——模型没有义务记住"圆角会连坐 border-left 端点"这类实现细节：
- * 它说 `frame=line`（要左竖线），这里就把圆角夹到 0；它说实色反白，这里就换成嵌套 shell 加内衬亮边。
+ * `frame=line` 的竖线端点保持直角；底色与正文颜色分别处理。
  */
 function surface(o: SurfaceOpts): string {
   const { t, s, c, fill, bottom, decoImg, inner } = o
@@ -778,7 +989,7 @@ function surface(o: SurfaceOpts): string {
     : markKey
       ? padTop + 'px ' + (sideR ? 32 : 16) + 'px ' + padBottom + 'px ' + (sideL ? 32 : 16) + 'px'
       : padTop0 + 'px 16px ' + Math.max(minBottom, bottom) + 'px'
-  // 实色反白会把 `rules` 退化成整圈框（夹线撑不住实色），角标要按**实际画出来的壳**算偏移。
+  // 角标按实际壳的边线计算偏移。
   const effKind: ShellKind = s.kind
   // **角标必须骑在框线上**：`position:absolute` 的包含块是**内边距盒**，`left:0` 落在框线**内侧**——
   // 那样徽章只是"贴在框内角上"，盖不到线，"断口"根本不存在（2026-10-10 读图子智能体逐像素抓到：
@@ -836,8 +1047,7 @@ function surface(o: SurfaceOpts): string {
   const margin = o.margin !== undefined ? o.margin : (tape ? '14px 0 16px' : '0 0 16px')
   const extra = o.extraStyle || ''
 
-  // 底色一律来自 `fill`（`fillOf`/`rgba` ⇒ **永远带透明度**）。曾经那条 promo 专属的
-  // "实色反白"分支已按用户 2026-10-11 的指令整体删除（见 `bubble()` 里的说明）。
+  // 底色来自 fillOf：低透明度语义浅底或极浅暖纸面。
   const bg = fill
   const kind: ShellKind = effKind
   const line = (a: number) => rgba(c, a)
@@ -848,7 +1058,7 @@ function surface(o: SurfaceOpts): string {
       // 左竖线必须直角——圆角会把竖条两头一起圆掉（"圆角与硬直竖线语言冲突"的具体形态）
       const ruleCol = s.strong ? strong : line(0.55)
       // `rail`：竖线之外再夹上下两条细线（半包围）。重语义（注意/警示）靠它加重，
-      // 而不是靠"把整块包起来"——全包裹的框是模板腔，半包围仍留着纸面。
+      // 与单竖线区分，不改变 fill 指定的纸面。
       const rails = s.rail
         ? styleOf('border-top:1px solid ' + line(0.45), 'border-bottom:1px solid ' + line(0.45))
         : ''
@@ -865,15 +1075,16 @@ function surface(o: SurfaceOpts): string {
       return secBox(margin, styleOf(extra, 'border:1px dashed ' + line(0.55), 'border-radius:' + t.radius + 'px',
         bg ? 'background:' + bg : '', 'padding:' + pad, 'position:relative'), body)
     case 'rules':
-      return secBox(margin, styleOf(extra, 'border-top:2px solid ' + line(0.5), 'border-bottom:2px solid ' + line(0.5),
+      return secBox(margin, styleOf(extra, bg ? 'background:' + bg : '', 'border-top:2px solid ' + line(0.5), 'border-bottom:2px solid ' + line(0.5),
         'padding:' + pad, 'position:relative'), body)
     case 'stack': {
       // 双线用嵌套 section（`border-style:double` 在 1–2px 下看不出，且不在微信白名单）。
       // 外圈圆角 = 内圈 + 3px 的衬距，两层同心才不"别着"。
+      const gap = o.stackGap || 3
       const rr = t.radius ? 'border-radius:' + t.radius + 'px' : ''
       const innerBox = secBox('', styleOf('border:1px solid ' + line(0.24), bg ? 'background:' + bg : '', rr,
         'padding:' + pad, 'position:relative'), body)
-      return secBox(margin, extra + 'border:1px solid ' + line(0.55) + (t.radius ? ';border-radius:' + (t.radius + 3) + 'px' : '') + ';padding:3px', innerBox)
+      return secBox(margin, extra + 'border:1px solid ' + line(0.55) + (t.radius ? ';border-radius:' + (t.radius + gap) + 'px' : '') + ';padding:' + gap + 'px', innerBox)
     }
     default:
       // 无边框的壳**更要带上圆角**——`plane`（靠底色成块）这一族语言里，圆角就是它的"形"
@@ -904,11 +1115,7 @@ function bubble(
   }[k]
   const ttl = title && title !== meta.label ? title : ''
   const bodyText = body.length ? body.map((l) => inline(l, d)).join('<br/>') : ''
-  // **气泡不再有"纯色反白块"这一形态**（用户 2026-10-11 明确："为什么依旧是纯色圆角矩形气泡？
-  // 完全禁止掉这种气泡设计"）。曾经的 promo 专属 `solid`（KEY/TIP/DANGER 整块实色 + 白字）已删除：
-  // 语义之间的差别改由**语义色 + 文字标签 + 角标图案 + 框架语言的轻重**承担（`shellFor` 里
-  // KEY 走上下夹线、TIP 走加粗左竖线、WARN/DANGER 走更粗的竖线 + 上下细线 / 整圈细框），
-  // 而不是"给整段铺一块实色"。底色一律是**带透明的浅底**（`fillOf`/`rgba`），页面底色永远是纸。
+  // 正文始终使用可读的深色文字；浅底不触发整块反白。
   const heavy = k === 'warn' || k === 'danger'
   const artName = DECO_MAP[decoName] || decoName
   // 角饰来源：预置资产 URL（artUrls）> 现场装饰素材（::: art deco 定义，第 21 轮）
@@ -922,7 +1129,7 @@ function bubble(
 
   const inner = labelHtml(t, meta.label, meta.c, k) +
     faceTitle(t, ttl, d.heading) +
-    faceBody(bodyText, d.text)
+    faceBody(bodyText, d.text, bodySize(d, 14))
   // R22 角标：轴显式指定 > 语义默认（"形状即情绪"契约）；`mark=none` 明确不画。
   // 角标解析：显式 `mark=` > 主题（风格）词汇 > 语义默认（"形状即情绪"）。
   // 主题词汇只覆盖 note/tip（见 marks.ts::THEME_MARKS），警报与结论的形状不动。
@@ -930,17 +1137,43 @@ function bubble(
     ? null
     : t.mark
       ? (resolveMark(t.mark) || themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
-      : (themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
-  // 气泡一律不铺底（2026-10-11 禁令）；`plane` 语言因此不再"靠底色成块"，改为**走线条语言**
-  // （见 `shellFor` 的 `case 'plane'`）——否则整块会消失、只剩一坨文字。
+      : ((!src && resolveMark(decoName)) || themeMark(d.themeKey, k) || SEMANTIC_MARK[k])
+  // 配色与版式解耦：语义色只负责染出指定强度的浅底。
   const bubbleFill = fillOf(t, meta.c, heavy, d)
   const base = shellFor(t, k)
   const labelTxt = t.label === 'none' ? '' : meta.label
-  const flow = { label: labelHtml(t, meta.label, meta.c, k), title: faceTitle(t, ttl, d.heading), body: faceBody(bodyText, d.text) }
+  const flow = { label: labelHtml(t, meta.label, meta.c, k), title: faceTitle(t, ttl, d.heading), body: faceBody(bodyText, d.text, bodySize(d, 14)) }
+
+  if (isNativeOrnament(t.shape)) {
+    const explicitMark = t.mark && t.mark !== 'none' && markKey ? { key: markKey, at: t.markat } : null
+    return nativePaper(d, t, t.shape, escapeHtml(ttl), flow.body, flow.label, fillOf(t, decoColor(d), heavy, d), src || '', explicitMark)
+  }
 
   // ---- R24：八种**结构不同**的骨架（不是换图案）----
   // 每条分支只做两件事：决定 `inner` 的排布，以及覆盖 `s`（壳）/ `mark`（角标）/ `padOverride`。
   switch (t.shape) {
+    // 题签在正常文流中跨过上边框；长标题自然增高，不使用固定高度或绝对定位。
+    case 'tab': {
+      const icon = markKey
+        ? '<img src="' + markDataUrl(markKey, chipColor(meta.c)) + '" alt="" style="width:16px;height:16px;display:inline-block;vertical-align:-2px;margin:0 7px 0 0" />'
+        : ''
+      const tabText = escapeHtml(ttl || labelTxt)
+      const tab = '<p style="margin:-18px 0 15px;line-height:1.5;word-break:break-word">' +
+        '<span style="display:inline-block;box-sizing:border-box;max-width:100%;background:#ffffff;border:1px solid ' + rgba(meta.c, 0.42) +
+        ';border-radius:' + t.radius + 'px;padding:7px 12px;font-size:' + t.size + 'px;font-weight:700;color:' + d.heading + FACE_FONT_CSS[t.title] + '">' + icon + tabText + '</span></p>'
+      const label = ttl ? flow.label : ''
+      return surface({ t, s: { ...base, kind: 'box', bracket: false, rail: false }, c: meta.c, fill: bubbleFill,
+        bottom: reserve, decoImg, quote: false, inner: tab + label + flow.body, mark: null,
+        margin: '20px 0 22px', padOverride: '0 18px ' + Math.max(18, reserve) + 'px', extraStyle: 'word-break:break-word' })
+    }
+    // 纸笺用双层细框与内嵌章节题头组织完整图文，不给每句话另套一张卡。
+    case 'panel': {
+      const head = '<section style="margin:0 0 15px;padding:0 0 12px;border-bottom:1px solid ' + rgba(meta.c, 0.24) + ';word-break:break-word">' +
+        flow.label + flow.title + '</section>'
+      return surface({ t, s: { ...base, kind: 'stack', bracket: false, rail: false }, c: meta.c, fill: bubbleFill,
+        bottom: reserve, decoImg, quote: false, inner: head + flow.body, stackGap: 7,
+        mark: markKey ? { key: markKey, at: t.markat } : null, margin: '8px 0 22px', extraStyle: 'word-break:break-word;' })
+    }
     // 徽章两栏式：左侧 44px 大图案徽章 + 右侧文字。不画竖线、不挂角标（徽章本身就是标记）。
     case 'medal': {
       const mk = markKey || SEMANTIC_MARK[k] || 'dot'
@@ -1018,6 +1251,15 @@ function divider(d: ComposeDesign, kind: string): string {
   const t = faceOf(d)
   const c = decoColor(d)
   const m = 'margin:24px 0'
+  if (isNativeOrnament(t.ornament)) return '<section style="margin:22px 0;line-height:0">' + nativeDrawing(d, t.ornament, 'divider') + '</section>'
+  if (t.ornament !== 'none') {
+    const stroke = t.frame === 'dash' ? '2px dashed ' : '1px solid '
+    const railStyle = 'flex:1;min-width:0;border-top:' + stroke + rgba(c, 0.65) +
+      (t.frame === 'stack' ? ';height:4px;border-bottom:1px solid ' + rgba(c, 0.65) : '')
+    const rail = t.frame === 'none' ? '' : '<span style="' + railStyle + '"></span>'
+    return '<section style="' + m + ';display:flex;align-items:center;justify-content:center">' + rail +
+      '<span style="flex-shrink:0;margin:0 10px;line-height:0">' + ornamentHtml(d, t, 'divider') + '</span>' + rail + '</section>'
+  }
   const diamond = (color: string) => '<span style="display:inline-block;width:8px;height:8px;background:' + color + ';transform:rotate(45deg);border-radius:1px"></span>'
   const dots = (color: string) => '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';margin:0 4px"></span>'
   const bar = (h: string, color: string, extra = '') => '<section style="height:' + h + ';border-radius:' + (t.radius ? Math.min(t.radius, 3) + 'px' : '0') + ';background:' + color + extra + '"></section>'
@@ -1056,41 +1298,58 @@ function divider(d: ComposeDesign, kind: string): string {
  */
 function heading(d: ComposeDesign, level: number, text: string, counter: number | null): string {
   const t = faceOf(d)
-  const h = escapeHtml(text)
+  if (level <= 2 && isNativeOrnament(t.ornament)) return nativeHeading(d, t, t.ornament, text, level, counter)
+  const h = t.scale === 'display' && level <= 2 ? displayTitleText(text) : escapeHtml(text)
   const c = decoColor(d)
-  const ink = decoInk(d)
+  const ink = t.scale === 'display' && level === 1 ? chipColor(c) : decoInk(d)
   const fs = headSize(level, t)
   const font = FACE_FONT_CSS[t.title]
   const tag = 'h' + level
   // 标题正文仍是 `<hN>`（语义 + 与既有断言/微信口径一致），结构壳在外层 section
-  const hEl = '<' + tag + ' style="margin:0;font-size:' + fs + 'px;font-weight:700;line-height:1.5;color:' + ink + font + '">' + h + '</' + tag + '>'
-  const num = counter != null ? counterBadge(counter, t, c) : ''
+  const display = t.scale === 'display' && level <= 2
+  const headingText = '<' + tag + ' style="margin:0;font-size:' + fs + 'px;font-weight:' + (display ? '800' : '700') +
+    ';line-height:' + (display ? '1.35' : '1.5') + ';color:' + ink + font +
+    (display ? ';word-break:break-word;overflow-wrap:anywhere;text-wrap:balance' : '') + '">' + h + '</' + tag + '>'
+  const hero = display && level === 1
+  const ornament = level <= 2 && !hero ? ornamentHtml(d, t) : ''
+  const customized = display || t.align !== 'auto' || !!ornament
+  const hEl = customized
+    ? '<section style="min-width:0;flex:1;' + titleAlignment(t, t.frame === 'rules' || t.frame === 'none' ? 'center' : 'left') + '">' +
+      (hero ? heroTitle(d, t, headingText) : headingText) + (ornament ? '<section style="margin:8px 0 0;line-height:0">' + ornament + '</section>' : '') + '</section>'
+    : headingText
+  const num = counter == null ? '' : display
+    ? '<span style="flex-shrink:0;min-width:30px;margin-right:10px;font-size:' + (fs + 2) +
+      'px;line-height:1.35;font-weight:800;font-family:Consolas,Menlo,monospace;color:' + chipColor(c) + '">' + String(counter).padStart(2, '0') + '</span>'
+    : counterBadge(counter, t, c)
+  const content = customized
+    ? '<section style="display:flex;align-items:flex-start;flex:1;min-width:0">' + num + hEl + '</section>'
+    : num + hEl
   const radius = t.radius ? 'border-radius:' + t.radius + 'px' : ''
   const fill = flatFill(t, c, false, d)
   const base = 'margin:28px 0 ' + (level <= 2 ? 12 : 10) + 'px'
   switch (t.frame) {
     case 'plane':
-      // R23：`plane` 小标题原来靠**底色色块**（`fill`），底色被禁后降级为**左竖条**（与 `line` 同族）——
-      // 小标题必须有个记号才立得住，不能只剩一段加粗文字。
+      if (fill) return '<section style="' + styleOf(base, 'background:' + fill, radius, 'padding:' + headPad(t), 'display:flex', 'align-items:center') + '">' + content + '</section>'
+      // 无底色时保留左竖条的可见记号。
       return '<section style="' + styleOf(base, 'display:flex', 'align-items:center') + '">' +
         '<span style="display:inline-block;width:' + t.barW + 'px;height:' + Math.round(fs * 0.9) + 'px;background:' + c + ';margin-right:10px;flex-shrink:0"></span>' +
-        num + hEl + '</section>'
+        content + '</section>'
     case 'dash':
-      return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
+      return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + headPad(t)) + '">' + content + '</section>'
     case 'stack':
       return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.55), t.radius ? 'border-radius:' + (t.radius + 3) + 'px' : '', 'padding:3px') +
-        '"><section style="' + styleOf('border:1px solid ' + rgba(c, 0.24), fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section></section>'
+        '"><section style="' + styleOf('border:1px solid ' + rgba(c, 0.24), fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + content + '</section></section>'
     case 'rules':
-      return '<section style="' + styleOf(base, 'border-top:2px solid ' + rgba(c, 0.5), 'border-bottom:2px solid ' + rgba(c, 0.5), 'padding:10px 4px', 'text-align:center') + '">' + num + hEl + '</section>'
+      return '<section style="' + styleOf(base, 'border-top:2px solid ' + rgba(c, 0.5), 'border-bottom:2px solid ' + rgba(c, 0.5), 'padding:10px 4px', titleAlignment(t, 'center')) + '">' + content + '</section>'
     case 'edge':
-      return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.4), 'border-left:' + t.barW + 'px solid ' + c, fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + num + hEl + '</section>'
+      return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.4), 'border-left:' + t.barW + 'px solid ' + c, fill ? 'background:' + fill : '', radius, 'padding:' + headPad(t)) + '">' + content + '</section>'
     case 'none':
-      return '<section style="' + styleOf(base, 'text-align:center') + '">' + num + hEl + '</section>'
+      return '<section style="' + styleOf(base, titleAlignment(t, 'center')) + '">' + content + '</section>'
     default:
       // line：左竖条必须直角（与 `surface()` 的 bar 分支同一条冲突消解）
       return '<section style="' + styleOf(base, 'display:flex', 'align-items:center') + '">' +
         '<span style="display:inline-block;width:' + t.barW + 'px;height:' + Math.round(fs * 0.9) + 'px;background:' + c + ';margin-right:10px;flex-shrink:0"></span>' +
-        num + hEl + '</section>'
+        content + '</section>'
   }
 }
 
@@ -1098,7 +1357,7 @@ function heading(d: ComposeDesign, level: number, text: string, counter: number 
  * 普通引用——**跟随设计轴**（R18）。
  *
  * 引用的结构语言由 `frame` 决定：`line` 左竖线 + 缩进（编辑设计里最经典的引用手法）、
- * `plane` 圆角色块、`dash` 虚线框、`stack` 双线、`rules` 上下夹线居中、`edge` 细框 + 左粗线。
+ * `plane` 左竖线、`dash` 虚线框、`stack` 双线、`rules` 上下夹线居中、`edge` 细框 + 左粗线。
  * 圆角由 `radius` 给；左竖线分支**不带圆角**（圆角会把竖条两头一起圆掉）。
  */
 function quoteBlock(d: ComposeDesign, lines: string[]): string {
@@ -1106,17 +1365,18 @@ function quoteBlock(d: ComposeDesign, lines: string[]): string {
   const body = lines.map((l) => inline(l, d)).join('<br/>')
   const c = d.key === 'promo' ? d.orange : d.accent
   const color = d.key === 'promo' ? d.text : '#5a6472' // 白底上 5.99:1，守住 ≥4.5:1
-  const base = 'margin:0 0 16px;line-height:1.75;color:' + color
-  const fill = rgba(c, 0.06)
+  const fill = flatFill(t, c, false, d)
+  if (isNativeOrnament(t.shape)) return '<blockquote style="margin:0 0 18px;padding:0 0 0 14px;border-left:2px solid ' + rgba(c, .5) + ';font-size:17px;line-height:1.75;color:' + color + '">' + body + '</blockquote>'
+  const base = 'margin:0 0 16px;line-height:1.75;color:' + color + (fill ? ';background:' + fill : '')
   switch (t.frame) {
     case 'plane':
-      // R23：`plane`（"只靠底色成块"）在"整篇无底色"下已无意义 ⇒ 引用降级为**左竖线**，
-      // 与默认语言同族（否则这一支会渲染成一坨没有记号的白文字）。
+      if (fill) return '<blockquote style="' + base + ';border-radius:' + t.radius + 'px;padding:13px 15px;font-size:15px">' + body + '</blockquote>'
+      // 无底色时保留左竖线。
       return '<blockquote style="' + base + ';border-left:' + t.barW + 'px solid ' + rgba(c, 0.55) + ';padding:2px 0 2px 14px;font-size:15px">' + body + '</blockquote>'
     case 'dash':
       return '<blockquote style="' + base + ';border:1px dashed ' + rgba(c, 0.55) + ';border-radius:' + t.radius + 'px;padding:13px 15px;font-size:15px">' + body + '</blockquote>'
     case 'stack':
-      return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.5) + ';padding:3px"><blockquote style="margin:0;border:1px solid ' + rgba(c, 0.22) + ';background:' + fill + ';padding:12px 14px;font-size:15px">' + body + '</blockquote></blockquote>'
+      return '<blockquote style="' + base + ';border:1px solid ' + rgba(c, 0.5) + ';padding:3px"><blockquote style="margin:0;border:1px solid ' + rgba(c, 0.22) + ';padding:12px 14px;font-size:15px">' + body + '</blockquote></blockquote>'
     case 'rules':
       return '<blockquote style="' + base + ';border-top:1px solid ' + rgba(c, 0.5) + ';border-bottom:1px solid ' + rgba(c, 0.5) + ';padding:12px 4px;text-align:center;font-size:16px">' + body + '</blockquote>'
     case 'edge':
@@ -1132,8 +1392,9 @@ function quoteBlock(d: ComposeDesign, lines: string[]): string {
 function card(d: ComposeDesign, title: string, lines: string[]): string {
   const t = faceOf(d)
   const c = d.key === 'promo' ? d.orange : d.accent
-  const body = lines.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
+  const body = lines.map((l) => '<p style="margin:0 0 8px;font-size:' + bodySize(d, 15) + 'px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
   const head = '<p style="margin:0 0 9px;font-size:' + t.size + 'px;font-weight:700;line-height:1.5;color:' + d.heading + FACE_FONT_CSS[t.title] + '">' + inline(escapeHtml(title), d) + '</p>'
+  if (isNativeOrnament(t.shape)) return nativePaper(d, t, t.shape, inline(escapeHtml(title), d), body, '', flatFill(t, c, false, d))
   return surface({ t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d), bottom: 12, decoImg: '', quote: false, inner: head + body })
 }
 
@@ -1145,29 +1406,33 @@ function steps(d: ComposeDesign, items: string[]): string {
   return items.map((it, idx) => {
     return '<section style="margin:0 0 16px;display:flex;align-items:flex-start">' +
       '<span style="display:inline-block;width:24px;height:24px;border-radius:' + badgeR + ';background:' + bg + ';color:#ffffff;font-size:14px;font-weight:700;text-align:center;line-height:24px;flex-shrink:0;margin-right:10px' + FACE_FONT_CSS[t.title] + '">' + (idx + 1) + '</span>' +
-      '<span style="font-size:16px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</span></section>'
+      '<span style="font-size:' + bodySize(d, 16) + 'px;line-height:1.75;color:' + d.text + '">' + inline(it, d) + '</span></section>'
   }).join('')
 }
 
 /**
  * 横幅（`[[banner:主|副]]`）——**跟随设计轴**（R20）。
  *
- * 宣传类保留"实色整块"（双模式策略的一部分，R16 明确不动），但圆角/内距/字体/字号全部取轴；
+ * 两种模式共用无底色的标题语言；圆角/内距/字体/字号全部取轴。
  * 文字类走与标题同一套 `frame` 壳，只是居中 + 带副标题、字号更大。这样"整篇一套语言"在横幅上也成立。
  */
 function banner(d: ComposeDesign, title: string, sub: string): string {
   const t = faceOf(d)
+  if (isNativeOrnament(t.ornament)) return nativeHeading(d, t, t.ornament, title, 1, null, sub)
   const c = decoColor(d)
-  const T = escapeHtml(title)
+  const T = t.scale === 'display' ? displayTitleText(title) : escapeHtml(title)
   const S = escapeHtml(sub || '')
-  const fs = 20 + (t.size - 15)
+  const fs = (t.scale === 'display' ? 32 : 20) + (t.size - 15)
   const font = FACE_FONT_CSS[t.title]
   // 横幅不再有"实色 + 白字"形态 ⇒ 标题文字一律用**纸面上的深色**（R23）。
-  const titleColor = decoInk(d)
+  const titleColor = t.scale === 'display' ? chipColor(c) : decoInk(d)
   const subColor = d.sub
-  const inner = '<p style="margin:' + (S ? '0 0 4px' : '0') + ';font-size:' + fs + 'px;font-weight:800;color:' + titleColor + font + ';letter-spacing:1px">' + T + '</p>' +
-    (S ? '<p style="margin:0;font-size:14px;color:' + subColor + '">' + S + '</p>' : '')
-  const centered = '<section style="text-align:center">' + inner + '</section>'
+  const ornament = t.scale === 'display' ? '' : ornamentHtml(d, t)
+  const titleBody = '<p style="margin:' + (S ? '0 0 4px' : '0') + ';font-size:' + fs + 'px;font-weight:800;color:' + titleColor + font + ';letter-spacing:1px' + (t.scale === 'display' ? ';line-height:1.3;word-break:break-word;overflow-wrap:anywhere;text-wrap:balance' : '') + '">' + T + '</p>' +
+    (S ? '<p style="margin:0;font-size:14px;color:' + subColor + '">' + S + '</p>' : '') +
+    (ornament ? '<section style="margin:12px 0 0;line-height:0">' + ornament + '</section>' : '')
+  const inner = t.scale === 'display' ? heroTitle(d, t, titleBody) : titleBody
+  const centered = '<section style="' + titleAlignment(t, 'center') + '">' + inner + '</section>'
   const radius = t.radius ? 'border-radius:' + t.radius + 'px' : ''
   const fill = flatFill(t, c, false, d)
   // **R23（2026-10-11）删掉了宣传类的"纯色横幅"特例**（原来 promo 下横幅是一整块实色 + 白字）。
@@ -1176,7 +1441,8 @@ function banner(d: ComposeDesign, title: string, sub: string): string {
   const base = 'margin:28px 0 16px'
   switch (t.frame) {
     case 'plane':
-      // 底色被禁后，"只靠底色"的横幅没有形态可言 ⇒ 降级为**上下夹线**（与 rules 同形）。
+      if (fill) return '<section style="' + styleOf(base, 'background:' + fill, radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
+      // 无底色时保留上下夹线。
       return '<section style="' + styleOf(base, 'border-top:2px solid ' + rgba(c, 0.5), 'border-bottom:2px solid ' + rgba(c, 0.5), 'padding:12px 4px') + '">' + centered + '</section>'
     case 'dash':
       return '<section style="' + styleOf(base, 'border:1px dashed ' + rgba(c, 0.55), radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
@@ -1188,11 +1454,11 @@ function banner(d: ComposeDesign, title: string, sub: string): string {
     case 'edge':
       return '<section style="' + styleOf(base, 'border:1px solid ' + rgba(c, 0.4), 'border-left:' + t.barW + 'px solid ' + c, fill ? 'background:' + fill : '', radius, 'padding:' + decoPad(t)) + '">' + centered + '</section>'
     case 'none':
-      return '<section style="' + styleOf(base, 'text-align:center') + '">' + inner + '</section>'
+      return '<section style="' + styleOf(base, titleAlignment(t, 'center')) + '">' + inner + '</section>'
     default:
       // line：标题 + 下划线强调（用 bar 轴给粗细）
-      return '<section style="' + styleOf(base, 'text-align:center') + '"><section style="' +
-        styleOf('display:inline-block', 'border-bottom:' + t.barW + 'px solid ' + c, 'padding:0 6px 4px') + '">' + inner + '</section></section>'
+      return '<section style="' + styleOf(base, titleAlignment(t, 'center')) + '"><section style="' +
+        styleOf('display:inline-block', t.scale === 'display' ? 'max-width:100%;box-sizing:border-box' : '', 'border-bottom:' + t.barW + 'px solid ' + c, 'padding:0 6px 4px') + '">' + inner + '</section></section>'
   }
 }
 
@@ -1213,7 +1479,7 @@ function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
     deco += '<span style="display:inline-block;margin:0 5px 6px 0;' + unitStyle + '"></span>'
   }
   const inner = '<section style="margin:0 0 8px;line-height:0">' + deco + '</section>' +
-    '<p style="margin:0;font-size:15px;line-height:1.75;color:' + d.text + '">' + body + '</p>'
+    '<p style="margin:0;font-size:' + bodySize(d, 15) + 'px;line-height:1.75;color:' + d.text + '">' + body + '</p>'
   return surface({
     t, s: shellFor(t, 'flat'), c,
     fill: flatFill(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner,
@@ -1223,7 +1489,8 @@ function bandBlock(d: ComposeDesign, items: string[], pattern: string): string {
 function frameBlock(d: ComposeDesign, items: string[]): string {
   const t = faceOf(d)
   const c = d.key === 'promo' ? d.orange : d.accent
-  const body = items.map((l) => '<p style="margin:0 0 8px;font-size:15px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
+  const body = items.map((l) => '<p style="margin:0 0 8px;font-size:' + bodySize(d, 15) + 'px;line-height:1.75;color:' + d.text + '">' + inline(l, d) + '</p>').join('')
+  if (isNativeOrnament(t.shape)) return nativePaper(d, t, t.shape, '', body, '', flatFill(t, c, false, d))
   // 边框容器额外允许角括号装饰（`deco` 里有 brackets 就挂对角两个）
   const s: Shell = { ...shellFor(t, 'flat'), bracket: t.deco.includes('brackets') }
   return surface({ t, s, c, fill: flatFill(t, c, false, d), bottom: 13, decoImg: '', quote: false, inner: body })
@@ -1237,13 +1504,13 @@ function listBlock(d: ComposeDesign, ordered: boolean, items: string[]): string 
     const rows = items.map((it) => {
       return '<section style="margin:0 0 10px;display:flex;align-items:flex-start">' +
         '<span style="display:inline-block;width:8px;height:8px;border-radius:' + bulletR + ';background:' + c + ';margin:9px 10px 0 0;flex-shrink:0"></span>' +
-        '<span style="font-size:16px;line-height:1.75;color:' + d.text + '">' + it + '</span></section>'
+        '<span style="font-size:' + bodySize(d, 16) + 'px;line-height:1.75;color:' + d.text + '">' + it + '</span></section>'
     }).join('')
     return surface({ t, s: shellFor(t, 'flat'), c, fill: flatFill(t, c, false, d), bottom: 11, decoImg: '', quote: false, inner: rows })
   }
   const tag = ordered ? 'ol' : 'ul'
   const ls = ordered ? 'decimal' : 'disc'
-  return '<' + tag + ' style="margin:0 0 16px;padding-left:24px;font-size:16px;line-height:1.75;color:' + d.text + ';list-style:' + ls + '">' +
+  return '<' + tag + ' style="margin:0 0 16px;padding-left:24px;font-size:' + bodySize(d, 16) + 'px;line-height:1.75;color:' + d.text + ';list-style:' + ls + '">' +
     items.map((it) => '<li style="margin:4px 0">' + it + '</li>').join('') + '</' + tag + '>'
 }
 
@@ -1253,7 +1520,7 @@ function tableBlock(d: ComposeDesign, rows: string[]): string {
     ? 'border:1px solid ' + d.border + ';padding:6px 10px;background:' + d.orange + ';color:#ffffff;font-weight:bold;text-align:left'
     : 'border:1px solid #e3e8ef;padding:6px 10px;background:#f7f9fc;font-weight:bold;text-align:left'
   const tdStyle = 'border:1px solid ' + d.border + ';padding:6px 10px'
-  let out = '<table style="border-collapse:collapse;width:100%;margin:12px 0;font-size:15px;line-height:1.6;color:' + d.text + '">'
+  let out = '<table style="border-collapse:collapse;width:100%;margin:12px 0;font-size:' + bodySize(d, 15) + 'px;line-height:1.6;color:' + d.text + '">'
   for (let r = 0; r < rows.length; r++) {
     if (r === 1) continue
     const tag = r === 0 ? 'th' : 'td'
@@ -1291,7 +1558,7 @@ export interface ComposeImage {
 export interface ArtSpec {
   svg: string
   alt: string
-  wide: boolean // true=整行全宽；false=居中 ≤56%（行内装饰）
+  wide: boolean // true=整行全宽；false=居中正文插画（至多 300px）
 }
 
 /**
@@ -1437,7 +1704,7 @@ const LEAK_PATTERNS: { re: RegExp; what: string; hint: string }[] = [
 const INLINE_CODE_SPAN = /<span style="background-color:[^"]*font-family:Consolas,Menlo,monospace[^"]*">[\s\S]*?<\/span>/g
 
 function visibleTextOf(html: string): string {
-  return html
+  return unwrapNativeTitleUnits(html)
     .replace(INLINE_CODE_SPAN, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&lt;/g, '<')
@@ -1474,7 +1741,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // 而不是静默按默认渲染（静默是"模型写了没效果、谁也不知道"的温床）。
   if (faceSpec.unknown.length) {
     warnings.push(
-      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat/shape，或预置名 编辑感/亲和/杂志/手账/科技',
+      '组件设计轴「' + faceSpec.unknown.join(' / ') + '」不认识，已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat/shape/scale/align/ornament，或预置名 编辑感/亲和/杂志/手账/科技/题签/纸笺/花笺/票笺/缎带',
     )
   }
   const images: ComposeImage[] = []
@@ -1492,6 +1759,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   const rejectedArts: RejectedArt[] = []
   let i = 0
   let h2Counter = 0
+  let hasNativeDecoration = false
 
   /**
    * 产出一个节点；`line` = 该节点对应的源文起始行（1-based），供问题定位。
@@ -1505,6 +1773,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
    * 注意：排除的只是**投影**。这两类各自的 `issues` 照常进交付门禁，不会被藏起来。
    */
   function emit(html: string, line: number, opts2?: { code?: boolean; system?: boolean }): void {
+    const tokens = faceOf(d)
+    if (!opts2?.code && (isNativeOrnament(tokens.shape) || isNativeOrnament(tokens.ornament)) && html.includes('data:image/svg+xml')) hasNativeDecoration = true
     out.push(html)
     outMeta.push({ line, code: !!opts2?.code, system: !!opts2?.system })
   }
@@ -1535,7 +1805,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   {
     let j = 0
     while (j < lines.length) {
-      const m = lines[j].match(/^:::\s*art\s+deco\s+([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)*)(?:\s+\S.*)?$/)
+      const m = lines[j].match(/^:::\s*art\s+deco\s+([\p{L}\p{N}_-]+(?:\s+[\p{L}\p{N}_-]+)*)(?:\s+\S.*)?$/u)
       if (m) {
         const names = m[1].split(/\s+/).filter(Boolean)
         const label = names[0]
@@ -1642,7 +1912,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       const rf = faceFromSpec(payload)
       if (rf.unknown.length) {
         warnings.push(
-          '组件设计轴「' + rf.unknown.join(' / ') + '」不认识（第 ' + (i + 1) + ' 行），已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat/shape，或预置名 编辑感/亲和/杂志/手账/科技',
+          '组件设计轴「' + rf.unknown.join(' / ') + '」不认识（第 ' + (i + 1) + ' 行），已忽略：可用轴 radius/frame/bar/fill/label/title/size/deco/pad/mark/markat/shape/scale/align/ornament，或预置名 编辑感/亲和/杂志/手账/科技/题签/纸笺/花笺/票笺/缎带',
         )
       }
       d.scheme = payload
@@ -1662,7 +1932,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     if (/^\[\[lace\]\]$/.test(line)) { emit(laceDivider(d), i + 1); i++; continue }
 
     // 美术素材 ::: art [wide|inline] 说明 / ::: art deco 名称（第 21 轮：deco 为气泡角饰定义，预扫描已注册）
-    const artC = line.match(/^:::\s*art(?:\s+(deco)\s+([a-zA-Z0-9_-]+))?(?:\s+(wide|inline))?\s*(.*)$/)
+    const artC = line.match(/^:::\s*art(?:\s+(deco)\s+([\p{L}\p{N}_-]+))?(?:\s+(wide|inline))?\s*(.*)$/u)
     if (artC) {
       const artLine = i + 1
       if (artC[1] === 'deco') {
@@ -1683,7 +1953,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         arts.push({ svg: svgM[0], alt, wide })
         const imgStyle = wide
           ? 'width:100%;height:auto;display:block;margin:12px 0;border-radius:8px'
-          : 'max-width:56%;height:auto;display:inline-block;vertical-align:middle;border-radius:8px'
+          : 'width:100%;max-width:300px;height:auto;display:inline-block;vertical-align:middle;border-radius:8px'
         const imgTag = '<img src="@@ART' + idx + '@@" alt="' + escapeHtml(alt) + '" style="' + imgStyle + '" />'
         emit(wide ? imgTag : '<section style="text-align:center;margin:12px 0">' + imgTag + '</section>', artLine)
       } else {
@@ -1850,12 +2120,13 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 提示气泡框 > [!KIND|deco] 标题（v10：|grass 等图案角饰）
     // P0：角饰词放宽到大写字母与下划线，与 `::: art deco` 定义侧的口径一致——
     // 否则模型写 `> [!KEY|Blossom]` 时会静默丢掉角饰（既不加也不警告）。
-    const alert = line.match(/^>\s*\[!(\w+)(?:\|([A-Za-z0-9_-]+))?\]\s*(.*)$/)
+    // R35 实稿出现 |星：中文本地图案或素材名也要识别为气泡，不能降级成原样引用泄漏语法。
+    const alert = line.match(/^>\s*\[!(\w+)(?:\|([\p{L}\p{N}_-]+))?\]\s*(.*)$/u)
     if (alert) {
       const alertLine = i + 1
       const kind = alert[1].toLowerCase()
       const decoName = alert[2] || ''
-      if (decoName && !(DECO_MAP[decoName] && artUrls[DECO_MAP[decoName]]) && !decoMap[decoName]) {
+      if (decoName && !resolveMark(decoName) && !(DECO_MAP[decoName] && artUrls[DECO_MAP[decoName]]) && !decoMap[decoName]) {
         warnings.push(
           '气泡角饰 ' +
             decoName +
@@ -1891,12 +2162,12 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 整行图片：独立渲染，不包进段落卡片（v10.2：art:// 装饰图居中 56%，本地图全宽）
     const imgLine = line.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/)
     if (imgLine) {
-      const alt = imgLine[1]
-      const src = imgLine[2]
+      const alt = escapeHtml(imgLine[1])
+      const src = escapeHtml(imgLine[2])
       if (/^art:\/\//.test(src)) {
         emit('<section style="text-align:center;margin:12px 0"><img src="' + src + '" alt="' + alt + '" style="max-width:56%;height:auto;display:inline-block;vertical-align:middle" /></section>', i + 1)
       } else {
-        emit('<img src="' + src + '" alt="' + alt + '" style="max-width:100%;border-radius:8px;margin:12px 0;display:block" />', i + 1)
+        emit('<img src="' + src + '" alt="' + alt + '" style="width:100%;max-width:100%;height:auto;border-radius:8px;margin:12px 0;display:block" />', i + 1)
       }
       i++
       continue
@@ -1935,6 +2206,21 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       para.push(inline(escapeHtml(l), d))
       i++
     }
+    // 结构起点的前缀识别比上面的完整语法宽：无效表格、未闭合的 [[title:… 等
+    // 会在这里一行都没消费。必须保留该行并前进，否则主循环反复产出空段落，卡死桌面 UI。
+    if (i === paraLine - 1) {
+      para.push(escapeHtml(raw))
+      i++
+      const message = `第 ${paraLine} 行排版结构不完整或无法识别，已保留原文，请修正语法`
+      warnings.push(message)
+      issues.push({
+        code: 'parse.unrecognized-structure',
+        severity: 'blocking',
+        message,
+        line: paraLine,
+        endLine: paraLine,
+      })
+    }
     // R21：宣传类普通段落**不再套"文字容器"**。v10.1 曾让宣传类每段都进一层浅色面板
     // （当时的口径是"消除裸文字"），但"每段一层浅色块"正是被点名的"全包裹圆角矩形纯浅色背景"，
     // 而且**整页都是块**会把真正的强调（横幅/气泡/分割线/徽章）淹掉。宣传类的身份改由这些**组件**承担。
@@ -1952,20 +2238,26 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     return ''
   })
 
-  // 收集本地/外链图片（桌面版无上传通道：仅提示）
-  const imgRe = /!\[([^\]]*)\]\(([^)\s]+)\)/g
+  // 已导入原图用稳定引用，由桌面异步读取并嵌入原始字节。原始磁盘路径必须先通过导入工具；
+  // 不再把“没有微信上传通道”误报为“本地桌面不能显示/导出图片”。
+  const imgRe = /<img\b[^>]*\bsrc="([^"]*)"[^>]*>/g
   let m: RegExpExecArray | null
-  while ((m = imgRe.exec(String(md || ''))) !== null) {
-    const src = m[2]
-    if (!/^(https?:|art:)/i.test(src)) images.push({ local: src, alt: m[1] })
-  }
-  for (const img of images) {
-    warnings.push('本地图片 ' + img.local + '：桌面版无微信上传通道，请发布前手动替换为微信图片地址')
+  while ((m = imgRe.exec(html)) !== null) {
+    const src = m[1]
+    const alt = /\balt="([^"]*)"/.exec(m[0])?.[1] || ''
+    if (/^local-image:\/\//i.test(src)) {
+      images.push({ local: src, alt })
+    } else if (!/^(https?:|art:|data:image\/|@@ART\d+@@)/i.test(src)) {
+      const message = '本地图片尚未导入：' + src + '。请通过图片按钮、粘贴、拖入或提供完整路径添加原图。'
+      warnings.push(message)
+      const line = String(md || '').slice(0, Math.max(0, String(md || '').indexOf(src))).split('\n').length
+      issues.push({ code: 'asset.local-image-unimported', severity: 'blocking', message, line, endLine: line })
+    }
   }
 
   const wrapperBg = '' // v10：无顶部渐变；正文底色随主题（background:d.bg），纯白为默认
   const html2 = '<section style="' + wrapperBg + 'background:' + d.bg + ';padding:4px 16px;box-sizing:border-box;font-size:16px;line-height:1.75;color:' + d.text + ';font-family:' + FONT + ';letter-spacing:0.5px;word-break:break-word">' + html + '</section>'
-  const plainText = html2
+  const plainText = unwrapNativeTitleUnits(html2)
     .replace(/<[^>]+>/g, ' ')
     .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
     .replace(/\s+/g, ' ').trim()
@@ -2003,7 +2295,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 计划 §4：这条长度规则**尚未在微信后台验证过计算口径**（源文 / 渲染 HTML / 内嵌图片数据
     // 与实际发布格式不是同一尺寸）。所以登记为明确的**长度风险**，不当作已验证的平台拒绝事实，
     // 也不擅自移除这层保护。severity 用 warning（不是 blocking），由交付门禁按目标格式规则决定是否阻断。
-    warnings.push('正文超过 20000 字符限制（当前约 ' + html2.length + '），微信会拒绝保存')
+    warnings.push('渲染内容较大（HTML 约 ' + html2.length + ' 字符，含图片编码）；实际发布格式尚未验证')
     issues.push({
       code: 'limit.length-unverified',
       severity: 'warning',
@@ -2020,7 +2312,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // 素材用量校验（第 16 轮：组件装饰全覆盖——数量下限提示，persona 负责产出）
   // 第 28 轮：照片位（::: photo）视为"真实照片配图"，不报"未包含美术素材"硬错。
   // 第 31 轮：照片位与装饰插画并存口径——纯照片位仍提示补组件装饰插画；有插画即不催数量。
-  const photoUsed = /^:::\s*photo\b/m.test(String(md || ''))
+  const hasLocalPhotos = images.some((image) => image.local.startsWith('local-image://'))
+  const photoUsed = hasLocalPhotos || /^:::\s*photo\b/m.test(String(md || ''))
   const src = String(md || '')
   const containers = (src.match(/^:::\s*(?:steps|cols|card|band|frame|timeline)\b/gm) || []).length
   const bubbles = (src.match(/^>\s*\[!/gm) || []).length
@@ -2034,7 +2327,9 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
   // 否则"短文豁免"会顺带把"没有组件的普通成文"也放过。
   const scale: 'short' | 'mid' | 'long' = plainText.length < 350 ? 'short' : plainText.length < 1400 ? 'mid' : 'long'
   const artFloor = scale === 'mid' ? 3 : 4
-  if (scale === 'short') {
+  if (hasNativeDecoration) {
+    // 内置题头、纹样和纸面已完成装饰；不以旧插画/容器配额诱导额外生成或拆碎正文。
+  } else if (scale === 'short') {
     if (arts.length === 0 && !photoUsed) {
       warnings.push('短篇提示：未配插画素材（短通知可以不配；若要一点装饰，加 1 处 [[img:inline]] 即可）')
     }
@@ -2045,7 +2340,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     }
   } else {
     if (arts.length === 0 && !photoUsed) {
-      warnings.push('正文未包含美术素材（::: art），请为 banner/小节/气泡/分隔等组件装饰位补充现场绘制素材')
+      warnings.push('正文未包含美术素材（::: art）；可按内容需要补充插画，也可直接使用内置题签、纸笺和图文组件，不为装饰数量生成素材')
       issues.push({
         code: 'quality.no-art',
         severity: 'warning',
@@ -2053,8 +2348,8 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
         line: 0,
         endLine: 0,
       })
-    } else if (arts.length === 0 && photoUsed) {
-      warnings.push('正文只有照片位、没有任何装饰插画（[[img]]/[[deco]]）：真实照片是信息画面，横幅/气泡/小节等组件装饰位仍应配生成插画，与照片位错开同屏')
+    } else if (arts.length === 0 && photoUsed && !hasLocalPhotos) {
+      warnings.push('正文只有照片位、没有任何装饰插画（[[img]]/[[deco]]）：真实照片已承担信息画面；可按主题选用内置题签、纸笺或少量装饰插画，无须为配额生成素材')
       issues.push({
         code: 'quality.photo-only',
         severity: 'warning',
@@ -2064,12 +2359,12 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       })
     } else if (arts.length < artFloor && !photoUsed) {
       warnings.push(
-        '素材用量偏低（当前 ' + arts.length + ' 处，建议 ' + artFloor + '-8 处并覆盖各组件装饰位）',
+        '素材用量偏低（当前 ' + arts.length + ' 处）：仅在图片能补充信息时增加；用户指定的数量优先，不为凑数加图',
       )
       issues.push({
         code: 'quality.low-art',
         severity: 'warning',
-        message: `素材用量偏低（当前 ${arts.length} 处，建议 ${artFloor}-8 处）`,
+        message: `素材用量偏低（当前 ${arts.length} 处；按内容需要和用户要求决定是否补图）`,
         line: 0,
         endLine: 0,
       })
@@ -2077,7 +2372,7 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
     // 组件化校验（第 17 轮：结构规则——容器 ≥2 + 气泡 ≥1 + 列表/引用 ≥1）
     if (containers < 2 || bubbles < 1 || listOrQuote < 1) {
       warnings.push(
-        '组件化不足（当前容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处；要求容器 ≥2 且气泡 ≥1 且列表或引用 ≥1）',
+        '组件化不足（当前容器 ' + containers + ' 个 / 气泡 ' + bubbles + ' 个 / 列表或引用 ' + listOrQuote + ' 处）：可将适合的现有内容改用组件组织，不重复添加摘要；信息清楚时可保持现状',
       )
       issues.push({
         code: 'quality.low-structure',
@@ -2088,9 +2383,9 @@ export function composeMarkdown(md: string, opts?: ComposeOptions): ComposeResul
       })
     }
   }
-  // 正文偏短提示（第 21 轮：默认应充实到 1500-2500 字）——有意短篇是正常态，只作 info 展示
+  // 篇幅只是编辑提示，不根据默认字数要求扩写已有底稿。
   if (plainText.length < 600) {
-    warnings.push('正文偏短（约 ' + plainText.length + ' 字），建议充实内容至 1500-2500 字（用户明确要求短篇除外）')
+    warnings.push('正文偏短（约 ' + plainText.length + ' 字）；请按信息完整度判断是否补充，不为默认字数扩写已有底稿')
     issues.push({
       code: 'quality.short-body',
       severity: 'info',
@@ -2182,7 +2477,7 @@ export function buildAuthorUnits(
  * 所有作者文字——包括 `<code>` / `<pre>` / `<strong>` 里的——都原样留下。
  */
 function authorTextOf(html: string): string {
-  return String(html || '')
+  return unwrapNativeTitleUnits(String(html || ''))
     .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
     .replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
     .replace(/&nbsp;/g, ' ')

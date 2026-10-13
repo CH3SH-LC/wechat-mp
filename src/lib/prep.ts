@@ -8,7 +8,7 @@ import { invoke } from '@tauri-apps/api/core'
 // "does not provide an export named 'ChatMsg'"（`scripts/edit-contract-check.mjs` 正是这么用的）。
 import type { ChatMsg, ChatToolCall } from './chat.ts'
 import { inTauri } from './chat.ts'
-import { runKnowledgeTool } from './retrieval.ts'
+import { loadEngineProtocol, runKnowledgeTool } from './retrieval.ts'
 import { assetLine, categoryKey, searchAssets } from './asset-library.ts'
 import type { ProgressFn } from './progress.ts'
 import { prepToolLabel } from './progress.ts'
@@ -16,6 +16,9 @@ import { trace } from './trace.ts'
 // 共同「材料依据边界」的**唯一定义**在 persona.ts；本文件的各条指令只引用同一句短引用，
 // 不另抄一份长规则（多份口径必然漂移，漂移的那份就是漏检的那条路）。
 import { MATERIAL_GROUNDING_REF } from './persona.ts'
+import { getLocalImage, importLocalImage, localImageContext, MAX_ATTACHED_IMAGES } from './local-images.ts'
+import type { LocalImageMeta, LocalImageRecord } from './local-images.ts'
+import { isExplicitLocalImagePath } from './local-image-path.ts'
 
 export interface PrepReply {
   text: string | null
@@ -62,29 +65,30 @@ export type PrepOutcome =
 // 2026-09-29：终结方式改为**结构化工具** finish_preparation。旧写法"只回复 READY"要求整串精确相等，
 // 模型带一句说明就落空（实测：真实续改连续两次因此提前结束，成品版本一动没动）。
 export const PREP_INSTRUCTION =
-  '创作类请求的处理方式：先用知识工具取用点文件——必取 排版引擎/engine-write-protocol（本地渲染引擎协议：v2 语法/美术占位/风格声明/质量底线），' +
-  '再按需取 内容类型(type-*)、风格(style-*)、合规(comp-*)、文案(copy-*) 等本次创作真正用到的点；' +
+  '创作类请求的处理方式：先阅读本消息附带的 排版引擎/engine-write-protocol 全文（v2 语法/美术占位/风格声明/质量底线），已提供全文就无需再用工具重复读取；缺少全文时必须取用该点，' +
+  '第一轮尽量并列取齐本轮需要的资料或本地图片；再按需取 写作(writing-*)、风格(style-*)、合规(comp-*) 等本次创作真正用到的点；核心编辑标准已在系统提示中提供，不必等读取写作点后才应用；' +
   '**这些点尽量一次性并列取全**（同一条回复里可以同时调用多个知识工具）。' +
-  '**知识工具与 finish_preparation 不能出现在同一条回复里**（混用会被系统按协议错误整条拒绝）：' +
+  '**资料工具（知识、素材检索、本地图读取）与 finish_preparation 不能出现在同一条回复里**（混用会被系统按协议错误整条拒绝）：' +
   '先把资料取完，**取完之后的下一条回复**再调用 finish_preparation 声明结果。' +
   '**准备阶段能发出的请求次数有限（含本次共 3 次），所以要一次取够、尽快声明**：' +
   '如果到最后一轮还在取资料、始终没有声明，整个准备阶段就会失败，本轮不会产出任何文稿。' +
-  '取完后若仍有影响成稿的关键点没弄清楚，就在 finish_preparation 里用 outcome=reply 把问题写进 text 交给用户，等用户回答——' +
+  '用户提出创作需求，未指定的编辑与视觉选择由你完成，不需要额外确认。用户已给成段底稿时，先遵守系统提示的“用户底稿与修改权限”：只提风格或章节就是排版已有内容，不能默认重写；原文保留时正文逐字保留。只有根据零散资料新写才自行决定篇幅和内容展开。只有不可省略且不能合理省去的主体事实缺失（如报名通知的时间地点与参加方式），才在 finish_preparation 里用 outcome=reply 简短询问——' +
   '**不要用"再取一轮资料"代替提问**。' +
   'finish_preparation 的取值：只是回答/澄清 → outcome=reply 并把答复写进 text；' +
-  '需求已明确、由系统撰写 → outcome=compose；你已经写好了完整正文 → outcome=candidate 并把完整 v2 正文放进 source。' +
+  '信息已足以成稿、其余编辑判断由你完成 → outcome=compose；你已经写好了完整正文 → outcome=candidate 并把完整 v2 正文放进 source。' +
+  '用户提供明确本地图片路径时，用 read_local_image 读取该文件；已附图像与原图引用可直接使用，需要重看历史原图时用已知 assetId 读取。文件名与尺寸不能代替看图；原图引用照抄工具或附件清单，不能编造图像细节或用生成图替换用户照片。' +
   '若本回合只是改文字、现有配图与其引用保持不动 → assetPolicy=preserve；本回合要修改或新增素材 → assetPolicy=modify。' +
   // 2026-10-03 真机（F1 的 G1）实测：模型想要"一边声明 compose 一边附一句说明"，
   // 于是把 `text` 也塞进 compose 的参数里，被契约整条拒绝（outcome=compose 与 text 互斥），
   // 本回合 0 产出。契约本身是对的（不能猜"以谁为准"），缺的是**把互斥说白**——原来的清单
   // 只罗列三种 outcome，没说 compose/candidate 不许带 text。这里补一句，不放松任何校验。
-  '**compose 与 candidate 都不接受 text 字段**（要附说明就用 outcome=reply）；三者的字段互斥，带了会被整条拒绝。' +
+  '**compose 与 candidate 都不接受 text 字段**（风格等附带说明不能改变创作结果类型；只有本轮仅答复或必要澄清才用 reply）；三者的字段互斥，带了会被整条拒绝。' +
   '不要只回复 READY 之类的控制词，也不要只给正文而不声明结果。' +
   // F1（2026-10-03）：**无论走哪条出口**都要守同一条边界。这一段必须在 prep 指令里出现，
   // 因为 prep 的候选正文（outcome=candidate）**不经过 WRITE**，是它自己直接进交付门禁的——
   // 只在 WRITE/修订里提醒，就会漏掉本轮真实反例的首发入口。
   '另外，无论你声明 compose 还是直接提交 candidate，都遵守' + MATERIAL_GROUNDING_REF +
-  '不要把知识示例（内容类型骨架、风格与视觉规范里的例子）当成用户资料；' +
+  '明确标注的应用产品事实可作为相应产品能力的依据；写作方法、风格与视觉规范里的例子以及旧稿不能确证本稿事实，也不能覆盖用户材料；' +
   '非必要的缺项可以省略，确实必要的未知才用 outcome=reply 问作者，不要为了凑字数或凑结构补定机构规则。'
 
 // 最后一轮的**预算提醒**：仅当本次是准备阶段最后一次请求时追加。
@@ -97,8 +101,8 @@ export const PREP_INSTRUCTION =
 // 它由"这是第几次请求"这个**执行计数**触发，不读任何对话意图、不做任何路由——
 // 与既有 `PREP_CORRECTION`（旧协议纠偏）是同一类有界提示，不是前端对话状态机（项目铁律 6）。
 export const PREP_LAST_ROUND_REMINDER =
-  '这是准备阶段的**最后一次请求**：不要再调用任何知识工具，现在就调用 finish_preparation 声明本回合结果。' +
-  '按你已经掌握的信息判断：需要用户补充信息 → outcome=reply 并把问题写进 text；' +
+  '这是准备阶段的**最后一次请求**：不要再调用任何资料工具（包括读取本地图片），现在就调用 finish_preparation 声明本回合结果。' +
+  '按你已经掌握的信息判断：只有不可省的主体事实缺失才用 outcome=reply 简短询问，未指定编辑偏好由你决定；' +
   '信息够了、由系统撰写 → outcome=compose；你自己已经写好完整正文 → outcome=candidate。' +
   '只回文字不声明结果会被判为准备失败，本轮不会产生任何文稿。' +
   // 「最后一次请求」的紧迫感不能被读成"必须把信息补全"——边界照旧：材料没给的具体规则不补写。
@@ -389,10 +393,19 @@ export async function runPrep(
     runId?: string
     /** 当前文档是否已有素材绑定：**只用于提示模型**，不再充当 assetPolicy 的缺省值（指南 §5.3） */
     hasPriorBindings?: boolean
+    localImages?: LocalImageMeta[]
+    knownLocalImageIds?: string[]
+    visibleImageIds?: string[]
+    onLocalImage?: (image: LocalImageRecord) => void
   },
 ): Promise<PrepOutcome> {
   if (!inTauri()) return { mode: 'skip' }
   const say = opts?.onProgress || (() => {})
+  // candidate 可在首次请求直接成稿，必须在它动笔前给出可信全文；工具摘要/文件名不是完整性证据。
+  const protocol = await loadEngineProtocol()
+  const protocolNote = protocol
+    ? `\n\n## 排版引擎协议（可信全文；只决定语法、排版与素材引用，不决定本稿事实）\n${protocol}\n`
+    : ''
 
   const last = messages[messages.length - 1]
   const rawUser = last && last.role === 'user' ? (last.content ?? '') : ''
@@ -405,12 +418,22 @@ export async function runPrep(
   )
 
   // 注册表系统提示 + 历史 + 原始请求 + prep 规约（原始请求供模型判断需求是否已明确）
+  const prepInstruction: ChatMsg = { role: 'user', content: PREP_INSTRUCTION + protocolNote }
   const convo: ChatMsg[] = [
     ...(system ? [system] : []),
     ...prior,
     { role: 'user', content: rawUser, ...(lastImages && lastImages.length ? { images: lastImages } : {}) },
-    { role: 'user', content: PREP_INSTRUCTION },
+    prepInstruction,
   ]
+  // 工具实际返全文后由那一条结果承载协议，移除预置副本；重复读取只引用已给出的可信全文。
+  const protocolToolContent = (result: string): string => {
+    if (!protocol || !result.includes(protocol)) return result
+    if (convo.some((m) => m.role === 'tool' && String(m.content || '').includes(protocol))) {
+      return '本回合已完整读取排版引擎协议，请使用前面工具结果中的全文。'
+    }
+    prepInstruction.content = PREP_INSTRUCTION
+    return result
+  }
   // 实际取用知识点摘要（每轮追加；进入撰写阶段时随上下文给主模型）
   const digestParts: string[] = []
   const digestOf = () => (digestParts.length ? digestParts.join('\n\n') : undefined)
@@ -423,6 +446,33 @@ export async function runPrep(
    * 也不会在同一回合内得到两份可能不一致的检索结果。
    */
   const toolCache = new Map<string, string>()
+  const knownImages = new Set([...(opts?.localImages || []).map((image) => image.assetId), ...(opts?.knownLocalImageIds || [])])
+  const readImages = new Set<string>()
+  // 只在模型主动请求时读用户明确给出的路径；知识文件/工具返回里的路径没有文件读取授权。
+  const userPathTexts = messages.filter((m) => m.role === 'user').map((m) => m.content || '')
+  const allowedPath = (path: string) => isExplicitLocalImagePath(path, userPathTexts)
+  const readImage = async (call: { args: string }, pending: LocalImageRecord[]) => {
+    try {
+      const args = JSON.parse(call.args || '{}') as { path?: unknown; assetId?: unknown }
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('参数必须是对象')
+      const path = typeof args.path === 'string' ? args.path.trim() : ''
+      const assetId = typeof args.assetId === 'string' ? args.assetId.trim() : ''
+      if (!!path === !!assetId) throw new Error('请只提供 path 或 assetId 中的一项')
+      if (path && !allowedPath(path)) throw new Error('只能读取用户消息中明确给出的完整本地图片路径，不能猜测或扫描目录')
+      if (assetId && !knownImages.has(assetId)) throw new Error('该图片不在当前会话授权的原图清单中')
+      if (pending.length >= MAX_ATTACHED_IMAGES) throw new Error(`一次资料读取最多查看 ${MAX_ATTACHED_IMAGES} 张原图，请按本次需要选择`)
+      const image = path ? await importLocalImage({ path }) : await getLocalImage(assetId)
+      knownImages.add(image.assetId)
+      if (!readImages.has(image.assetId)) {
+        readImages.add(image.assetId)
+        pending.push(image)
+        opts?.onLocalImage?.(image)
+      }
+      return localImageContext([image]) + '\n已读取原图，视觉内容在紧随工具结果的用户图像消息中。'
+    } catch (error) {
+      return `本地图片读取失败：${String(error)}。尚未看到该图，不能编造画面或改用生成图冒充；可请用户重新选择图片。`
+    }
+  }
 
   // MAX_PREP_CALLS（=3）：知识取用、空回复重试、协议纠偏共用这三次，不各自计次。
   for (let callNo = 0; callNo < MAX_PREP_CALLS; callNo++) {
@@ -510,18 +560,28 @@ export async function runPrep(
         ),
       })
       // 逐个机械执行本地工具（知识库 / 个人素材库检索，不抛错——失败返回提示串）
+      const pendingImages: LocalImageRecord[] = []
       for (const c of knowledge) {
-        const key = `${c.name} ${c.args}`
+        const key = `${c.name}\0${c.args}`
         const cached = toolCache.get(key)
         if (cached !== undefined) {
-          convo.push({ role: 'tool', tool_call_id: c.id, content: cached })
+          convo.push({ role: 'tool', tool_call_id: c.id, content: protocolToolContent(cached) })
           continue
         }
         say({ phase: 'prep', text: prepToolLabel(c.name, c.args) })
-        const result = await runPrepTool(c)
+        const result = c.name === 'read_local_image' ? await readImage(c, pendingImages) : await runPrepTool(c)
         toolCache.set(key, result)
-        convo.push({ role: 'tool', tool_call_id: c.id, content: result })
+        convo.push({ role: 'tool', tool_call_id: c.id, content: protocolToolContent(result) })
         digestParts.push(`【${c.name} ${c.args}】\n${result}`)
+      }
+      // 所有 tool_call_id 先完整回传，再加入视觉消息，避免切断并列工具结果。
+      if (pendingImages.length) {
+        // 原图引用与已读文字仍保留；视觉批次有界，旧稿超过8张也能按需查看和编辑。
+        for (const message of convo) if (message.images?.length) {
+          delete message.images
+          message.content = (message.content || '') + '\n（本条历史图像的视觉副本已从当前请求移除，原图引用仍有效；当前可见画面与对应清单见最新图像消息。）'
+        }
+        convo.push({ role: 'user', content: localImageContext(pendingImages), images: pendingImages.map((image) => image.modelDataUrl) })
       }
       continue
     }

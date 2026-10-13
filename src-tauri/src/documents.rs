@@ -418,6 +418,15 @@ fn replace_file(tmp: &Path, dst: &Path) -> Result<(), String> {
     })
 }
 
+/// 单文件持久化共用入口：先完整写入同目录临时文件，再原子替换旧文件。
+/// 会话、当前会话指针、设置均不得直接截断仍在使用的文件。
+pub(crate) fn atomic_write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let dir = path.parent().ok_or("保存路径没有父目录")?;
+    let name = path.file_name().ok_or("保存路径没有文件名")?.to_string_lossy();
+    let tmp = write_tmp_file(dir, &name, bytes)?;
+    replace_file(&tmp, path)
+}
+
 /// 提交 manifest 指针。整个保存流程里**唯一**改变"当前成品是谁"的地方。
 fn commit_manifest(dir: &Path, m: &DocManifest, fault: FaultPoint) -> Result<(), String> {
     let json = serde_json::to_string_pretty(m).map_err(|e| format!("序列化 manifest 失败：{e}"))?;
@@ -694,6 +703,24 @@ fn open_at(base: &Path, id: &str) -> Result<Option<DocContent>, String> {
         return Ok(None);
     };
     Ok(Some(read_revision(&dir, id, &acc, &manifest)?))
+}
+
+/// 素材影响扫描的只读入口。返回 Some(None) 表示只有草稿，没有当前成品；
+/// None 表示旧平铺布局，由扫描方继续兼容读取。绝不扫描孤立历史版本或 staging。
+pub(crate) fn current_for_asset_scan(base: &Path, id: &str) -> Result<Option<Option<DocContent>>, String> {
+    let dir = doc_dir_at(base, id)?;
+    // try_exists 与 exists 不同：访问失败不能伪装成没有 manifest。
+    if !manifest_path(&dir).try_exists().map_err(|e| format!("检查 manifest 失败：{e}"))? {
+        if revisions_dir(&dir).try_exists().map_err(|e| format!("检查历史版本失败：{e}"))? {
+            return Err("manifest.json 缺失，不能确定当前成品".into());
+        }
+        return Ok(None);
+    }
+    let manifest = read_manifest(&dir)?.ok_or("manifest.json 在扫描时消失")?;
+    let Some(acc) = manifest.accepted_revision_id.as_deref() else {
+        return Ok(Some(None));
+    };
+    Ok(Some(Some(read_revision(&dir, id, acc, &manifest)?)))
 }
 
 fn open_revision_at(base: &Path, id: &str, rev_id: &str) -> Result<Option<DocContent>, String> {

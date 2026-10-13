@@ -1300,6 +1300,7 @@ export interface SoftFacts {
   bubbleCount: number
   listOrQuoteCount: number
   photoSlotCount: number
+  localImageCount?: number
   scale: 'short' | 'mid' | 'long'
 }
 
@@ -1315,6 +1316,7 @@ export function softFacts(input: { source?: string; plainText?: string; html?: s
   const listOrQuote = (src.match(/^\s*[-*+]\s+/gm) || []).length + (src.match(/^>\s*(?!\[!)/gm) || []).length
   const artBlocks = (src.match(/^:::\s*art\b(?!\s+deco)/gm) || []).length
   const photoSlotCount = photoSlots(src).length
+  const localImageCount = (src.match(/!\[[^\]\n]*\]\(local-image:\/\/li-[a-f0-9]{64}\)/g) || []).length
   const len = plainText.length
   return {
     plainTextLength: len,
@@ -1325,6 +1327,7 @@ export function softFacts(input: { source?: string; plainText?: string; html?: s
     bubbleCount: bubbles,
     listOrQuoteCount: listOrQuote,
     photoSlotCount,
+    localImageCount,
     scale: len < 350 ? 'short' : len < 1400 ? 'mid' : 'long',
   }
 }
@@ -1364,39 +1367,39 @@ export function issuesFromSoft(f: SoftFacts | undefined): DeliveryIssue[] {
       mk({
         code: ISSUE_CODES.bodyShortHint,
         severity: 'info',
-        message: `正文偏短（约 ${f.plainTextLength} 字），建议 1500-2500 字（用户明确要求短篇除外）`,
+        message: `正文约 ${f.plainTextLength} 字；篇幅应由内容需要决定，检查是否讲清即可，无需为了长度扩写`,
         evidence: `plainTextLength=${f.plainTextLength}`,
         repairKind: 'none',
       }),
     )
   }
   const floor = f.scale === 'mid' ? 3 : 4
-  if (f.artCount === 0 && f.photoSlotCount === 0) {
+  if (f.artCount === 0 && f.photoSlotCount === 0 && !f.localImageCount) {
     out.push(
       mk({
         code: ISSUE_CODES.componentsTip,
         severity: 'info',
-        message: '正文未包含美术素材：建议为横幅/小节/气泡等装饰位补现场绘制素材（推荐项，不阻断）',
+        message: '正文未配图；仅在图片能帮助理解时补充，纯文字文章可以直接交付',
         evidence: `artCount=0；scale=${f.scale}`,
         repairKind: 'none',
       }),
     )
-  } else if (f.artCount === 0 && f.photoSlotCount > 0) {
+  } else if (f.artCount === 0 && f.photoSlotCount > 0 && !f.localImageCount) {
     out.push(
       mk({
         code: ISSUE_CODES.componentsPhotoOnlyTip,
         severity: 'info',
-        message: '正文只有照片位、没有装饰插画：真实照片是信息画面，组件装饰位仍建议配生成插画（推荐项，不阻断）',
+        message: '正文含待补照片位；等待原照片，不用生成插画冒充实拍',
         evidence: `artCount=0；photoSlotCount=${f.photoSlotCount}`,
         repairKind: 'none',
       }),
     )
-  } else if (f.artCount < floor && f.photoSlotCount === 0) {
+  } else if (f.artCount > 0 && f.artCount < floor && f.photoSlotCount === 0 && !f.localImageCount) {
     out.push(
       mk({
         code: ISSUE_CODES.componentsTip,
         severity: 'info',
-        message: `素材用量偏低（当前 ${f.artCount} 处，建议 ${floor}-8 处并覆盖各组件装饰位；推荐项，不阻断）`,
+        message: `当前有 ${f.artCount} 处插画；按内容需要安排，不设固定数量`,
         evidence: `artCount=${f.artCount} < floor=${floor}；scale=${f.scale}`,
         repairKind: 'none',
       }),
@@ -1408,8 +1411,8 @@ export function issuesFromSoft(f: SoftFacts | undefined): DeliveryIssue[] {
         code: ISSUE_CODES.componentsStructureTip,
         severity: 'info',
         message:
-          `没有使用排版组件（容器 ${f.containerCount} 个 / 气泡 ${f.bubbleCount} 个 / 列表或引用 ${f.listOrQuoteCount} 处）` +
-          `${f.scale === 'short' ? '；短通知保持现状即可' : '，建议补 1 个气泡或 1 处列表'}（推荐项，不阻断）`,
+          `当前排版含容器 ${f.containerCount} 个、提示框 ${f.bubbleCount} 个、列表或引用 ${f.listOrQuoteCount} 处；` +
+          '只在有助阅读时使用组件，无需凑数量（推荐项，不阻断）',
         evidence: `containers=${f.containerCount}；bubbles=${f.bubbleCount}；listOrQuote=${f.listOrQuoteCount}`,
         repairKind: 'none',
       }),

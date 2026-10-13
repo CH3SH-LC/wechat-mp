@@ -1,25 +1,28 @@
-// live-knowledge-probe.mjs —— 三层知识路由注入的真实模型验证（第 19 轮）
+// live-knowledge-probe.mjs —— 历史知识注入实验；R36 同步当前知识名。
+// 仅供单独研究，不经过桌面 prep/独立复核/交付门禁，不能作为 R36 文案或桌面验收证据。
 // 用法：node scripts/live-knowledge-probe.mjs <outDir>
-// 模拟桌面检索路由：促销类型 → type-promo + copy-tpl-promo + comp-banned；国潮 → style-guochao
+// 固定注入写作目的、产品介绍、合规及国潮视觉知识；不模拟当前桌面自主检索。
 // system = persona + 注入点文件节选（与桌面 buildSystemPrompt 同构）；模型产出 v2 正文 → compose
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { resolve } from 'node:path'
 import { buildSystemPrompt } from '../src/lib/persona.ts'
 
-const outDir = process.argv[2] || 'D:/deepseek-harness/verify-artifacts'
-const KB = 'D:/deepseek-harness/wechat-mp-desktop/src/knowledge'
+const outDir = resolve(process.argv[2] || resolve(import.meta.dirname, '../.local/runs/knowledge-probe-' + Date.now()))
+mkdirSync(outDir, { recursive: true })
+const KB = resolve(import.meta.dirname, '../src/knowledge')
 const read = (rel) => {
   const text = readFileSync(`${KB}/${rel}`, 'utf8')
   return text.length > 8000 ? text.slice(0, 8000) + '\n…（节选截断）' : text
 }
 const picks = [
-  { path: `/src/knowledge/${'文本/内容类型/type-promo.md'}`, head: '', text: read('文本/内容类型/type-promo.md') },
-  { path: `/src/knowledge/${'文本/文案/copy-tpl-promo.md'}`, head: '', text: read('文本/文案/copy-tpl-promo.md') },
+  { path: '/src/knowledge/文本/写作/writing-purpose.md', head: '', text: read('文本/写作/writing-purpose.md') },
+  { path: '/src/knowledge/文本/写作/writing-product.md', head: '', text: read('文本/写作/writing-product.md') },
   { path: `/src/knowledge/${'视觉/风格/style-guochao.md'}`, head: '', text: read('视觉/风格/style-guochao.md') },
   { path: `/src/knowledge/${'文本/合规/comp-banned.md'}`, head: '', text: read('文本/合规/comp-banned.md') },
 ]
 console.log(`injected: ${picks.map((p) => p.path.split('/').pop()).join(', ')} (${picks.reduce((s, p) => s + p.text.length, 0)} chars)`)
 
-const sys = buildSystemPrompt(picks)
+const sys = buildSystemPrompt(picks) + '\n\n## 当前排版协议（只决定语法与呈现，不提供本稿事实）\n' + readFileSync(`${KB}/排版引擎/engine-write-protocol.md`, 'utf8')
 const cred = readFileSync(process.env.USERPROFILE + '/.dsh/.credentials.yaml', 'utf8')
 const key = (cred.match(/DEEPSEEK_API_KEY:\s*"?([^"\r\n]+)/) || [])[1]?.trim()
 if (!key) throw new Error('no key')
@@ -36,7 +39,7 @@ const res = await fetch('https://api.deepseek.com/chat/completions', {
       { role: 'system', content: sys },
       {
         role: 'user',
-        content: '写一篇咖啡店新店开业的宣传推文，国潮风。信息已定：店名"有闲茶咖"，7 月 1 日开业，地点中山路 12 号，开业前三天全场饮品第二杯半价，到店送桂花茶冻。不要提问，直接创作完整正文；正文 1800-2200 字；每个 KEY/TIP 气泡都要带 ::: art deco 定义的角饰并引用。',
+        content: '写一篇咖啡店新店开业的宣传推文，国潮风。信息已定：店名"有闲茶咖"，7 月 1 日开业，地点中山路 12 号，开业前三天全场饮品第二杯半价，到店送桂花茶冻。不要提问，直接创作完整正文；正文 1800-2200 字；配图与组件按内容选择，引用和占位遵守当前引擎协议。',
       },
     ],
   }),

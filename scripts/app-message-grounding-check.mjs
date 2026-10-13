@@ -11,7 +11,8 @@
 // 只断言源码常量，抓不住"规则写在文件里、忘了接进实际发出的消息"。
 //
 // 做法：把真实 App 原样跑起来（真实 React 组件、真实 `turn()`、真实交付门禁），
-// **只在 `src/lib/chat.ts` 模块末尾注入**一段替身，把 Rust 侧通道换成受控实现：
+// 在 `src/lib/chat.ts` 模块末尾注入替身，把 Rust 侧通道换成受控实现；
+// 协议加载故障用例另外包裹 retrieval 的加载函数，App 的 turn() 与消息构造不改：
 //   · `prep_turn` 按剧本返回（夹具，不是原响应回放）；
 //   · `chat_stream` 记录**实参**再按剧本回放增量；
 //   · 其余命令返回最小可用的固定值。
@@ -22,6 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { EDITORIAL_QUALITY_RULE, LANGUAGE_COMPOSITION_RULE, MANUSCRIPT_EDIT_RULE, MATERIAL_GROUNDING_RULE } from '../src/lib/persona.ts'
 
 import { parseRunnerArgs, tempOutDir, writeFileAtomic } from './lib/run-result.mjs'
 
@@ -41,7 +43,7 @@ const MARK = {
   ground: '材料依据边界',
   /** compose 的 digest 头：旧文案「冲突以库为准」必须已被收窄 */
   digestOld: '作为本次创作依据，冲突以库为准',
-  /** compose 的 digest 头（收窄后）：写作知识只约束写法，不是事实来源 */
+  /** compose 的 digest 头：按资料身份区分写作规范与明确产品事实 */
   digestNew: '已取用写作知识',
   /** 自动修订：只修所列问题、不新增运营规则 */
   reviseNoNewRules: '不新增运营规则',
@@ -80,8 +82,11 @@ const run = {
   errors: [],
   sourceHashes: {},
 }
-const SRC = ['src/App.tsx', 'src/lib/chat.ts', 'src/lib/persona.ts', 'src/lib/prep.ts', 'src/lib/revise.ts']
+const SRC = ['src/App.tsx', 'src/lib/chat.ts', 'src/lib/editorial.ts', 'src/lib/persona.ts', 'src/lib/prep.ts', 'src/lib/revise.ts', 'src/lib/retrieval.ts', 'src/knowledge/排版引擎/engine-write-protocol.md', 'src/knowledge/产品/zhixu-product-facts.md', 'src/knowledge/文本/写作/writing-purpose.md', 'src/knowledge/文本/写作/writing-language.md']
 for (const rel of SRC) run.sourceHashes[rel] = createHash('sha256').update(readFileSync(join(repoRoot, rel))).digest('hex')
+const ENGINE_PROTOCOL = readFileSync(join(repoRoot, 'src/knowledge/排版引擎/engine-write-protocol.md'), 'utf8')
+const PRODUCT_FACTS = readFileSync(join(repoRoot, 'src/knowledge/产品/zhixu-product-facts.md'), 'utf8')
+const WRITING_EXCERPT = readFileSync(join(repoRoot, 'src/knowledge/文本/写作/writing-purpose.md'), 'utf8').slice(0, 6000)
 
 const check = (id, pass, ...evidence) => {
   run.checks.push({ id, pass: Boolean(pass), evidence: evidence.map((e) => String(e ?? '')) })
@@ -147,12 +152,12 @@ const REVISED_V2 = '```v2\n# 周末到馆提醒\n\n各位读者：\n\n10月10日
 // 2 轮的剧本**永远触不到它**，会让"末轮提醒真的发出去了吗"变成空头覆盖（独立复核 2026-10-03 抓到过）。
 const PREP_COMPOSE = [
   { text: null, calls: [{ id: 'k1', name: 'load_knowledge', args: '{"name":"engine-write-protocol"}' }] },
-  { text: null, calls: [{ id: 'k2', name: 'load_knowledge', args: '{"name":"type-announcement"}' }] },
+  { text: null, calls: [{ id: 'k2', name: 'load_knowledge', args: '{"name":"writing-campus"}' }] },
   { text: null, calls: [{ id: 'f1', name: 'finish_preparation', args: '{"outcome":"compose","assetPolicy":"modify"}' }] },
 ]
 const PREP_CANDIDATE = [
   { text: null, calls: [{ id: 'k1', name: 'load_knowledge', args: '{"name":"engine-write-protocol"}' }] },
-  { text: null, calls: [{ id: 'k2', name: 'load_knowledge', args: '{"name":"type-announcement"}' }] },
+  { text: null, calls: [{ id: 'k2', name: 'load_knowledge', args: '{"name":"writing-campus"}' }] },
   {
     text: null,
     calls: [
@@ -192,7 +197,114 @@ const PRIOR_DOC = {
   run_id: 'run-fixture-1',
 }
 
+const LOCAL_IMAGE = {
+  assetId: 'li-' + '1'.repeat(64), name: '活动 原图.png', mime: 'image/png', width: 1, height: 1, byteLength: 68,
+  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nS8AAAAASUVORK5CYII=',
+  modelDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nS8AAAAASUVORK5CYII=',
+}
+const LOCAL_REF = `![活动照片](local-image://${LOCAL_IMAGE.assetId})`
+const withLocalImage = (source) => source.replace('\n```', `\n\n${LOCAL_REF}\n\`\`\``)
+const bareV2 = source => source.replace(/^```v2\n|\n```$/g, '')
+const HISTORY_MATERIAL = '历史用户材料：活动由青禾书屋举办，原话“带上自己的书”，没有收费或报名截止要求。'
+const OLD_ASSISTANT_NOISE = '旧助手流程噪音_不得作为新一轮审稿指令'
+const EDITORIAL_PRIOR = { ...PRIOR_DOC, source: '# 原先的标题\n\n此前正式正文。\n\n' + LOCAL_REF, html: '<section><p>此前正式正文必须保持</p></section>', bindings: [] }
+// R33：只为触发真实组装、复核与修订链路的受控草稿，不是文案质量样本。
+const PRODUCT_DRAFT = '# 从需求到预览\n\n智序接受自然语言需求。文章生成后，可以在手机宽度预览中查看文案，再通过对话修改。\n\nAI 创作需要联网；成稿可以保存在本机，导出后由用户手动发布。'
+const PRODUCT_BAD_V2 = '```v2\n' + PRODUCT_DRAFT.replace('从需求到预览', '从需求到预览 🎉') + '\n```'
+const PRODUCT_REVISED_V2 = '```v2\n' + PRODUCT_DRAFT + '\n```'
+
 const CASES = [
+  // R36：相同产品关键词不能在本地自动取事实或绕过准备阶段；只有模型实际读取才提供产品背景。
+  ...['compose', 'candidate'].map((kind) => ({
+    name: `r36-product-keywords-without-knowledge-${kind}`,
+    prompt: '写一篇介绍智序的公众号文章。',
+    prep: [{ text: null, calls: [{ id: 'product-without-knowledge', name: 'finish_preparation', args: JSON.stringify({
+      outcome: kind, assetPolicy: 'preserve',
+      ...(kind === 'candidate' ? { source: bareV2(PRODUCT_BAD_V2) } : {}),
+    }) }] }],
+    write: kind === 'compose' ? PRODUCT_BAD_V2 : null,
+    revise: PRODUCT_REVISED_V2,
+    productWithoutKnowledge: true,
+  })),
+  ...['compose', 'candidate'].map((kind) => ({
+    name: `r33-product-facts-and-writing-examples-${kind}`,
+    prompt: '写一篇介绍智序的公众号文章。',
+    prep: [
+      { text: null, calls: [
+        { id: 'product-facts', name: 'load_knowledge', args: '{"name":"zhixu-product-facts"}' },
+        { id: 'writing-example', name: 'load_knowledge', args: '{"name":"writing-purpose"}' },
+      ] },
+      { text: null, calls: [{ id: 'product-finish', name: 'finish_preparation', args: JSON.stringify({
+        outcome: kind, assetPolicy: 'preserve',
+        ...(kind === 'candidate' ? { source: bareV2(PRODUCT_BAD_V2) } : {}),
+      }) }] },
+    ],
+    write: kind === 'compose' ? PRODUCT_BAD_V2 : null,
+    revise: PRODUCT_REVISED_V2,
+    productKnowledge: true,
+  })),
+  {
+    name: 'editorial-ordinary-reply', prompt: '你好，先聊聊。',
+    prep: [{ text: null, calls: [{ id: 'reply', name: 'finish_preparation', args: '{"outcome":"reply","text":"你好，可以直接说你的需求。"}' }] }],
+    write: null, revise: null, ordinaryReply: true,
+  },
+  ...['null', 'empty', 'throw', 'hold'].map(fault => ({
+    name: `editorial-protocol-${fault}-preserves-prior`, prompt: '只改开头，照片和其它内容保持不动。',
+    prep: [PREP_COMPOSE[2]], write: withLocalImage(BAD_V2), revise: withLocalImage(REVISED_V2),
+    priorDoc: EDITORIAL_PRIOR, localImage: LOCAL_IMAGE, preloadPrior: true,
+    editorialProtocolFault: fault, editorialFailure: fault !== 'hold',
+  })),
+  {
+    name: 'editorial-failure-preserves-prior', prompt: '只把标题改成「读书会预告」，其他内容和照片不动。',
+    prep: [{ text: null, calls: [{ id: 'candidate', name: 'finish_preparation', args: JSON.stringify({ outcome: 'candidate', source: bareV2(withLocalImage(BAD_V2)), assetPolicy: 'preserve' }) }] }],
+    write: null, revise: withLocalImage(REVISED_V2), priorDoc: EDITORIAL_PRIOR, localImage: LOCAL_IMAGE,
+    preloadPrior: true, editorialError: '隔离测试：复核服务不可用', editorialFailure: true,
+  },
+  {
+    name: 'editorial-missing-material-lock-preserves-prior', prompt: '只改开头，原照片和其他正文保持不动。',
+    prep: [{ text: null, calls: [{ id: 'candidate', name: 'finish_preparation', args: JSON.stringify({ outcome: 'candidate', source: bareV2(withLocalImage(BAD_V2)), assetPolicy: 'preserve' }) }] }],
+    write: null, revise: withLocalImage(REVISED_V2), priorDoc: EDITORIAL_PRIOR, localImage: LOCAL_IMAGE,
+    preloadPrior: true, editorialDropLock: true, editorialFailure: true,
+  },
+  {
+    name: 'editorial-stop-ignores-late-response', prompt: '只改开头，照片和其它内容保持不动。',
+    prep: [PREP_COMPOSE[2]], write: withLocalImage(BAD_V2), revise: withLocalImage(REVISED_V2),
+    priorDoc: EDITORIAL_PRIOR, localImage: LOCAL_IMAGE, preloadPrior: true, editorialHold: true,
+  },
+  {
+    name: 'editorial-reviewed-source-is-committed', prompt: '写一篇周末到馆提醒。',
+    prep: [PREP_CANDIDATE[2]], write: null, revise: REVISED_V2,
+    editorialOutput: bareV2(REVISED_V2).replace('周末到馆提醒', '经文案复核的到馆提醒'), editorialReplaces: true,
+  },
+  {
+    name: 'local-image-nine-photo-visual-window',
+    prompt: '这篇文章还能继续改吗？', prep: [{ text: null, calls: [{ id: 'reply', name: 'finish_preparation', args: '{"outcome":"reply","text":"可以继续修改，原图引用仍保留。"}' }] }], write: null, revise: null, imageWindow: true,
+    priorDoc: { ...PRIOR_DOC, source: '# 已有多图文章\n\n' + Array.from({ length: 9 }, (_, i) => `![图](local-image://li-${String(i + 1).repeat(64)})`).join('\n\n') },
+  },
+  {
+    name: 'local-image-late-import-after-clear',
+    prompt: '帮我写一篇周末到馆提醒的通知。', prep: PREP_COMPOSE,
+    write: BAD_V2, revise: REVISED_V2, lateClearImage: LOCAL_IMAGE,
+  },
+  {
+    name: 'candidate-first-turn-then-revise',
+    prompt: '帮我写一篇周末到馆提醒的通知，直接出稿。',
+    prep: [PREP_CANDIDATE[2]],
+    write: null,
+    revise: REVISED_V2,
+  },
+  {
+    name: 'compose-name-only-digest',
+    prompt: '帮我写一篇周末到馆提醒的通知。',
+    prep: [
+      { text: null, calls: [{ id: 'k1', name: 'search_knowledge', args: '{"query":"engine-write-protocol"}' }] },
+      PREP_COMPOSE[1],
+      PREP_COMPOSE[2],
+    ],
+    write: BAD_V2,
+    revise: REVISED_V2,
+    nameOnlyDigest: true,
+  },
   {
     name: 'compose-write-and-revise',
     prompt: '帮我写一篇周末到馆提醒的通知。',
@@ -206,6 +318,24 @@ const CASES = [
     prep: PREP_CANDIDATE,
     write: null, // candidate 路径不发起撰写
     revise: REVISED_V2,
+  },
+  {
+    name: 'local-image-prior-document',
+    prompt: '只改标题，照片保持原样。',
+    prep: [PREP_COMPOSE[0], PREP_COMPOSE[1], { text: null, calls: [{ id: 'f1', name: 'finish_preparation', args: '{"outcome":"compose","assetPolicy":"preserve"}' }] }],
+    write: withLocalImage(BAD_V2), revise: withLocalImage(REVISED_V2),
+    priorDoc: { ...PRIOR_DOC, source: '```v2\n' + PRIOR_SOURCE + '\n' + LOCAL_REF + '\n```' },
+    localImage: LOCAL_IMAGE,
+  },
+  {
+    name: 'local-image-tool-import-callback',
+    prompt: '用这张本地照片写活动回顾：C:\\照片 空格\\活动 原图.png',
+    prep: [
+      { text: null, calls: [{ id: 'im1', name: 'read_local_image', args: JSON.stringify({ path: 'C:\\照片 空格\\活动 原图.png' }) }] },
+      PREP_COMPOSE[0], PREP_COMPOSE[2],
+    ],
+    write: withLocalImage(BAD_V2), revise: withLocalImage(REVISED_V2),
+    localImage: LOCAL_IMAGE, importedImage: true,
   },
   {
     // G2b：已有 accepted 正式稿 + 用户**只改标题**。核对的是"续改实参里带没带
@@ -262,6 +392,20 @@ function stubSource(c) {
       const n = w.__wxmp.calls.filter((x) => x.cmd === 'prep_turn').length
       return w.__wxmp.prep[Math.min(n - 1, w.__wxmp.prep.length - 1)]
     }
+    if (cmd === 'editorial_review') {
+      const last = String(args.messages.at(-1)?.content || '')
+      const input = JSON.parse(last.slice(last.indexOf(String.fromCharCode(10)) + 1))
+      if (${Boolean(c.editorialHold)}) await new Promise(resolve => { w.__releaseEditorial = resolve })
+      if (${Boolean(c.editorialError)}) throw new Error(${JSON.stringify(c.editorialError || '')})
+      w.__wxmp.editorialResolved = true
+      // Keep intentional emoji blockers: the reviewer fixture is identity, not a
+      // shortcut that hides whether App still runs the original REVISE pipeline.
+      // The fixture copies the actual locked source. The negative case removes
+      // one received lock and must fail in production restoration before saving.
+      let reviewed = ${JSON.stringify(c.editorialOutput ?? null)} ?? input.source
+      if (${Boolean(c.editorialDropLock)}) reviewed = reviewed.replace(input.immutableMaterials[0].marker, '')
+      return ${JSON.stringify('```v2\n')} + reviewed + ${JSON.stringify('\n```')}
+    }
     if (cmd === 'chat_stream') {
       const turn = (args && args.turn) || 'chat'
       const body = turn === 'revise' ? w.__wxmp.revise : turn === 'write' ? w.__wxmp.write : null
@@ -284,9 +428,9 @@ function stubSource(c) {
       case 'save_settings':
       case 'open_manual':
         return null
-      case 'list_sessions': return { items: [] }
+      case 'list_sessions': return ${c.preloadPrior ? JSON.stringify({ items: [{ id: 's-fixture-0001', title: '已有推文', updated_at: '', count: 2 }], current: 's-fixture-0001' }) : '{ items: [] }'}
       case 'create_session': return 's-fixture-0001'
-      case 'open_session': return null
+      case 'open_session': return ${c.preloadPrior ? JSON.stringify({ id: 's-fixture-0001', title: '已有推文', updated_at: '', mode: 'auto', style: 'auto', messages: [{ id: 901, role: 'user', content: HISTORY_MATERIAL }, { id: 902, role: 'assistant', content: OLD_ASSISTANT_NOISE }] }) : 'null'}
       case 'save_session': return { ok: true }
       case 'delete_session': return { items: [] }
       case 'list_documents': return { items: [] }
@@ -298,6 +442,10 @@ function stubSource(c) {
       case 'list_assets_report': return { items: [] }
       case 'search_assets': return { items: [] }
       case 'get_asset': return null
+      case 'get_local_image': return ${c.imageWindow ? `{...${JSON.stringify(LOCAL_IMAGE)},assetId:args.assetId,name:'已保存原图'}` : JSON.stringify(c.localImage ?? c.lateClearImage ?? null)}
+      case 'import_local_image':
+        if (w.__holdImport) await new Promise((resolve) => { w.__releaseImport = resolve })
+        return ${JSON.stringify(c.localImage ?? c.lateClearImage ?? null)}
       case 'add_asset': return { id: 'as-fixture' }
       case 'review_assets': return { ok: false, reason: '夹具：不做视觉复核' }
       case 'gen_svg': return SVGSAMPLE
@@ -314,6 +462,26 @@ function stubSource(c) {
     metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
   }
 })();
+`
+}
+
+/** 只在作者已交稿后模拟加载失败或迟到返回，前面的准备/撰写使用真实完整协议。 */
+function protocolLoaderStub(c) {
+  return `
+const fixtureLoadEngineProtocol = loadEngineProtocol;
+loadEngineProtocol = async function () {
+  const protocol = await fixtureLoadEngineProtocol();
+  const state = window.__wxmp;
+  if (!state?.streamTurns?.includes('write')) return protocol;
+  state.editorialProtocolRead = true;
+  if (${c.editorialProtocolFault === 'hold'}) {
+    await new Promise(resolve => { window.__releaseEditorialProtocol = resolve });
+    state.editorialProtocolResolved = true;
+    return protocol;
+  }
+  if (${c.editorialProtocolFault === 'throw'}) throw new Error('隔离测试：排版引擎协议读取失败');
+  return ${c.editorialProtocolFault === 'null' ? 'null' : JSON.stringify('  \n')};
+};
 `
 }
 
@@ -341,16 +509,47 @@ try {
       const actual = await response.text()
       await route.fulfill({ response, body: actual + stubSource(c), contentType: 'application/javascript' })
     })
+    if (c.editorialProtocolFault) await page.route('**/src/lib/retrieval.ts*', async route => {
+      const response = await route.fetch()
+      await route.fulfill({ response, body: await response.text() + protocolLoaderStub(c), contentType: 'application/javascript' })
+    })
     let turns = 0
     try {
-      await page.goto(base, { waitUntil: 'networkidle', timeout: 30000 })
+      await page.goto(base, { waitUntil: 'domcontentloaded', timeout: 60000 })
       await page.waitForSelector('.chat-input-row textarea', { timeout: 30000 })
+      if (c.preloadPrior) await page.waitForFunction(() => document.querySelector('.preview-pane iframe')?.contentDocument?.body?.textContent?.includes('此前正式正文必须保持'), null, { timeout: 10000 })
       await page.locator('.chat-input-row textarea').fill(c.prompt)
       await page.locator('.chat-input-row textarea').press('Enter')
       // 等本回合收口：busy 气泡消失且不再有新调用
       await page.waitForFunction(() => (window.__wxmp || {}).calls && window.__wxmp.calls.length > 0, null, { timeout: 60000 })
+      if (c.editorialHold) {
+        await page.waitForFunction(() => typeof window.__releaseEditorial === 'function', null, { timeout: 20000 })
+        await page.waitForFunction(() => document.body.innerText.includes('复核文案的内容、表达与事实'), null, { timeout: 5000 })
+        await page.evaluate(() => { window.__wxmp.editorialProgress = document.body.innerText })
+        await page.locator('.btn-stop').click()
+        await page.waitForFunction(() => !document.querySelector('.btn-stop'))
+        await page.evaluate(() => { window.__wxmp.afterStopCallCount = window.__wxmp.calls.length; window.__releaseEditorial() })
+        await page.waitForFunction(() => window.__wxmp.editorialResolved === true)
+      }
+      if (c.editorialProtocolFault === 'hold') {
+        await page.waitForFunction(() => typeof window.__releaseEditorialProtocol === 'function', null, { timeout: 20000 })
+        await page.locator('.btn-stop').click()
+        await page.waitForFunction(() => !document.querySelector('.btn-stop'))
+        await page.evaluate(() => { window.__wxmp.afterStopCallCount = window.__wxmp.calls.length; window.__releaseEditorialProtocol() })
+        await page.waitForFunction(() => window.__wxmp.editorialProtocolResolved === true)
+      }
       await page.waitForFunction(() => !document.querySelector('.chat-input-row textarea[disabled]'), null, { timeout: 120000 })
       await page.waitForTimeout(1200)
+      if (c.lateClearImage) {
+        await page.evaluate(() => { window.__holdImport = true })
+        await page.locator('input[type=file]').setInputFiles({ name: '等待中的照片.png', mimeType: 'image/png', buffer: Buffer.from(c.lateClearImage.dataUrl.split(',')[1], 'base64') })
+        await page.waitForFunction(() => typeof window.__releaseImport === 'function')
+        page.once('dialog', (dialog) => dialog.accept())
+        await page.locator('[data-act="clear"]').click()
+        await page.locator('.chat-empty').waitFor()
+        await page.evaluate(() => { window.__holdImport = false; window.__releaseImport() })
+        await page.waitForTimeout(150)
+      }
       turns = await page.evaluate(() => window.__wxmp.calls.filter((x) => x.cmd === 'chat_stream').length)
     } catch (e) {
       fail(`case:${c.name}:drive`, String(e.message || e).split('\n')[0])
@@ -364,12 +563,28 @@ try {
           role: m.role,
           text: String(m.content || ''),
           images: Array.isArray(m.images) ? m.images.length : 0,
+          imageData: Array.isArray(m.images) ? m.images : [],
         })
         return {
           prepSends: preps.map((p) => ({ count: (p.args.messages || []).length, messages: (p.args.messages || []).map(slim) })),
+          prepRunIds: preps.map(p => p.args.runId),
           streams: streams.map((s) => ({ turn: s.args.turn, messages: (s.args.messages || []).map(slim) })),
+          editorials: calls.filter((x) => x.cmd === 'editorial_review').map(x => ({ runId: x.args.runId, messages: (x.args.messages || []).map(slim) })),
           streamTurns: window.__wxmp.streamTurns || [],
           cmds: Array.from(new Set(calls.map((x) => x.cmd))).sort(),
+          documentSends: calls.filter((x) => x.cmd === 'save_document').map((x) => x.args),
+          sessionSends: calls.filter((x) => x.cmd === 'save_session').map((x) => x.args),
+          imageReads: calls.filter((x) => x.cmd === 'get_local_image').map((x) => x.args.assetId),
+          attachedCount: document.querySelectorAll('.chat-pane > .attach-strip .attach-chip').length,
+          previewText: document.querySelector('.preview-pane iframe')?.contentDocument?.body?.textContent || '',
+          bodyText: document.body.innerText,
+          docState: document.querySelector('[data-doc-state]')?.getAttribute('data-doc-state'),
+          returnedDoc: window.__wxmp.openDoc,
+          editorialResolved: window.__wxmp.editorialResolved || false,
+          editorialProgress: window.__wxmp.editorialProgress || '',
+          editorialProtocolRead: window.__wxmp.editorialProtocolRead || false,
+          editorialProtocolResolved: window.__wxmp.editorialProtocolResolved || false,
+          afterStopSaves: window.__wxmp.afterStopCallCount === undefined ? null : calls.slice(window.__wxmp.afterStopCallCount).filter(x => x.cmd === 'save_document').length,
         }
       })
       .catch((e) => ({ error: String(e) }))
@@ -410,6 +625,97 @@ if (!run.errors.length && collected.length === CASES.length) {
     console.log(`\n[${label}] cmds=${JSON.stringify((r.snap || {}).cmds || (r.snap || {}).error)} streamTurns=${JSON.stringify((r.snap || {}).streamTurns || [])}`)
     check(`${label}：页面无异常`, r.pageErrors.length === 0, r.pageErrors.join(' / '))
     check(`${label}：没有外链请求`, r.offsite.length === 0, r.offsite.join(' / '))
+    const editorialCalls = r.snap.editorials || []
+    // These are actual App transport arguments, including the technical repair path.
+    // This checks delivery of the rule; it makes no claim about prose quality.
+    const languageSends = [...(r.snap.prepSends || []).map(send => ({ phase: 'prep', send })), ...(r.snap.streams || []).map(send => ({ phase: send.turn, send })), ...editorialCalls.map(send => ({ phase: 'editorial', send }))]
+    check(`${label}：实际准备、撰写、复核和排版修订请求各收到一份完整语言规则`, LANGUAGE_COMPOSITION_RULE.trim().length > 0 && languageSends.length > 0 && languageSends.every(({ send }) => systemText(send.messages).split(LANGUAGE_COMPOSITION_RULE).length === 2), languageSends.map(({ phase, send }) => `${phase}:${systemText(send.messages).split(LANGUAGE_COMPOSITION_RULE).length - 1}`).join(', '))
+    check(`${label}：实际准备、撰写、复核和排版修订共享一份完整材料依据边界`, MATERIAL_GROUNDING_RULE.trim().length > 0 && languageSends.length > 0 && languageSends.every(({ send }) => systemText(send.messages).split(MATERIAL_GROUNDING_RULE).length === 2), languageSends.map(({ phase, send }) => `${phase}:${systemText(send.messages).split(MATERIAL_GROUNDING_RULE).length - 1}`).join(', '))
+    check(`${label}：实际准备、撰写、复核和修订共享一次用户底稿权限`, MANUSCRIPT_EDIT_RULE.trim().length > 0 && languageSends.length > 0 && languageSends.every(({ send }) => systemText(send.messages).split(MANUSCRIPT_EDIT_RULE).length === 2), languageSends.map(({ phase, send }) => `${phase}:${systemText(send.messages).split(MANUSCRIPT_EDIT_RULE).length - 1}`).join(', '))
+    if (c.priorDoc) {
+      const writingSends = (r.snap.streams || []).filter(send => send.turn === 'write')
+      const repairs = (r.snap.streams || []).filter(send => send.turn === 'revise')
+      check(`${label}：语言规则不覆盖实际续改与修订的局部权限`, writingSends.every(send => lastText(send.messages).includes('只改他指出的那处') && lastText(send.messages).includes('逐字保留')) && repairs.every(send => lastText(send.messages).includes('只改问题所指的地方') && lastText(send.messages).includes('其余内容逐字保留')) && editorialCalls.every(send => systemText(send.messages).includes('只改开头或指定段落时，其余正文逐字恢复或保留 priorSource')))
+    }
+    if (c.ordinaryReply || c.imageWindow) {
+      check(`${label}：普通回复不触发文案复核`, editorialCalls.length === 0)
+      if (c.ordinaryReply) {
+        check(`${label}：普通回复不写正文或文档`, r.snap.streams.length === 0 && r.snap.documentSends.length === 0)
+        check(`${label}：普通回复确实展示`, has(r.snap.bodyText, '你好，可以直接说你的需求。'))
+        continue
+      }
+    } else if (c.editorialProtocolFault) {
+      check(`${label}：已实际尝试加载复核协议，缺失或取消后不发起审稿请求`, r.snap.editorialProtocolRead && editorialCalls.length === 0)
+      if (c.editorialProtocolFault !== 'hold') check(`${label}：明确报告协议不可用`, has(r.snap.bodyText, '排版引擎协议'))
+    } else {
+      check(`${label}：创作正文只进行一次独立复核`, editorialCalls.length === 1, `次数=${editorialCalls.length}`)
+      const review = editorialCalls[0]
+      if (review) {
+        let input = null
+        try { const text = lastText(review.messages); input = JSON.parse(text.slice(text.indexOf('\n') + 1)) } catch {}
+        const declared = c.prep.flatMap(p => p.calls || []).filter(call => call.name === 'finish_preparation').map(call => JSON.parse(call.args)).find(x => x.outcome === 'candidate')
+        const expectedSource = c.write ? bareV2(c.write) : declared?.source
+        // Independent transport readback, not the production restoration helper:
+        // each listed literal replaces only its actual short marker. The App's
+        // own guard and final saved source are checked separately below.
+        const materials = Array.isArray(input?.immutableMaterials) ? input.immutableMaterials : []
+        const unlock = text => typeof text === 'string' ? materials.reduce((value, item) => value.replaceAll(item.marker, item.original), text) : text
+        check(`${label}：复核收到本次原始需求和仅锁定素材的实际初稿`, input?.request === c.prompt && unlock(input?.source) === expectedSource)
+        check(`${label}：复核前稿通过相同素材映射精确绑定当前正式源文`, unlock(input?.priorSource) === (c.priorDoc?.source ?? null))
+        check(`${label}：锁清单逐项保留原材料且候选每个短锁恰好一次`, Array.isArray(input?.immutableMaterials) && new Set(materials.map(item => item.marker)).size === materials.length && materials.every(item => typeof item.original === 'string' && item.original.length > 0 && typeof item.marker === 'string' && item.marker.length < 40 && input.source.split(item.marker).length === 2))
+        check(`${label}：复核与准备请求绑定同一运行ID`, Boolean(review.runId) && review.runId === r.snap.prepRunIds?.[0])
+        const reviewText = allText(review.messages)
+        const prepSystem = systemText(r.snap.prepSends[0]?.messages)
+        const authoredSystems = [...r.snap.prepSends.map(send => systemText(send.messages)), ...r.snap.streams.filter(send => send.turn === 'write').map(send => systemText(send.messages))]
+        check(`${label}：实际准备、撰写和唯一复核共享同一份完整编辑标准`, EDITORIAL_QUALITY_RULE.trim().length > 0 && [...authoredSystems, systemText(review.messages)].every(text => text.split(EDITORIAL_QUALITY_RULE).length === 2))
+        check(`${label}：唯一复核在系统消息及整次请求中恰好携带一份完整可信协议`, systemText(review.messages).split(ENGINE_PROTOCOL).length - 1 === 1 && review.messages.reduce((count, message) => count + message.text.split(ENGINE_PROTOCOL).length - 1, 0) === 1)
+        check(`${label}：复核协议仅作系统排版语法，不提供事实或固定篇章结构`, ['系统排版语法', '只决定语法与样式，不决定本稿事实', '示例不是本次事实，也不要求固定篇章结构', '本次修改权限和输出形式仍以上方审稿要求为准'].every(text => systemText(review.messages).includes(text)))
+        check(`${label}：复核没有携带完整旧人设或旧助手流程噪音`, (!prepSystem || !reviewText.includes(prepSystem.slice(0, 600))) && !reviewText.includes(OLD_ASSISTANT_NOISE))
+        const backgrounds = review.messages.slice(1, -1).map(message => { try { return JSON.parse(message.text.slice(message.text.indexOf('\n') + 1)) } catch { return null } })
+        check(`${label}：完整协议没有混入事实背景，无关写作规范不进入复核`, !backgrounds.some(message => String(message?.content || '').includes(ENGINE_PROTOCOL)) && !reviewText.includes(WRITING_EXCERPT))
+        if (c.productKnowledge) {
+          check(`${label}：实际取用后复核保留完整产品事实及仅限本产品的依据身份`, backgrounds.filter(message => message?.originalRole === 'user' && message.content === '本应用已核实产品事实（仅在文中涉及本产品时作为事实依据）：\n' + PRODUCT_FACTS).length === 1)
+          check(`${label}：复核没有把写作规范工具结果冒充事实背景`, !backgrounds.some(message => String(message?.content || '').includes(WRITING_EXCERPT)))
+        } else {
+          check(`${label}：未取用产品事实时复核不注入完整产品材料或其背景身份`, !reviewText.includes(PRODUCT_FACTS) && !backgrounds.some(message => String(message?.content || '').includes('本应用已核实产品事实')))
+        }
+        if (c.preloadPrior) {
+          check(`${label}：历史用户原材料逐字保留`, backgrounds.some(message => message?.originalRole === 'user' && message.content === HISTORY_MATERIAL))
+        }
+        if (c.localImage) {
+          check(`${label}：复核收到原图稳定引用及准确视觉副本`, reviewText.includes(c.localImage.assetId) && review.messages.some(message => message.imageData.includes(c.localImage.modelDataUrl)))
+          check(`${label}：实际正文原图只以短锁运输，精确说明与URI留在不可变清单`, materials.some(item => item.original === LOCAL_REF) && !input.source.includes('local-image://' + c.localImage.assetId))
+        }
+      }
+    }
+    if (c.editorialFailure || c.editorialHold || c.editorialProtocolFault) {
+      check(`${label}：复核未完成不提交任何文稿`, r.snap.documentSends.length === 0)
+      check(`${label}：原正式稿与图片源文没有被改写`, JSON.stringify(r.snap.returnedDoc) === JSON.stringify(c.priorDoc))
+      check(`${label}：预览仍显示已有正式稿`, r.snap.previewText.trim() === '此前正式正文必须保持', r.snap.previewText.slice(0, 120))
+      check(`${label}：复核失败或停止不进入素材生成和自动修订`, !r.snap.cmds.includes('gen_svg') && !r.snap.streams.some(stream => stream.turn === 'revise'))
+      if (c.editorialFailure) check(`${label}：失败透明告知且初稿保留在记录`, has(r.snap.bodyText, '文案复核未完成') && r.snap.sessionSends.some(send => (send.messages || []).some(message => has(message.content, '周末到馆提醒') && has(message.content, '文案复核未完成'))))
+      if (c.editorialHold) {
+        check(`${label}：复核进度准确说明内容、表达与事实三个目标`, has(r.snap.editorialProgress, '复核文案的内容、表达与事实'))
+        check(`${label}：停止确实取消本回合`, r.snap.cmds.includes('cancel_run'))
+        check(`${label}：迟到复核成功响应没有继续落盘`, r.snap.editorialResolved && r.snap.afterStopSaves === 0)
+      }
+      if (c.editorialProtocolFault === 'hold') check(`${label}：停止确实取消本回合，迟到协议不再发起复核或落盘`, r.snap.cmds.includes('cancel_run') && r.snap.editorialProtocolResolved && editorialCalls.length === 0 && r.snap.afterStopSaves === 0)
+      continue
+    }
+    if (c.editorialReplaces) {
+      check(`${label}：复核后的实际正文提交文档`, r.snap.documentSends.some(send => send.source === c.editorialOutput && !send.asDraft))
+      check(`${label}：已修正初稿不再触发机械修订`, !r.snap.streams.some(stream => stream.turn === 'revise'))
+      continue
+    }
+    if (c.imageWindow) {
+      check(`${label}：九图旧稿仍能发起正常模型请求`, r.snap.prepSends.length === 1)
+      const first = r.snap.prepSends[0]?.messages || []
+      check(`${label}：实际每次请求只带八张视觉副本`, first.reduce((count, message) => count + message.images, 0) === 8 && r.snap.imageReads.length === 8)
+      check(`${label}：第九张原图完整引用及未看图说明仍在`, allText(first).includes('li-' + '9'.repeat(64)) && allText(first).includes('本次未附视觉副本的原图清单'))
+      check(`${label}：传输窗口不删除或改写已有文章`, r.snap.documentSends.length === 0)
+      continue
+    }
+    if (c.lateClearImage) check(`${label}：清空后迟到导入不回填附件`, r.snap.attachedCount === 0 && r.snap.cmds.includes('import_local_image'))
     check(`${label}：本回合真的跑起来了（有 prep 往返）`, (r.snap.prepSends || []).length > 0, `prep 往返 ${(r.snap.prepSends || []).length} 次`)
 
     // prep 普通轮与末轮都在实参里带上共同依据规则。
@@ -420,19 +726,24 @@ if (!run.errors.length && collected.length === CASES.length) {
       const instr = pickMsg(p.messages, MARK.prepInstruction)
       check(`${label}：prep 第 ${n + 1} 次请求的系统提示含共同依据规则`, has(systemText(p.messages), MARK.ground), `system 长度 ${systemText(p.messages).length}`)
       check(`${label}：prep 第 ${n + 1} 次请求的指令消息本身含依据边界`, Boolean(instr) && has(instr.text, MARK.ground), instr ? `指令长度 ${instr.text.length}` : '没找到指令消息')
+      check(`${label}：prep 第 ${n + 1} 次实际请求包含引擎协议全文`, (p.messages || []).some((m) => has(m.text, ENGINE_PROTOCOL)), `协议 ${ENGINE_PROTOCOL.length} 字符`)
     }
     // 末轮：预算提醒**真的随最后一次请求发出**，且带上了依据边界；
     // 前面的请求不得出现它（否则就变成"每轮都在催"）。
     {
       const counts = prepSends.map((p) => (p.messages || []).filter((m) => has(m.text, MARK.prepLastRound)).length)
-      const expected = counts.map((_, i) => (i === prepSends.length - 1 ? 1 : 0))
+      const expected = counts.map((_, i) => (i === 2 ? 1 : 0))
       check(
-        `${label}：预算提醒只出现在最后一次 prep 请求（共 ${prepSends.length} 次往返）`,
-        prepSends.length === 3 && JSON.stringify(counts) === JSON.stringify(expected),
+        `${label}：预算提醒只出现在第三次 prep 请求（共 ${prepSends.length} 次往返）`,
+        prepSends.length === c.prep.length && JSON.stringify(counts) === JSON.stringify(expected),
         `各次提醒条数=${JSON.stringify(counts)}，期望=${JSON.stringify(expected)}`,
       )
       const lastReminder = pickMsg((prepSends[prepSends.length - 1] || {}).messages, MARK.prepLastRound)
-      check(`${label}：末轮提醒里也写了依据边界（时间紧不补事实）`, Boolean(lastReminder) && has(lastReminder.text, MARK.prepLastRoundGround), lastReminder ? `提醒长度 ${lastReminder.text.length}` : '没找到提醒')
+      if (prepSends.length === 3) {
+        check(`${label}：末轮提醒里也写了依据边界（时间紧不补事实）`, Boolean(lastReminder) && has(lastReminder.text, MARK.prepLastRoundGround), lastReminder ? `提醒长度 ${lastReminder.text.length}` : '没找到提醒')
+      } else {
+        check(`${label}：提前结束的 prep 没有伪造末轮提醒`, !lastReminder)
+      }
     }
 
     // G3 过度阻断对照：共同规则必须是"生成合同"，不能退化成关键词封禁。
@@ -457,19 +768,66 @@ if (!run.errors.length && collected.length === CASES.length) {
     }
 
     const streams = r.snap.streams || []
+    if (c.productWithoutKnowledge) {
+      check(`${label}：产品关键词仍按模型声明走准备阶段，没有本地知识路由`, prepSends.length === 1 && !prepSends[0].messages.some(message => message.role === 'tool') && streams.filter(send => send.turn === 'write').length === (c.write ? 1 : 0))
+      check(`${label}：未经工具读取的完整产品事实未进入准备、撰写或修订消息`, [...prepSends, ...streams].every(send => !allText(send.messages).includes(PRODUCT_FACTS)))
+    }
+    if (c.productKnowledge) {
+      const tools = prepSends.at(-1)?.messages.filter(message => message.role === 'tool') || []
+      check(`${label}：产品事实与写作示例各自通过真实工具消息送达`, tools.some(message => has(message.text, PRODUCT_FACTS)) && tools.some(message => has(message.text, WRITING_EXCERPT)))
+      check(`${label}：prep 指令没有否定明确产品事实，同时禁止示例和旧稿确证本稿事实`, prepSends.every(send => {
+        const text = pickMsg(send.messages, MARK.prepInstruction)?.text || ''
+        return has(text, '明确标注的应用产品事实可作为相应产品能力的依据') && has(text, '写作方法、风格与视觉规范里的例子以及旧稿不能确证本稿事实')
+      }))
+      const downstream = streams.filter(send => send.turn === 'write' || send.turn === 'revise')
+      check(`${label}：WRITE或REVISE继续保留两类资料，并在摘要本身明确区分依据身份`, downstream.length > 0 && downstream.every(send => {
+        const digest = pickMsg(send.messages, MARK.digestNew)?.text || ''
+        return has(digest, PRODUCT_FACTS) && has(digest, WRITING_EXCERPT) && has(digest, '明确标注的应用产品事实可作为相应产品能力的依据') && has(digest, '其中的示例及旧稿不构成本稿事实') && !has(digest, MARK.digestOld)
+      }))
+    }
+    if (c.localImage) {
+      const imageId = c.localImage.assetId
+      const prepWithImage = prepSends.filter((send) => send.messages.some((message) => message.images > 0))
+      check(`${label}：原图缩图实际进入准备请求`, prepWithImage.length > 0)
+      check(`${label}：原图稳定ID实际进入准备请求`, prepWithImage.some((send) => allText(send.messages).includes(imageId)))
+      check(`${label}：WRITE与REVISE都保留视觉上下文`, streams.length >= 2 && streams.every((send) => send.messages.some((message) => message.role === 'user' && message.images > 0)))
+      check(`${label}：文档提交入参包含原图字节及稳定源引用`, (r.snap.documentSends || []).some((send) => String(send.source || '').includes(imageId) && String(send.html || '').includes(c.localImage.dataUrl) && !String(send.html || '').includes('local-image://')))
+      check(`${label}：保存源文不再混入助手外层v2围栏`, (r.snap.documentSends || []).some((send) => String(send.source || '').includes(imageId) && !String(send.source || '').includes('```v2')))
+      if (c.importedImage) {
+        check(`${label}：显式路径确实经过原图导入命令`, r.snap.cmds.includes('import_local_image'))
+        check(`${label}：导入回调把原图ID写进会话存档入参`, (r.snap.sessionSends || []).some((send) => (send.messages || []).some((message) => message.role === 'user' && (message.localImages || []).some((image) => image.assetId === imageId))))
+      }
+    }
     const write = streams.find((s) => s.turn === 'write')
     const revise = streams.find((s) => s.turn === 'revise')
     if (c.write) {
       check(`${label}：compose 路径确实发出了 write 请求`, Boolean(write), `streamTurns=${JSON.stringify(r.snap.streamTurns || [])}`)
       if (write) {
         check(`${label}：WRITE 的系统提示含共同依据规则`, has(systemText(write.messages), MARK.ground), '')
-        check(`${label}：WRITE 的 digest 不再笼统让位给知识库`, !has(lastText(write.messages), MARK.digestOld) && has(lastText(write.messages), MARK.digestNew), `追加速度 ${lastText(write.messages).length}`)
+        check(`${label}：WRITE 只在实际取用知识后附摘要，且不让知识覆盖材料`, !has(lastText(write.messages), MARK.digestOld) && has(lastText(write.messages), MARK.digestNew) === !c.productWithoutKnowledge, `追加指令 ${lastText(write.messages).length} 字符`)
         check(`${label}：WRITE 的追加指令（最后一条消息）含材料依据边界`, has(lastText(write.messages), MARK.ground), '')
+        const writeText = lastText(write.messages)
+        const protocolHeader = '## 排版引擎协议（必读：'
+        const headerAt = writeText.indexOf(protocolHeader)
+        const trustedPart = headerAt >= 0 ? writeText.slice(headerAt) : ''
+        check(`${label}：WRITE 独立附加可信协议全文，不信任 digest 文件名`, has(trustedPart, ENGINE_PROTOCOL), `独立协议段 ${trustedPart.length} 字符`)
+        check(`${label}：WRITE 只含一份协议全文`, writeText.split(ENGINE_PROTOCOL).length - 1 === 1, `全文份数 ${writeText.split(ENGINE_PROTOCOL).length - 1}`)
+        if (c.nameOnlyDigest) {
+          const digestPart = headerAt >= 0 ? writeText.slice(0, headerAt) : writeText
+          check(`${label}：反例确为只提到名字而没有协议正文的 digest`, has(digestPart, 'engine-write-protocol') && !has(digestPart, ENGINE_PROTOCOL.slice(0, 100)), `摘要 ${digestPart.length} 字符`)
+        }
       }
     } else {
       check(`${label}：candidate 路径不发起撰写请求`, !write, `streamTurns=${JSON.stringify(r.snap.streamTurns || [])}`)
     }
     if (revise) {
+      check(`${label}：修订后的正文生效且不复用旧directSource`, streams.filter(stream => stream.turn === 'revise').length === 1 && r.snap.documentSends.some(send => !String(send.source).includes('🎉') && String(send.source).includes(bareV2(c.revise).split('\n')[0])))
+      for (const [n, repair] of streams.filter((s) => s.turn === 'revise').entries()) {
+        const protocolCopies = (repair.messages || []).reduce((count, m) => count + String(m.text || '').split(ENGINE_PROTOCOL).length - 1, 0)
+        check(`${label}：REVISE 第 ${n + 1} 次实际请求继承一份完整可信协议`, protocolCopies === 1, `全文份数 ${protocolCopies}`)
+        const protocolMsg = pickMsg(repair.messages, '## 排版引擎协议（必读：')
+        check(`${label}：REVISE 协议上下文保持知识不决定事实的边界`, Boolean(protocolMsg) && has(protocolMsg.text, '本协议只决定语法与样式，不决定本稿事实'))
+      }
       check(`${label}：REVISE 的系统提示含共同依据规则`, has(systemText(revise.messages), MARK.ground), '')
       check(`${label}：REVISE 的追加指令含"只修所列问题、不新增运营规则"`, has(lastText(revise.messages), MARK.reviseNoNewRules), '')
       check(`${label}：REVISE 的"保留已澄清事实"已限定为用户材料/确认`, has(lastText(revise.messages), MARK.reviseKeep), '')

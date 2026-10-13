@@ -3500,7 +3500,7 @@ function resolvePlaywright() {
   block(
     'deps',
     `解析不到 playwright 模块（本脚本需要它用 CDP 连上真实 WebView2；只需 JS 模块，不需要浏览器二进制）。已尝试：${tried.join('；')}。` +
-      '可用环境变量指定，例如（本机已装路径）：VERIFY_PLAYWRIGHT=D:/deepseek-harness/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright',
+      '可用环境变量 VERIFY_PLAYWRIGHT 指定本机已安装的 playwright 模块绝对路径。',
   )
   return { chromium: null }
 }

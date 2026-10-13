@@ -1,8 +1,8 @@
 [package]
 name = "wechat-mp-desktop"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "1.0.0"
+description = "智序：面向公众号创作者的本地桌面写作与排版工作台"
+authors = ["CH3SH-LC"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -47,3 +47,10 @@ tokio = { version = "1", features = ["sync", "time", "macros"] }
 # sha2: 不可变版本的文件哈希（§7.2 提交校验 + 读取时完整性比对）。锁文件里早就有了（传递依赖），
 # 这里只是把它提成直接依赖，不引入新的包。
 sha2 = "0.10"
+# R32: decode and validate local originals, then make a separate bounded model preview.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+
+[target.'cfg(windows)'.dependencies]
+# Already present through Tauri/Wry; explicit access is needed for ProcessFailed.
+webview2-com = "0.38.2"
+windows = { version = "0.61.3", features = ["Win32_UI_WindowsAndMessaging"] }

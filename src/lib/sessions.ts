@@ -1,11 +1,13 @@
 // sessions.ts —— 多会话上下文：Tauri → sessions.rs（workspace/sessions/*.json）；浏览器 → localStorage
 import { invoke } from '@tauri-apps/api/core'
 import { inTauri } from './chat.ts'
+import type { LocalImageMeta } from './local-images.ts'
 
 export interface SMsg {
   id: number
   role: string
   content: string
+  localImages?: LocalImageMeta[]
 }
 
 export interface SessionItem {

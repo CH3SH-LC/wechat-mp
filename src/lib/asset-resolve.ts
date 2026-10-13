@@ -148,7 +148,7 @@ export function pickReuse<T extends ReuseCandidate>(
 
 // ---------- 角饰别名与气泡引用配对 ----------
 
-const BUBBLE_REF_RE = /^>\s*\[!(\w+)(?:\|([A-Za-z0-9_-]+))?\]/
+const BUBBLE_REF_RE = /^>\s*\[!(\w+)(?:\|([\p{L}\p{N}_-]+))?\]/u
 
 export interface BubbleRef {
   line: number
@@ -183,7 +183,7 @@ export function pairBubbleRefs(lines: string[], slotLines: number[]): (string | 
   })
 }
 
-const TOKEN_RE = /^[A-Za-z0-9_-]+$/
+const TOKEN_RE = /^[\p{L}\p{N}_-]+$/u
 
 /**
  * 一个角饰块可声明的别名集合（去重、只保留引擎可解析的 token）。
@@ -455,7 +455,7 @@ export function findLegacyDecoBlocks(lines: string[]): LegacyDecoBlock[] {
   const out: LegacyDecoBlock[] = []
   let i = 0
   while (i < lines.length) {
-    const m = /^:::\s*art\s+deco\s+([a-zA-Z0-9_-]+(?:\s+[a-zA-Z0-9_-]+)*)\s*$/.exec(String(lines[i] || '').trim())
+    const m = /^:::\s*art\s+deco\s+([\p{L}\p{N}_-]+(?:\s+[\p{L}\p{N}_-]+)*)\s*$/u.exec(String(lines[i] || '').trim())
     if (!m) {
       i++
       continue

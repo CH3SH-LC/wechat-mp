@@ -4,13 +4,15 @@
 // 用法：node scripts/compose-check.mjs [outDir]
 //
 // 判定（DS 修复指南 §3.1）：唯一 RunResult → run-result.json + 退出码；零条检查是 ERROR 而不是"通过"。
-import { buildAuthorUnits, composeMarkdown, projectionOf, resolveBoxScheme, resolveFaceSpec, svgElementCount } from '../src/lib/compose.ts'
+import { buildAuthorUnits, composeMarkdown, faceFromSpec, projectionOf, resolveBoxScheme, resolveFaceSpec, svgElementCount } from '../src/lib/compose.ts'
 import { checkHtml } from '../src/lib/quality.ts'
 import { PALETTES, resolveTheme } from '../src/lib/palettes.ts'
 import { MARK_KEYS, MARK_LABEL, THEME_MARKS, markDataUrl } from '../src/lib/marks.ts'
 import { buildReviseContent, fixableWarnings, locateIssues } from '../src/lib/revise.ts'
 import { createJudge, guardCrashes, parseRunnerArgs } from './lib/run-result.mjs'
 import { mkdirSync, writeFileSync } from 'fs'
+import { createHash } from 'node:crypto'
+import { ornamentDataUrl } from '../src/lib/ornaments.ts'
 
 // P1：组件化/素材配额按成品长度分档（<600 字为短篇档，不再强塞组件）。
 // 需要触发长文档警告的用例必须先把正文撑过 600 字。
@@ -114,7 +116,7 @@ let failed = 0
 const { outDir } = parseRunnerArgs()
 // minChecks：2026-10-01 实测 98 条。没有可分场景前缀的 runner 靠它证明"执行完整"——
 // 只跑得起一条也算 PASS 的话，断言被静默删掉就没人会发现。2026-10-11 R23 实测 215 条（+4：宣传类"纯色气泡"禁令）。
-const judge = createJudge({ script: 'compose-check', outDir, minChecks: 237 })
+const judge = createJudge({ script: 'compose-check', outDir, minChecks: 420 }) // R38 321 条 + R39 原生装饰、原图、旧版 18 样本与标题/角标回归
 guardCrashes(judge)
 mkdirSync(outDir, { recursive: true })
 const check = (name, ok, extra = '') => {
@@ -250,7 +252,7 @@ const promoBubbles = bubbleSecsOf(promoSix)
 const opaqueBg = (style) => /background:#[0-9a-fA-F]{3,8}\b/.test(style) || /background:rgb\(/.test(style)
 check('R23 宣传类五种语义的气泡全都在场（取样成功，否则下面的断言是空断言）',
   promoBubbles.length === 5, `取到 ${promoBubbles.length}/5`)
-check('R23 宣传类气泡**没有不透明底色**（"纯色圆角矩形气泡"已禁）',
+check('R38 宣传类未声明 fill 时保持无底默认',
   promoBubbles.length === 5 && promoBubbles.every((s) => !opaqueBg(s)),
   promoBubbles.map((s) => (s.match(/background:[^;"]+/) || ['(无底)'])[0]).join(' | '))
 // 自证伪：这条判据必须真能抓住旧的实色形态，否则它是条永远为真的空断言。
@@ -293,8 +295,8 @@ const shapeMiss = SHAPES8.filter((sp) => !sig[sp](shapeBuilt[sp]))
 check('R24 每种骨架都有**它自己的结构签名**（不是同一套结构换图案）', shapeMiss.length === 0, shapeMiss.length ? '未命中：' + shapeMiss.join(',') : '8/8')
 check('R24 八种结构**两两不同**（结构签名互不重合）', new Set(SHAPES8.filter((sp) => sig[sp](shapeBuilt[sp]))).size === 8, SHAPES8.filter((sp) => sig[sp](shapeBuilt[sp])).join(','))
 check('R24 每种骨架都过 checkHtml 且不含未渲染占位', SHAPES8.every((sp) => checkHtml(shapeBuilt[sp]).ok && !/undefined|@@ART/.test(shapeBuilt[sp])), SHAPES8.map((sp) => sp + ':' + checkHtml(shapeBuilt[sp]).ok).join(' '))
-// 骨架一样要守 R23：八种全都不许有块级底色
-check('R24 八种骨架都不含块级底色（与 R23 一致）',
+// R38 保留旧默认：没有显式 fill 的八种骨架仍无底色。
+check('R38 八种旧骨架未声明 fill 时仍无底色',
   SHAPES8.every((sp) => !/<section style="[^"]*padding:[^"]*background:(#|rgb\(|rgba\()/.test(shapeBuilt[sp])),
   SHAPES8.filter((sp) => /<section style="[^"]*padding:[^"]*background:(#|rgb\(|rgba\()/.test(shapeBuilt[sp])).join(',') || '8/8 干净')
 // 序号骨架按正文顺序自动编号（01 → 02）
@@ -377,14 +379,7 @@ check('R26 每种风格的四个语义色都与白底 ≥3:1（大字/图形下�
 const badShape = composeMarkdown('[[boxes:shape=弯曲的样式]]\n\n> [!NOTE] 提示\n> 正文。', { mode: 'text' })
 check('R24 认不出的骨架名 → 出声且回退默认（不静默变形）', badShape.warnings.some((w) => w.includes('组件设计轴')) && /border-left:\d+px solid #/.test(badShape.html), badShape.warnings.slice(0, 1).join('|'))
 
-// ---- R23（2026-10-11）：**整篇无任何色块** ----
-//
-// 用户当日选的口径是最彻底的那一档："**整篇无任何色块**"——气泡与容器**全部不铺底**。
-// 判据（可证伪）：除**文章根容器**（整页白底）之外，不允许出现"带 padding 且铺了不透明/半透明底色"的 section。
-// **边界**：这条禁令管的是"面"（块级容器与气泡），不管"点"——22px 角标徽章、语义标签 chip、
-// 行内 `[[badge:]]`、小标题序号徽章、分割线条/块仍是 `<span>` 或短横条，它们是信息记号不是色块。
-// 注意：**刻意不放 `[[banner]]` 与 `[[title:…]]`**——它们是"版面标题带"，不是气泡也不是内容容器，
-// 保留实色（见下面的边界断言）。禁令管的是**内容块**（气泡 / 卡片 / 分栏 / 步骤 / 时间线 / 边框容器 / 引用 / 色带）。
+// R38：这些样例没有显式 fill，继续锁住旧默认；显式浅底在下方单独验证。
 const NO_BLOCK = `[[theme:校园]]
 [[boxes:frame=line]]
 
@@ -432,7 +427,7 @@ const secStyles = [...noBlockHtml.matchAll(/<section style="([^"]*)"/g)].map((m)
 const rootStyle = secStyles[0] || ''
 const isBlockBg = (s) => /padding:/.test(s) && (/background:#[0-9a-fA-F]{3,8}\b/.test(s) || /background:rgb\(/.test(s) || /background:rgba\(/.test(s))
 const blockBgs = secStyles.slice(1).filter(isBlockBg)
-check('R23 整篇无块级底色：除根容器外，没有任何带 padding 的 section 铺了底色',
+check('R38 未声明 fill 的旧默认全文不铺内容底色',
   rootStyle.includes('background:#ffffff') && blockBgs.length === 0,
   `section 数=${secStyles.length}｜带底色的块=${blockBgs.length}｜${blockBgs.slice(0, 3).map((s) => (s.match(/background:[^;"]+/) || [''])[0]).join(' | ')}`)
 // 自证伪：这条判据必须真能抓住旧的浅底容器，否则它是永远为真的空断言。
@@ -532,7 +527,7 @@ check('R22 细框语言（dash 1px 边框）→ left:-1px;top:-1px', /left:-1px;
 // **R23 改口径**：`plane`（"没有边框、只靠底色成块"）在"整篇无任何色块"下不成立，
 // 气泡的 `plane` 降级到 `line` 那一套**线条阶梯**——判据从"有底色"改成"**有左竖线、且无底色**"。
 const planeBubble = oneBubble('frame=plane', 'NOTE')
-check('R23 frame=plane 气泡降级为左竖线（有线、无底色）',
+check('R38 frame=plane 且 fill=none 时保留左竖线',
   /border-left:3px solid #/.test(planeBubble) && !/<section style="margin[^"]*background:/.test(planeBubble),
   (planeBubble.match(/<section style="margin[^"]*"/) || [''])[0].slice(0, 90))
 check('R22 frame=none 才是真裸文字（无边框也无底色）', !/border-(?:left|top|right|bottom)?:/.test(oneBubble('frame=none', 'NOTE').replace(/border-radius[^;"]*/g, '')) && !/<section style="[^"]*background:rgba/.test(oneBubble('frame=none', 'NOTE')))
@@ -654,8 +649,8 @@ check('R17 五套产出彼此不同（HTML 两两不等）', new Set(SCHEME_NAME
 // 每套的**签名结构特征**必须在场——这是"换了语言"而不是"换了配色"的判据
 const SCHEME_SIG = {
   editorial: (h) => h.includes('border-left:3px solid ') && h.includes('border-left:4px solid ') && h.includes('border-top:2px solid '),
-  // R23：soft 原来靠"圆角 + 浅底"签名，底色被禁后改为"**左竖线 + chip 胶囊标签 + 无大引号**"。
-  soft: (h) => h.includes('border-left:3px solid ') && h.includes('border-radius:10px') && !h.includes('font-size:46px') && !h.includes('dashed'),
+  // R38：显式 soft 恢复浅底圆角壳，chip 标签与无大引号的特征保留。
+  soft: (h) => /background:rgba\([^)]*,0\.1\)/.test(h) && h.includes('border-radius:14px') && h.includes('border-radius:10px') && !h.includes('font-size:46px') && !h.includes('dashed'),
   magazine: (h) => /border:1px solid [^;]+;padding:3px/.test(h) && /font-size:17px/.test(h),
   sticker: (h) => h.includes('border:1px dashed ') && h.includes('rotate(-4deg)'),
   tech: (h) => h.includes('font-family:Consolas') && h.includes('>// 提示<'),
@@ -750,7 +745,7 @@ const onlyBadge = (spec) => composeMarkdown(`[[boxes:${spec}]]\n\n正文 [[badge
 // ① 标题：结构由 `frame` 决定
 const headFrames = ['line', 'plane', 'dash', 'stack', 'rules', 'edge', 'none'].map((f) => onlyHeading('frame=' + f))
 check('R20 标题跟随 frame：line→左竖条', /display:flex;align-items:center/.test(headFrames[0]) && /width:3px;height:\d+px;background:#2f6fed/.test(headFrames[0]))
-check('R20 标题跟随 frame：plane→降级为左竖条（底色被禁，与 line 同形）', /display:flex;align-items:center/.test(headFrames[1]) && /width:3px;height:\d+px;background:#2f6fed/.test(headFrames[1]))
+check('R38 标题 frame=plane 且无 fill 时保留左竖条', /display:flex;align-items:center/.test(headFrames[1]) && /width:3px;height:\d+px;background:#2f6fed/.test(headFrames[1]))
 check('R20 标题跟随 frame：dash→虚线框', headFrames[2].includes('border:1px dashed'))
 check('R20 标题跟随 frame：stack→双线框', headFrames[3].includes('padding:3px'))
 check('R20 标题跟随 frame：rules→上下夹线居中', headFrames[4].includes('border-top:2px solid') && headFrames[4].includes('text-align:center'))
@@ -823,6 +818,15 @@ const customTheme = composeMarkdown(
 check('custom palette wrapper bg', customTheme.html.includes('background:#fbf6ef;padding:4px 16px'))
 check('custom palette banner uses orange（线条色）', bannerHasLine(customTheme.html, '#b5482d'))
 check('custom palette no unknown-theme warning', !customTheme.warnings.some((w) => w.includes('未收录')))
+for (const mode of ['text', 'promo']) {
+  const explicit = composeMarkdown('[[palette:bg=#FFFFFF;text=#26332E;heading=#26332E;ink=#26332E;accent=#2F6656;orange=#2F6656;tip=#2F6656;warn=#A57A3C;sub=#53675D;danger=#8B463B]]\n\n正文色号。\n\n> [!TIP] 自定义提示\n> 提示内容。\n\n> [!WARN] 自定义注意\n> 注意内容。', { mode })
+  check(`R31 ${mode} 正文与语义气泡接受自定义颜色`, explicit.html.includes('color:#26332E') && explicit.html.includes('color:#2F6656') && explicit.html.includes('color:#A57A3C') && !explicit.html.includes('color:undefined'))
+  const invalid = composeMarkdown('[[palette:text=red;tip=#12;key=#ffffff;text-shadow=#000000]]\n\n正文色号。', { mode })
+  check(`R31 ${mode} 非法色号或样式键不能注入`, !invalid.html.includes('color:red') && !invalid.html.includes('text-shadow:') && invalid.html.includes(mode === 'text' ? 'color:#3f3f3f' : 'color:#4a4a52'))
+  const quote = composeMarkdown('[[theme:森系]]\n[[boxes:frame=stack]]\n\n> 双线引用保留白纸。', { mode }).html
+  const quoteStyles = [...quote.matchAll(/<blockquote style="([^"]*)"/g)].map((m) => m[1])
+  check(`R31 ${mode} 双线引用也不铺底色`, quoteStyles.length === 2 && quoteStyles.every((style) => !/background(?:-color)?:/.test(style)))
+}
 const unknownTheme = composeMarkdown('[[theme:山海清风]]\n\n正文内容，未带自定义色板。', { mode: 'text' })
 check('unknown theme warning', unknownTheme.warnings.some((w) => w.includes('「山海清风」未收录且正文未提供 [[palette]]')))
 check('unknown theme falls back default white', unknownTheme.html.startsWith('<section style="background:#ffffff;padding:4px 16px'))
@@ -858,7 +862,10 @@ check('weak svg (1 elem) blocked', weak.arts.length === 0 && weak.warnings.some(
 check('weak svg no placeholder img', !weak.html.includes('@@ART') && weak.html.includes('未达标已略过'))
 const inlineMd = '::: art inline 小装饰\n' + artSvg + '\n:::\n\n正文。'
 const inl = composeMarkdown(inlineMd, { mode: 'text' })
-check('inline art centered <=56%', inl.arts.length === 1 && inl.arts[0].wide === false && inl.html.includes('max-width:56%'))
+check('inline 内容插画居中且可读，窄屏不溢出', inl.arts.length === 1 && inl.arts[0].wide === false && inl.html.includes('width:100%;max-width:300px;height:auto') && inl.html.includes('text-align:center'))
+check('R31 真实 inline 排版的自适应最大宽度可通过 HTML 质检', checkHtml(inl.html).ok, JSON.stringify(checkHtml(inl.html).issues))
+check('R31 固定 width 仍拦截且支持空格/大小写/小数', ['width:300px', ' Width : 300.5px !important ', 'height:2px;width:100px'].every(style => checkHtml(`<section style="${style}">正文</section>`).issues.some(i => i.kind === 'fixed-width')))
+check('R31 最大宽度和正文文本不误判固定宽度', ['max-width:300px;width:100%', 'border-width:100px'].every(style => !checkHtml(`<section style="${style}">width:300px 是正文</section>`).issues.some(i => i.kind === 'fixed-width')))
 
 // 2) 文字类：显式 text；h2 无编号；列表为 ul
 const t = composeMarkdown('# 标题\n\n正文第一段。\n\n## 小节\n\n- 甲\n- 乙\n\n> 引用一句话。', { mode: 'text' })
@@ -882,9 +889,15 @@ check('局部问题定位到行', locateIssues(localV2, ['气泡角饰 second �
 check('局部问题要求逐字保留', localMsg.includes('逐字保留') && localMsg.includes('第 3 行'))
 check('局部问题附上原行文本', localMsg.includes('> [!KEY|second] 记得带'))
 const structMsg = buildReviseContent(localV2, ['组件化不足（当前容器 0 个 / 气泡 1 个 / 列表或引用 1 处）'])
-check('结构问题仍走整篇修订', !structMsg.includes('逐字保留') && structMsg.includes('按下列问题修订重写一遍'))
+// 图片整行保留是所有修订共有的素材保护要求，不限制正文修订范围。
+// 只识别正文范围控制句；用真实局部问题和 preserveRest 输出作反例。
+const wholeDraftRevision = message => message.includes('按下列问题修订重写一遍') &&
+  !message.includes('请只修这些行，其余内容逐字保留') &&
+  !message.includes('只改问题所指的地方，**其余内容逐字保留**')
+const scopedStructMsg = buildReviseContent(localV2, ['组件化不足（当前容器 0 个 / 气泡 1 个 / 列表或引用 1 处）'], { preserveRest: true })
+check('结构问题仍走整篇修订', wholeDraftRevision(structMsg) && !wholeDraftRevision(localMsg) && !wholeDraftRevision(scopedStructMsg))
 const mixedMsg = buildReviseContent(localV2, ['气泡角饰 second 未定义', '素材用量偏低（当前 1 处）'])
-check('局部+结构混合走整篇修订', !mixedMsg.includes('逐字保留'))
+check('局部+结构混合走整篇修订', wholeDraftRevision(mixedMsg) && !wholeDraftRevision(localMsg) && !wholeDraftRevision(scopedStructMsg))
 
 // 4) 普通对话文本（无语法）不产生 HTML 结构
 const c = composeMarkdown('就是随便聊聊，没有什么排版。', { mode: 'auto' })
@@ -1012,5 +1025,327 @@ check('拒收素材报 blocking asset.rejected', rj.issues.some((i) => i.code ==
   const implLeak = proj.text.match(/style=|margin:|viewBox|@@ART|\[\[[^\]]+:|\]\]/)
   check('⑦ 真实样例：投影里不含实现细节（样式/坐标/素材协议占位）', implLeak === null, String(implLeak?.[0] || proj.text.slice(0, 120)))
 }
+
+// ---- R35：从极简到明丽，配色、标题尺度、对齐、装饰必须分别生效 ----
+// 这里只证明解析与实际渲染行为。结构不同、checkHtml 通过都不是视觉质量结论；
+// 375px 的拥挤、溢出、标题断行、正文节奏与装饰占比仍需独立像素/目视验收。
+const R35_THEMES = ['minimal', 'memphis', 'pop', 'sport']
+const R35_BASE = 'frame=line;mark=none;deco=none'
+const R35_DEFAULTS = 'scale=standard;align=auto;ornament=none'
+const R35_LAYOUTS = [
+  `${R35_BASE};${R35_DEFAULTS}`,
+  `${R35_BASE};scale=display;align=center;ornament=confetti`,
+  'frame=none;mark=none;deco=none;scale=display;align=left;ornament=dots',
+  'frame=rules;mark=none;deco=none;scale=display;align=left;ornament=speed',
+  'frame=stack;shape=bracket;label=chip;mark=none;deco=none;scale=display;align=center;ornament=dots',
+]
+const R35_BODY = `[[banner:R35活动主视觉|周五傍晚在操场集合]]
+
+# R35主标题
+
+正文尺度保持十六像素。
+
+## R35章节标题
+
+### R35细节标题
+
+[[title:R35显式框标题|box]]
+
+${NO_BLOCK.replace(/^\[\[(?:theme|boxes):[^\]]+\]\]\r?\n/gm, '')}`
+const r35Render = (theme, spec, mode, body = R35_BODY) => composeMarkdown(
+  `${theme ? `[[theme:${theme}]]\n` : ''}[[boxes:${spec}]]\n\n${body}`, { mode },
+)
+const r35Style = (html, tag, text) =>
+  [...html.matchAll(new RegExp(`<${tag} style="([^"]*)">([\\s\\S]*?)</${tag}>`, 'g'))]
+    .find(m => m[2].replace(/<[^>]*>/g, '') === text)?.[1] || ''
+const r35Px = (style, property) => Number(style.match(new RegExp(`(?:^|;)${property}:(\\d+(?:\\.\\d+)?)px(?:;|$)`))?.[1] || 0)
+const r35HeadingSize = (html, level, text) => r35Px(r35Style(html, `h${level}`, text), 'font-size')
+// 比旧 R23 的 section+padding 判据更宽：background-color、单侧 padding、
+// blockquote/div/p/表格单元格也检查；仅文章根底纸与不带 padding 的细分割线例外。
+const r35BlockFills = (html) => {
+  const nodes = [...html.matchAll(/<(section|div|blockquote|p|td|th)\b[^>]*\bstyle="([^"]*)"/g)]
+  return nodes.filter(([all, tag, style], index) => {
+    if (index === 0 && tag === 'section' && html.startsWith(all)) return false
+    const painted = /(?:^|;)\s*background(?:-color)?\s*:\s*(?!none(?:;|$)|transparent(?:;|$))[^;]+/i.test(style)
+    const height = r35Px(style, 'height')
+    const thinRule = tag === 'section' && height > 0 && height <= 8 &&
+      !/(?:^|;)\s*(?:padding(?:-[a-z]+)?|min-height)\s*:/i.test(style)
+    return painted && !thinRule
+  }).map(([, tag, style]) => `${tag}:${style}`)
+}
+let r35Count = 0
+const checkR35 = (name, ok, extra = '') => { r35Count++; check(`R35 ${name}`, ok, extra) }
+checkR35('三种新色板可按英文、中文和常用别名解析', [
+  ['memphis', '孟菲斯', '孟菲斯几何风'],
+  ['pop', '波普', '波普艺术风格'],
+  ['sport', '运动', '运动活力风'],
+].every(([key, ...names]) => [key, ...names].every((name) => resolveTheme(`[[theme:${name}]]`)?.key === key)))
+checkR35('新色板不自动选择明丽版式，仍可搭配极简', R35_THEMES.every((theme) =>
+  resolveFaceSpec(`[[theme:${theme}]]`, theme).spec === '' &&
+  resolveFaceSpec(`[[theme:${theme}]]\n[[boxes:${R35_BASE}]]`, theme).spec === R35_BASE))
+const r35AxisCombinations = []
+for (const scale of ['standard', 'display']) for (const align of ['auto', 'left', 'center']) for (const ornament of ['none', 'confetti', 'dots', 'speed']) {
+  const parsed = faceFromSpec(`scale=${scale};align=${align};ornament=${ornament}`)
+  r35AxisCombinations.push(parsed.unknown.length === 0 && parsed.applied === 3 &&
+    parsed.tokens.scale === scale && parsed.tokens.align === align && parsed.tokens.ornament === ornament)
+}
+checkR35('三个新轴的 24 组合法组合独立解析', r35AxisCombinations.length === 24 && r35AxisCombinations.every(Boolean))
+checkR35('无内容色块判据能抓住旧浅底与无 padding 的大块，保留小记号/细线例外',
+  r35BlockFills('<section style="background:#fff;padding:4px 16px"><section style="background-color:rgba(1,2,3,.08);padding-left:12px">正文</section><blockquote style="background:#fff">引用</blockquote><section style="background:rgb(1,2,3);height:48px"></section><span style="background:#fff;width:8px;height:8px"></span><section style="height:1px;background:#333"></section></section>').length === 3)
+for (const mode of ['text', 'promo']) {
+  const matrix = R35_LAYOUTS.flatMap((spec) => R35_THEMES.map((theme) => ({
+    theme, spec, result: r35Render(theme, spec, mode),
+  })))
+  checkR35(`${mode} 20 组配色×版式全部真实渲染且过 HTML 质检`, matrix.length === 20 && matrix.every(({ result }) =>
+    checkHtml(result.html).ok && !/undefined|NaN|@@ART|\[\[boxes:/.test(result.html)),
+  matrix.filter(({ result }) => !checkHtml(result.html).ok).map(({ theme, spec }) => `${theme}/${spec}`).join(' | '))
+  checkR35(`${mode} 同一版式换四色板，去色后逐字相同`, R35_LAYOUTS.every((spec) =>
+    new Set(matrix.filter((row) => row.spec === spec).map(({ result }) => stripColor(result.html))).size === 1))
+  checkR35(`${mode} 三种新色板实际到达标题和横幅线条`, R35_THEMES.slice(1).every((theme) => {
+    const pal = resolveTheme(`[[theme:${theme}]]`)
+    const html = r35Render(theme, R35_BASE, mode).html
+    return pal && r35Style(html, 'h1', 'R35主标题').includes(`color:${mode === 'promo' ? pal.ink : pal.heading}`) &&
+      html.includes(`border-bottom:3px solid ${mode === 'promo' ? pal.orange : pal.accent}`)
+  }))
+  const ornamentRows = ['none', 'confetti', 'dots', 'speed'].map((ornament) =>
+    r35Render('memphis', `${R35_BASE};ornament=${ornament}`, mode))
+  checkR35(`${mode} 同色板四种装饰在去色后仍两两不同`,
+    new Set(ornamentRows.map(({ html }) => stripColor(html))).size === 4)
+  checkR35(`${mode} 装饰变化保留作者内容与顺序，不把几何符号混入正文投影`,
+    new Set(ornamentRows.map(({ authorUnits }) => projectionOf(authorUnits).text)).size === 1 &&
+    projectionOf(ornamentRows[0].authorUnits).text.includes('正文尺度保持十六像素'))
+  const standard = r35Render('minimal', `${R35_BASE};${R35_DEFAULTS}`, mode)
+  const display = r35Render('minimal', `${R35_BASE};scale=display`, mode)
+  checkR35(`${mode} display 提升 h1/h2/横幅层级而不放大正文`,
+    r35HeadingSize(display.html, 1, 'R35主标题') > r35HeadingSize(standard.html, 1, 'R35主标题') &&
+    r35HeadingSize(display.html, 2, 'R35章节标题') > r35HeadingSize(standard.html, 2, 'R35章节标题') &&
+    r35HeadingSize(display.html, 1, 'R35主标题') > r35HeadingSize(display.html, 2, 'R35章节标题') &&
+    r35Px(r35Style(display.html, 'p', 'R35活动主视觉'), 'font-size') > r35Px(r35Style(standard.html, 'p', 'R35活动主视觉'), 'font-size') &&
+    r35Style(display.html, 'p', '正文尺度保持十六像素。') === r35Style(standard.html, 'p', '正文尺度保持十六像素。'))
+  const aligned = ['auto', 'left', 'center'].map((align) => r35Render('minimal', `${R35_BASE};align=${align}`, mode))
+  const headingParentStyle = (html) => html.match(/<section style="([^"]*)"><h1 style="[^"]*">R35主标题<\/h1>/)?.[1] || ''
+  checkR35(`${mode} 左对齐/居中/旧 auto 有实际排版差异且正文不受影响`,
+    new Set(aligned.map(({ html }) => stripColor(html))).size === 3 &&
+    headingParentStyle(aligned[1].html).includes('text-align:left') &&
+    headingParentStyle(aligned[2].html).includes('text-align:center') &&
+    new Set(aligned.map(({ html }) => r35Style(html, 'p', '正文尺度保持十六像素。'))).size === 1)
+  const oldMinimal = r35Render('minimal', R35_BASE, mode)
+  checkR35(`${mode} 未写新轴与显式旧默认的极简 HTML 逐字一致`, oldMinimal.html === standard.html)
+  checkR35(`${mode} 极简仍为旧 h1 22/h2 20/h3 18 与正文 16px`,
+    r35HeadingSize(oldMinimal.html, 1, 'R35主标题') === 22 &&
+    r35HeadingSize(oldMinimal.html, 2, 'R35章节标题') === 20 &&
+    r35HeadingSize(oldMinimal.html, 3, 'R35细节标题') === 18 &&
+    r35Px(r35Style(oldMinimal.html, 'p', '正文尺度保持十六像素。'), 'font-size') === 16)
+  const streamed = r35Render('minimal', R35_BASE, mode,
+    `# 开场\n\n[[boxes:${R35_BASE};scale=display;ornament=confetti]]\n\n# 主场\n\n[[boxes:${R35_BASE}]]\n\n# 尾声`)
+  checkR35(`${mode} 新轴从声明处向后生效，下一条省略新轴会恢复默认`,
+    r35HeadingSize(streamed.html, 1, '开场') === 22 && r35HeadingSize(streamed.html, 1, '主场') > 22 &&
+    r35HeadingSize(streamed.html, 1, '尾声') === 22)
+  const fills = matrix.flatMap(({ theme, spec, result }) => r35BlockFills(result.html).map((style) => `${theme}/${spec}/${style}`))
+  checkR35(`${mode} 明丽组合未声明 fill 时所测容器、引用、横幅及显式框标题均无底色`, fills.length === 0, fills.slice(0, 3).join(' | '))
+  const invalidSpec = 'scale=calc(99px);align=right;ornament=url(javascript:alert(1))'
+  const invalid = r35Render('minimal', `${R35_BASE};${invalidSpec}`, mode)
+  const invalidParsed = faceFromSpec(invalidSpec)
+  checkR35(`${mode} 非法新轴报错并回退旧默认，不能进入 CSS`,
+    invalidParsed.unknown.length === 3 && invalidParsed.applied === 0 &&
+    invalid.warnings.some((warning) => warning.includes('组件设计轴')) && invalid.html === oldMinimal.html &&
+    !/javascript:|calc\(99px\)|text-align:right/.test(invalid.html))
+  const partial = r35Render('minimal', `${R35_BASE};scale=display;align=invalid;ornament=invalid`, mode)
+  checkR35(`${mode} 同条声明中的有效新轴仍生效，非法轴不抹掉它`,
+    partial.html === display.html && partial.warnings.some((warning) => warning.includes('组件设计轴')))
+  const invalidTheme = r35Render('memphis;background=red', R35_BASE, mode)
+  checkR35(`${mode} 非法新色板声明安全回退且正文保留`,
+    invalidTheme.html === r35Render('', R35_BASE, mode).html &&
+    invalidTheme.warnings.some((warning) => warning.includes('未收录')) && !invalidTheme.html.includes('background=red'))
+}
+check('R35 固定行为检查全部登记（32 条，视觉验收另计）', r35Count === 32, `checks=${r35Count}`)
+
+// R35 真实桌面稿：中文图案后缀不应把整个提示块降为原始引用。
+const nativeMark = composeMarkdown('[[theme:孟菲斯]]\n[[boxes:frame=line]]\n> [!KEY|星] 到场提醒\n> 14:00—17:00，活动免费。')
+check('R35 中文本地图案后缀实际渲染且不泄漏标记', !nativeMark.html.includes('[!KEY') && nativeMark.html.includes('重点') && nativeMark.html.includes('到场提醒') && nativeMark.html.includes('14:00—17:00，活动免费。'))
+check('R35 中文图案使用本地星形绘制而不请求缺失素材', nativeMark.html.includes(markDataUrl('star', '#ffffff')) && !nativeMark.warnings.some(w => w.includes('未定义')))
+const nativeNoMark = composeMarkdown('[[boxes:mark=none]]\n> [!KEY|星] 到场提醒\n> 正文不变。')
+check('R35 显式关闭角标仍优先于局部图案', !nativeNoMark.html.includes('data:image/svg+xml') && !nativeNoMark.html.includes('[!KEY') && nativeNoMark.html.includes('正文不变。'))
+const unknownCn = composeMarkdown('> [!KEY|未登记的角饰] 到场提醒\n> 正文不变。')
+check('R35 未定义中文角饰明确告警但保留气泡内容', unknownCn.warnings.some(w => w.includes('未登记的角饰') && w.includes('未定义')) && !unknownCn.html.includes('[!KEY') && unknownCn.html.includes('正文不变。'))
+const longNativeTitle = composeMarkdown('[[boxes:scale=display;ornament=confetti]]\n[[banner:社团开放日：三个社团摊开等你来|活动信息]]')
+check('R35 海报长标题启用均衡断行且正文标题逐字保留', longNativeTitle.html.includes('text-wrap:balance') && longNativeTitle.html.includes('社团开放日：三个社团摊开等你来'))
+const phraseTitle = '光绘、桌游、开嗓试唱！10月24日下午，大学生活动中心一楼见'
+for (const heading of ['# ' + phraseTitle, '[[banner:' + phraseTitle + '|活动信息]]']) {
+  const result = composeMarkdown('[[boxes:scale=display;ornament=confetti]]\n' + heading)
+  check('R35 明丽标题保护短分句和日期且不删改文字 ' + heading.slice(0, 9),
+    result.html.includes('white-space:nowrap">开嗓试唱！</span>') &&
+    result.html.includes('white-space:nowrap">10月24日</span>') &&
+    result.html.replace(/<[^>]*>/g, '').includes(phraseTitle))
+}
+
+
+// R38：精致浅底与完整图文气泡。保留旧断言并增加可证伪的浅底、结构、内容与身份检查。
+const r38Body = '第一段保留完整叙述，时间为上午8点30分，地点是东区操场。'.repeat(10)
+const r38Tail = '第二段继续保留事实与顺序，联系电话010-55556666，正文结束。'
+const r38Title = '把长标题完整放入题签：交流实践的现场记录、参与者发言与下一步安排'
+const r38Source = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(FLAG_SVG)
+const r38Text = `> [!TIP] ${r38Title}\n> ${r38Body}\n>\n> ![现场记录原图](${r38Source})\n>\n> ${r38Tail}`.replace(/\\n/g, '\n')
+const r38Render = (spec, body = '> [!KEY] 保留标题\n> 保留正文。') => composeMarkdown(`[[theme:校园]]\n[[boxes:${spec}]]\n\n${body}`.replace(/\\n/g, '\n'), { mode: 'text' })
+const r38Styles = html => [...html.matchAll(/<(?:section|blockquote) style="([^"]*)"/g)].slice(1).map(m => m[1])
+const r38Fills = html => r38Styles(html).flatMap(s => [...s.matchAll(/(?:^|;)background:([^;]+)/g)].map(m => m[1]))
+const r38Light = color => {
+  const rgba = color.match(/^rgba\(\d+,\d+,\d+,([\d.]+)\)$/)
+  if (rgba) return Number(rgba[1]) > 0 && Number(rgba[1]) <= 0.1
+  return color === '#fffaf3' || color === '#ffffff'
+}
+for (const fill of ['tint', 'wash', 'paper']) {
+  const result = r38Render(`fill=${fill};mark=none;deco=none`)
+  const fills = r38Fills(result.html)
+  check(`R38 显式 fill=${fill} 在 KEY 夹线壳内生效且只用浅底`, fills.length > 0 && fills.every(r38Light), fills.join(' | '))
+  check(`R38 显式 fill=${fill} 不让正文反白且通过 HTML 质检`, checkHtml(result.html).ok && !/<p style="[^"]*color:#ffffff/.test(result.html))
+}
+const r38NoFill = r38Render('fill=none;mark=none;deco=none')
+check('R38 fill=none 明确不铺内容底', r38Fills(r38NoFill.html).length === 0)
+check('R38 省略 fill 与显式 none 输出逐字相同', r38Render('mark=none;deco=none').html === r38NoFill.html)
+check('R38 三种浅底真实不同', new Set(['tint', 'wash', 'paper'].map(fill => r38Render(`fill=${fill}`).html)).size === 3)
+const r38Plane = r38Render('frame=plane;fill=tint;mark=none;deco=none')
+check('R38 plane 配浅底有可见纸面且不额外借用竖线', r38Fills(r38Plane.html).length > 0 && !/border-left:/.test(r38Plane.html))
+const r38PlaneCard = r38Render('frame=plane;fill=none', '::: card 卡片\n- 正文不消失\n:::')
+check('R38 plane 不铺底时普通卡片仍保留细框', r38PlaneCard.html.includes('border:1px solid') && r38PlaneCard.html.includes('正文不消失') && r38Fills(r38PlaneCard.html).length === 0)
+for (const [preset, shape, cn] of [['tab', 'tab', '题签'], ['panel', 'panel', '纸笺']]) {
+  check(`R38 ${cn} 中文预置与英文预置一致`, JSON.stringify(faceFromSpec(cn).tokens) === JSON.stringify(faceFromSpec(preset).tokens))
+  check(`R38 ${cn} 中文轴值与英文轴值一致`, faceFromSpec(`shape=${cn}`).tokens.shape === shape && faceFromSpec(`shape=${cn}式`).tokens.shape === shape)
+  const result = r38Render(cn, r38Text)
+  check(`R38 ${cn} 长标题长段落图片全部保留且按原顺序`, result.html.includes(r38Title) && result.html.includes(r38Body) && result.html.includes(r38Tail) && result.html.indexOf(r38Body) < result.html.indexOf(r38Source) && result.html.indexOf(r38Source) < result.html.indexOf(r38Tail))
+  check(`R38 ${cn} 图片身份与原 URL 完整保留`, result.html.includes(`src="${r38Source}"`) && result.html.includes('alt="现场记录原图"') && result.html.includes('max-width:100%'))
+  check(`R38 ${cn} 无协议泄漏且通过 HTML 质检`, checkHtml(result.html).ok && !/\[\[boxes:|\[!TIP|@@ART|undefined|NaN|&lt;svg/.test(result.html), JSON.stringify(checkHtml(result.html).issues))
+  check(`R38 ${cn} 内容区不裁切且不固定高度`, !/overflow:hidden/.test(result.html.replace(/<span style="[^"]*position:absolute[^>]*>[\s\S]*?<\/span>/g, '')) && ![...result.html.matchAll(/<(?:section|p) style="([^"]*)"/g)].some(m => /(?:^|;)(?:height|max-height):/.test(m[1])))
+  check(`R38 ${cn} fill=none 可关闭纸面`, r38Fills(r38Render(`${cn};fill=none`, r38Text).html).length === 0)
+  check(`R38 ${cn} 浅底与无底不改变作者投影`, projectionOf(result.authorUnits).text === projectionOf(r38Render(`${cn};fill=none`, r38Text).authorUnits).text)
+  const deco = r38Render(`${cn};mark=none`, '::: art deco flower\n' + FLOWER_SVG + '\n:::\n\n> [!TIP|flower] 图文单元\n> 正文保留。')
+  check(`R38 ${cn} 现场角饰身份和避让仍生效`, deco.arts.length === 1 && deco.html.includes('@@ART0@@') && /(?:padding:0 18px (?:6\d|70)px|padding:17px 16px (?:6\d|70)px)/.test(deco.html), deco.html.match(/padding:[^;"]+/g)?.join(' | '))
+}
+check('R38 两种新气泡具有不同结构签名', r38Render('题签').html.includes('margin:-18px 0 15px') && !r38Render('题签').html.includes('padding:7px"><section') && r38Render('纸笺').html.includes('padding:7px"><section') && r38Render('纸笺').html.includes('border-bottom:1px solid'))
+check('R38 新版式与色板解耦，换色后结构相同', ['题签', '纸笺'].every(spec => {
+  const samples = ['校园', '森系', '赤陶'].map(theme => composeMarkdown(`[[theme:${theme}]]\n[[boxes:${spec};mark=none]]\n${r38Text}`.replace(/\\n/g, '\n'), { mode: 'text' }).html)
+  return new Set(samples.map(stripColor)).size === 1
+}))
+for (const preset of ['题签', '纸笺']) {
+  const local = r38Render(preset, '> [!TIP] 本地图文\n> 原文开始。\n>\n> ![保留原照片](local-image://r38-photo-original)\n>\n> 原文结束。')
+  check(`R38 ${preset} 本地图稳定身份进入图片清单并保留完整图文`, local.images.some(image => image.local === 'local-image://r38-photo-original' && image.alt === '保留原照片') && local.html.includes('原文开始。') && local.html.includes('原文结束。') && !local.issues.some(issue => issue.code === 'asset.local-image-unimported'))
+}
+check('R38 纸笺外框样式与换行样式由分号分隔', /word-break:break-word;border:1px solid/.test(r38Render('纸笺').html) && !r38Render('纸笺').html.includes('break-wordborder:'))
+check('R38 不认识的新骨架仍告警，不注入 CSS', r38Render('shape=tab;background=red').warnings.some(w => w.includes('background=red')) && !r38Render('shape=tab;background=red').html.includes('background:red'))
+
+// R39：三种完整纸面语言。行为、身份与兼容性可在这里验；视觉质量必须另行读图。
+const r39Presets = [['花笺', 'botanical'], ['票笺', 'ticket'], ['缎带', 'ribbon']]
+const r39Photo = 'local-image://r39-original-photo-unchanged'
+const r39Plain = '这是原文中的完整段落，时间为上午8点30分，联系电话010-55556666。'
+const r39Heading = '二、细致整理，形成可以持续追溯和查阅的完整记录'
+const r39Document = `[[banner:让每一个平常的校园日子被认真记住|完整保留原有副标题]]\n\n${r39Plain}\n\n## ${r39Heading}\n\n> [!NOTE] ${r38Title}\n> ${r38Body}\n>\n> ![现场记录原图](${r39Photo})\n>\n> ${r38Tail}\n\n---\n\n::: card 完整信息卡\n- ${r39Plain}\n:::\n\n::: frame\n- 完整图文结尾。\n:::`
+const r39Render = (spec, md = r39Document, mode = 'promo') => composeMarkdown(`[[theme:校园]]\n[[boxes:${spec}]]\n\n${md}`, { mode })
+const r39Drawings = html => [...html.matchAll(/<img src="(data:image\/svg\+xml;charset=UTF-8,[^"]+)" alt=""/g)].map(m => decodeURIComponent(m[1].split(',')[1]))
+const r39Flow = html => html.replace(/<span aria-hidden="true" style="[^"]*"><\/span>/g, '')
+for (const [cn, en] of r39Presets) {
+  const parsed = faceFromSpec(cn)
+  const result = r39Render(cn)
+  check(`R39 ${cn} 中英预置与 shape/ornament 中文轴均解析`, parsed.unknown.length === 0 && JSON.stringify(parsed.tokens) === JSON.stringify(faceFromSpec(en).tokens) && faceFromSpec(`shape=${cn};ornament=${cn}`).tokens.shape === en && faceFromSpec(`shape=${cn};ornament=${cn}`).tokens.ornament === en)
+  check(`R39 ${cn} 预置关闭语义标签和小角标`, parsed.tokens.label === 'none' && parsed.tokens.mark === 'none' && !/>提示<|>注意<|>重点</.test(result.html))
+  check(`R39 ${cn} 长标题与完整正文未被增删拆分`, result.html.includes(r38Title) && result.html.includes(r38Body) && result.html.includes(r38Tail) && result.plainText.includes(r39Heading) && result.html.includes(r39Plain))
+  check(`R39 ${cn} 图文顺序与本地原图身份保持`, result.html.indexOf(r38Body) < result.html.indexOf(r39Photo) && result.html.indexOf(r39Photo) < result.html.indexOf(r38Tail) && JSON.stringify(result.images) === JSON.stringify([{ local: r39Photo, alt: '现场记录原图' }]))
+  check(`R39 ${cn} 新装饰不进入素材生成或图片任务列表`, result.arts.length === 0 && !result.issues.some(issue => issue.code === 'photo.pending') && result.images.length === 1)
+  check(`R39 ${cn} 正文、气泡、信息卡均为 17px`, result.html.includes('margin:0 0 16px;font-size:17px') && result.html.includes('margin:0;font-size:17px;line-height:1.75') && result.html.includes('margin:0 0 8px;font-size:17px;line-height:1.75'))
+  check(`R39 ${cn} 已有中文章序不再叠加系统数字`, !/>0?1<\/span>/.test(result.html) && r35Style(result.html, 'h2', r39Heading).length > 0)
+  check(`R39 ${cn} 未编号章节仍只添加一次系统序号`, (r39Render(cn, '## 完整章节标题').html.match(/>01<\/span>/g) || []).length === 1)
+  check(`R39 ${cn} 新标题与内容容器无固定高度、裁切或绝对定位`, !/(?:overflow:hidden|text-overflow|line-clamp|position:absolute|(?:^|;)height:\d)/m.test(r39Flow(result.html)) && ![...result.html.matchAll(/<(?:section|h1|h2|p) style="([^"]*)"/g)].some(m => /(?:^|;)(?:height|max-height):/.test(m[1])))
+  const drawings = r39Drawings(result.html)
+  check(`R39 ${cn} 主标题、章节、纸面与分隔有可复用矢量装饰`, drawings.length >= 8 && new Set(drawings).size >= 3 && drawings.every(svg => svg.startsWith('<svg ') && /<path|<rect|<circle/.test(svg)))
+  check(`R39 ${cn} 输出与内置 SVG 无脚本、滤镜、渐变、外链或可见 SVG 字样`, checkHtml(result.html).ok && drawings.every(svg => !/<(?:text|script|image|filter|foreignObject|linearGradient|radialGradient)|(?:href|onload)=/.test(svg)) && !/@@ART|undefined|NaN|&lt;svg/.test(result.html))
+  check(`R39 ${cn} fill=none 能关闭所有内容浅底`, r38Fills(r39Render(`${cn};fill=none`).html).length === 0)
+  check(`R39 ${cn} 换底纸不改变作者文字投影`, projectionOf(result.authorUnits).text === projectionOf(r39Render(`${cn};fill=none`).authorUnits).text)
+  const shapeOnly = r39Render(`shape=${en};mark=none;label=none;deco=none`)
+  const noShape = r39Render('mark=none;label=none;deco=none')
+  check(`R39 ${cn} shape 独立选择不接管 h2 装饰`, r35Style(shapeOnly.html, 'h2', r39Heading) === r35Style(noShape.html, 'h2', r39Heading))
+  const externalDeco = r39Render(cn, `::: art deco flower\n${FLOWER_SVG}\n:::\n\n> [!TIP|flower] 原有角饰\n> ${r39Plain}`)
+  check(`R39 ${cn} 显式外来角饰保留且以自然流占位避让`, externalDeco.arts.length === 1 && externalDeco.html.includes('@@ART0@@') && !r39Flow(externalDeco.html).includes('position:absolute'))
+  writeFileSync(`${outDir}/r39-${en}.html`, '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0">' + result.html + '</body>')
+}
+check('R39 三种气泡骨架在去除 SVG 和颜色后仍然不同', new Set(r39Presets.map(([cn]) => stripColor(r39Render(cn, '> [!NOTE] 原文标题\n> 原文正文。').html.replace(/<img[^>]+>/g, '')))).size === 3)
+check('R39 三种装饰可独立应用到旧形状且不改原文', r39Presets.every(([, en]) => r39Render(`ornament=${en};shape=rail;label=none;mark=none`).html.includes(r38Body)))
+check('R39 内置矢量颜色参数不可注入 SVG', !decodeURIComponent(ornamentDataUrl('botanical', 'hero', '" onload="attack()', '#abcdef', '#123456')).includes('onload'))
+check('R39 三种新预置不改变旧极简显式默认', r39Render('frame=none;mark=none;deco=none').html === r39Render('frame=none;mark=none;deco=none;ornament=none;scale=standard;align=auto;shape=rail').html)
+const r39LegacyBody = '# 原始标题\n\n正文内容保持不变。\n\n## 第二章节\n\n> [!KEY] 重点标题\n> 气泡正文内容。\n\n---\n\n::: card 卡片标题\n- 卡片正文\n:::\n\n[[banner:横幅|副标题]]'
+// 下列 SHA-256 来自 R39 改动前 .local/runs/r39/before 的 R38 compose.ts，非当前实现的自证明。
+const r39LegacyHashes = [
+  ['', 'text', 'd50eef81681828e9c6679603842f84c7ede3583462ea4bb559dec57146ca6f1c'],
+  ['', 'promo', '455922294c3a3b80cab189139baf0737865b0915dbbae2af4622d60e06a7cd38'],
+  ['frame=none;mark=none;deco=none', 'text', 'b876334fc578dc595ffd5416574a8f1564da92cb7ea0c24aca9ffbd65498e0a9'],
+  ['frame=none;mark=none;deco=none', 'promo', '844afc9f00c68c5524f84cedd99bfeb9482d738caeb59d6357cfd149c6d3edb2'],
+  ['题签', 'text', 'a4d77f0b018e49eca6b86940b4b9594f1c15dd0c24fe37b18911404c03d70829'],
+  ['题签', 'promo', '307bd5f8cb8af575dcd624583c9e34612641ae752dde6837b9839bbcf0248a73'],
+  ['纸笺', 'text', '9b1cfe9bab03bd378829c877fb9002ccbb22ba9305d391f3ee64d631493a9c08'],
+  ['纸笺', 'promo', 'f06fc71b17b11092ca6f6845e0cc7a3b6bcab044e0e19d43d23e0b6c77089998'],
+  ['编辑感', 'text', 'd50eef81681828e9c6679603842f84c7ede3583462ea4bb559dec57146ca6f1c'],
+  ['编辑感', 'promo', '455922294c3a3b80cab189139baf0737865b0915dbbae2af4622d60e06a7cd38'],
+  ['亲和', 'text', '99dfaf7a5d3be79f14511f8076f3974e90773dbc1561e4346d38070f9a567efd'],
+  ['亲和', 'promo', '0762e7a2e64b8332d354edb20eee25ca58f4046b3e92ec3aa8ad2669373897f6'],
+  ['杂志', 'text', 'da5966124559728a31cbc8d1a3faf40929755827468826bb09926351f9e30a16'],
+  ['杂志', 'promo', '281e783dc5a226898be8919510060c83f50673641cd7cdcc1e2fe025334a0400'],
+  ['手账', 'text', '21a26aba21a4735fe16d92396eb61ede21489196e0ab9706f560a0388eb48f42'],
+  ['手账', 'promo', '4265cff0f01d428072ef1c290995108475c729249a9006eb6497fb421a38e47c'],
+  ['科技', 'text', '7811702ca9eaa20b8661294ddc6cf86eda66a84cddc077b15591de6787cb0b26'],
+  ['科技', 'promo', '960c69cba1d7b54f11202ae8bb1ebc5d69865e91407961b533662c90d0655431'],
+]
+for (const [spec, mode, expected] of r39LegacyHashes) {
+  const md = `[[theme:极简]]\n${spec ? `[[boxes:${spec}]]\n` : ''}${r39LegacyBody}`
+  check(`R39 ${spec || '旧默认'} ${mode} 与 R38 备份逐字兼容`, createHash('sha256').update(composeMarkdown(md, { mode }).html).digest('hex') === expected)
+}
+for (const [cn] of r39Presets) {
+  const decorated = r39Render(cn, `# 完整文章\n\n${FILLER}`)
+  check(`R39 ${cn} 原生装饰足以完成排版，不以旧配额触发额外素材请求`, !decorated.issues.some(issue => ['quality.no-art', 'quality.low-art', 'quality.photo-only', 'quality.low-structure'].includes(issue.code)) && fixableWarnings(decorated.warnings).length === 0)
+}
+const r39Large = r39Render('花笺', Array.from({ length: 10 }, (_, i) => `## 原有标题${i}\n\n> [!NOTE] 原有标题\n> ${r39Plain}`).join('\n\n'))
+check('R39 HTML 大体积提示保留未验证风险与编码证据，不断言发布会拒绝', r39Large.issues.some(issue => issue.code === 'limit.length-unverified' && issue.evidence?.includes('html ')) && r39Large.warnings.some(w => w.includes('含图片编码') && w.includes('尚未验证')) && !r39Large.warnings.some(w => w.includes('微信会拒绝保存')))
+check('R39 内置装饰的角色具有不同图形，不是同一花纹等比缩放', r39Presets.every(([, kind]) => new Set(['hero', 'section', 'paper', 'footer', 'divider'].map(role => ornamentDataUrl(kind, role, '#246b58', '#be9548', '#547f65'))).size === 5))
+check('R39 版式流式退回旧极简后不再继承 17px 正文或花边', r39Render('花笺', `${r39Plain}\n\n[[boxes:frame=none;mark=none;deco=none]]\n\n返回旧极简。`).html.includes('margin:0 0 16px;font-size:16px;line-height:1.75') && r39Render('花笺').html.includes('margin:0 0 16px;font-size:17px;line-height:1.75'))
+check('R39 花笺票笺背页独立露出 10px，绝对定位节点仅为空装饰而非内容', ['花笺', '票笺'].every(preset => {
+  const html = r39Render(preset).html
+  return html.includes('padding:0 10px 10px 0') && /<span aria-hidden="true" style="[^"]*left:10px;right:0;top:10px;bottom:0[^"]*"><\/span>/.test(html) && !r39Flow(html).includes('position:absolute')
+}))
+
+const r39WrapTitle = '时间、地点，和你要带来的东西'
+const r39WrapSub = '4月18日（星期六）14:00–17:00 · 南区共享草坪'
+const r39MarkBody = '> [!NOTE] 标记位置标题\n> 保持完整正文和图像身份。'
+for (const [cn, en] of r39Presets) {
+  const none = r39Render(`${cn};mark=none`, r39MarkBody)
+  const book = r39Render(`${cn};mark=书页`, r39MarkBody)
+  const sprout = r39Render(`${cn};mark=叶芽`, r39MarkBody)
+  check(`R39 ${cn} 显式书页和叶芽实际渲染且有别于 none`, new Set([none.html, book.html, sprout.html]).size === 3 && book.html.includes(markDataUrl('book', '#2f6fed')) && sprout.html.includes(markDataUrl('sprout', '#2f6fed')))
+  check(`R39 ${cn} 八个 markat 唯一出现且处于正确的题头或正文槽`, ['tl', 't', 'tr', 'l', 'r', 'bl', 'b', 'br'].every(at => {
+    const html = r39Render(`${cn};mark=书页;markat=${at}`, r39MarkBody).html
+    const marker = html.indexOf(`data-wx-mark-at="${at}"`), head = html.indexOf('标记位置标题'), body = html.indexOf('保持完整正文和图像身份。')
+    const correctOrder = en === 'ribbon' && at === 'tr' ? head < marker && marker < body : ['tl', 't', 'tr'].includes(at) ? marker < head : ['l', 'r'].includes(at) ? head < marker && marker < body : body < marker
+    const align = at === 't' || at === 'b' ? 'center' : ['tr', 'r', 'br'].includes(at) ? 'right' : 'left'
+    const aligned = en === 'ribbon' || html.includes(`data-wx-mark-at="${at}" style="margin:0 0 10px;text-align:${align}`)
+    return marker > 0 && correctOrder && aligned && (html.match(/data-wx-mark-at=/g) || []).length === 1 && !r39Flow(html).includes('position:absolute')
+  }))
+  check(`R39 ${cn} 默认与显式 none 不额外挂语义角标`, r39Render(cn, r39MarkBody).html === none.html && !none.html.includes('data-wx-mark-at=') && !r39Render(`shape=${en};label=none;deco=none`, r39MarkBody).html.includes('data-wx-mark-at='))
+  const unknownMark = r39Render(`${cn};mark=未登记角标`, r39MarkBody)
+  const unknownDeco = r39Render(cn, '> [!NOTE|未登记角饰] 原文标题\n> 原文正文。')
+  check(`R39 ${cn} 未登记的 mark 与角饰仍明确告警`, unknownMark.warnings.some(w => w.includes('mark=未登记角标')) && unknownMark.html === none.html && unknownDeco.warnings.some(w => w.includes('未登记角饰') && w.includes('未定义')))
+  const photoDeco = `::: art deco flower\n${FLOWER_SVG}\n:::\n\n> [!TIP|flower] 标记位置标题\n> 完整正文。\n>\n> ![原图](${r39Photo})`
+  const markedPhoto = r39Render(`${cn};mark=书页;markat=br`, photoDeco)
+  const barePhoto = r39Render(`${cn};mark=none`, photoDeco)
+  check(`R39 ${cn} 显式角标与外来角饰原图共存且作者投影不变`, markedPhoto.html.includes('@@ART0@@') && markedPhoto.arts.length === 1 && markedPhoto.html.includes(`src="${r39Photo}"`) && JSON.stringify(markedPhoto.images) === JSON.stringify(barePhoto.images) && projectionOf(markedPhoto.authorUnits).text === projectionOf(barePhoto.authorUnits).text)
+  const titleMd = `[[banner:春日交换会|${r39WrapSub}]]\n\n## ${r39WrapTitle}`
+  const wrapped = r39Render(cn, titleMd, 'text')
+  check(`R39 ${cn} 标题副信息的断行包装不增删文字或插入强制换行`, wrapped.plainText.includes(r39WrapSub) && wrapped.plainText.includes(r39WrapTitle) && projectionOf(wrapped.authorUnits).text.includes(r39WrapSub) && projectionOf(wrapped.authorUnits).text.includes(r39WrapTitle) && !/<br\s*\/?\s*>/.test(wrapped.html))
+  check(`R39 ${cn} 保护短地点与中文短尾并允许极窄屏组内退让`, /data-wx-title-unit="true"[^>]*> 南区共享草坪<\/span>/.test(wrapped.html) && /data-wx-title-unit="true"[^>]*>来的东西<\/span>/.test(wrapped.html) && wrapped.html.includes('text-wrap:balance') && wrapped.html.includes('max-width:100%;white-space:normal;overflow-wrap:anywhere') && !wrapped.html.includes('white-space:nowrap'))
+  const longTitle = '连续中文标题保持全部事实与先后关系'.repeat(8) + 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.repeat(5)
+  const longWrapped = r39Render(cn, `# ${longTitle}`, 'text')
+  check(`R39 ${cn} 超长混合标题不截断且保持可换行约束`, longWrapped.plainText === longTitle && projectionOf(longWrapped.authorUnits).text === longTitle && checkHtml(longWrapped.html).ok && !/line-clamp|text-overflow|white-space:nowrap/.test(longWrapped.html))
+  writeFileSync(`${outDir}/r39-${en}-title-mark.html`, '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0">' + wrapped.html + book.html + '</body>')
+}
+
+check('R39 标题副信息中的时间冒号与日期星期不会被当作任意短句分隔', r39Presets.every(([cn]) => {
+  const html = r39Render(cn, `[[banner:保留标题|${r39WrapSub}]]`).html
+  return /data-wx-title-unit="true"[^>]*>14:00–17:00<\/span>/.test(html) && /data-wx-title-unit="true"[^>]*>4月18日（星期六）<\/span>/.test(html)
+}))
 
 judge.finish({ label: 'PHOTO-PARSE' })

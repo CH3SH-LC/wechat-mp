@@ -1,8 +1,10 @@
 mod assets;
 mod cancel;
 mod chat;
+mod desktop_runtime;
 mod documents;
 mod export;
+mod local_images;
 mod manual;
 mod publish;
 mod sessions;
@@ -11,18 +13,33 @@ mod trace;
 
 use assets::{add_asset, delete_asset, get_asset, list_assets, list_assets_report, update_asset};
 use cancel::{cancel_reset, cancel_run, CancelState};
-use chat::{chat_stream, gen_svg, model_lock_state, prep_turn, refine_brief, review_assets};
+use chat::{chat_stream, editorial_review, gen_svg, model_lock_state, prep_turn, refine_brief, review_assets};
+use desktop_runtime::desktop_frontend_ready;
 use documents::{
     commit_document_revision, delete_document, list_document_revisions, list_documents,
     open_document, open_document_revision, save_document,
 };
 use export::{export_html, export_images};
+use local_images::{get_local_image, import_local_image};
 use manual::open_manual;
 use publish::{publish_draft, WxTokenState};
-use sessions::{create_session, delete_session, list_sessions, open_session, rename_session, save_session};
+use sessions::{
+    create_session, delete_session, list_sessions, open_session, rename_session, save_session,
+};
 use settings::{load_settings, save_settings};
-use trace::{trace_start, trace_write};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use trace::{trace_start, trace_write};
+
+fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+        .title("智序 · 公众号推文助手")
+        .inner_size(1380.0, 880.0)
+        .min_inner_size(1000.0, 640.0)
+        .additional_browser_args(&browser_args())
+        .build()?;
+    desktop_runtime::attach(&window)?;
+    Ok(())
+}
 
 /// 主窗口的 WebView2 附加参数。
 ///
@@ -66,20 +83,18 @@ pub fn run() {
             app.manage(WxTokenState::default());
             // 运行取消表（阶段 4）：前端"停止"按钮的后端句柄
             app.manage(CancelState::default());
+            app.manage(desktop_runtime::DesktopRuntime::default());
             // 主窗口在这里建（`tauri.conf.json` 的 `app.windows` 已置空）。
             // 搬到代码里的唯一理由是：只有 builder 才能把 WebView2 的附加参数交给 wry
             // （见 `browser_args` 的说明）。标题、尺寸、最小尺寸与配置里逐字一致，
             // label 仍用 "main"（配置里的默认 label），因此对前端与既有命令无任何影响。
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("智序 · 公众号推文助手")
-                .inner_size(1380.0, 880.0)
-                .min_inner_size(1000.0, 640.0)
-                .additional_browser_args(&browser_args())
-                .build()?;
+            create_main_window(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_frontend_ready,
             chat_stream,
+            editorial_review,
             gen_svg,
             prep_turn,
             refine_brief,
@@ -91,6 +106,8 @@ pub fn run() {
             get_asset,
             update_asset,
             delete_asset,
+            import_local_image,
+            get_local_image,
             export_html,
             export_images,
             open_manual,
@@ -116,6 +133,7 @@ pub fn run() {
             cancel_run,
             cancel_reset
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(desktop_runtime::on_run_event);
 }

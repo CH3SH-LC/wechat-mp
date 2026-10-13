@@ -63,6 +63,8 @@ export default function AssetWorkshop() {
   // D5 单篇重渲染的忙碌态（仅展示，不参与任何流程判断）：记录正在更新的文档 id
   const [busyRefDoc, setBusyRefDoc] = useState<string | null>(null)
   const refUpdateBusy = useRef<string | null>(null)
+  const detailSequence = useRef(0)
+  const writing = useRef(false)
 
   const flash = (text: string, ms = 6000) => {
     if (msgTimer.current) window.clearTimeout(msgTimer.current)
@@ -99,8 +101,11 @@ export default function AssetWorkshop() {
   })
 
   const openDetail = async (id: string) => {
+    if (writing.current || busyEdit || refUpdateBusy.current) return
+    const seq = ++detailSequence.current
     // 单体读取：区分"确实不存在"与"存在但读不出来"——两者文案不同，不能都显示成空详情
     const r = await getAssetSafe(id)
+    if (seq !== detailSequence.current) return
     setRecord(r.ok ? r.record : null)
     if (!r.ok) flash(r.notFound ? '素材不存在，可能已被删除' : `素材读取失败：${r.error}`, 6000)
     setRefDocs([])
@@ -114,8 +119,8 @@ export default function AssetWorkshop() {
     if (making || !makeDesc.trim()) return
     setMaking(true)
     flash('素材智能体正在绘制…')
+    try {
     const r = await makeWorkshopAsset(activeCat, makeDesc)
-    setMaking(false)
     if (r.ok && r.meta) {
       setMakeDesc('')
       await refresh()
@@ -124,11 +129,17 @@ export default function AssetWorkshop() {
     } else {
       flash(r.msg, 8000)
     }
+    } catch (e) {
+      flash(`制作失败：${String(e)}`, 8000)
+    } finally { setMaking(false) }
   }
 
   const doSaveMeta = async () => {
-    if (!record) return
+    if (!record || writing.current || busyEdit || refUpdateBusy.current) return
+    ++detailSequence.current
+    writing.current = true
     setBusySave(true)
+    try {
     const tags = record.meta.tags
     const r = await updateAsset(
       record.meta.id,
@@ -140,7 +151,6 @@ export default function AssetWorkshop() {
       },
       undefined,
     )
-    setBusySave(false)
     if (r) {
       await refresh()
       setRecord({ meta: r.meta, svg: record.svg })
@@ -148,14 +158,17 @@ export default function AssetWorkshop() {
     } else {
       flash('保存失败', 6000)
     }
+    } finally { writing.current = false; setBusySave(false) }
   }
 
   // 用一段新 SVG 入库新版本（version+1）并做影响扫描——「替换源」与「连续修改」共用
   const applySvg = async (svg: string, what: string) => {
-    if (!record) return
+    if (!record || writing.current || busyEdit || refUpdateBusy.current) return false
+    ++detailSequence.current
+    writing.current = true
     setBusySave(true)
+    try {
     const r = await updateAsset(record.meta.id, {}, svg)
-    setBusySave(false)
     if (r) {
       await refresh()
       const fresh = await getAsset(record.meta.id)
@@ -168,9 +181,12 @@ export default function AssetWorkshop() {
       } else {
         flash(`${what}（version ${r.meta.version}），暂无文档引用${scan}`)
       }
+      return true
     } else {
       flash('入库失败', 6000)
+      return false
     }
+    } finally { writing.current = false; setBusySave(false) }
   }
 
   const doReplaceSvg = async () => {
@@ -181,7 +197,8 @@ export default function AssetWorkshop() {
   // P2：把"当前素材 + 用户上传的参考图"一起交给素材智能体，生成改版候选（先看前后对比，再决定是否采纳）。
   // 当前素材由 webview 栅格化成 PNG 参考图（Rust 不做 SVG 光栅化），因此模型能真的"看着它改"。
   const doEdit = async () => {
-    if (!record || busyEdit || !editDesc.trim()) return
+    if (!record || busyEdit || writing.current || refUpdateBusy.current || !editDesc.trim()) return
+    ++detailSequence.current
     setBusyEdit(true)
     setCandidate(null)
     try {
@@ -193,6 +210,8 @@ export default function AssetWorkshop() {
       const g = await generateAssetSvg(record.meta.category, brief, undefined, { refImages: refs })
       if (g.ok && g.svg) setCandidate(g.svg)
       else flash(g.msg, 8000)
+    } catch (e) {
+      flash(`修改失败：${String(e)}`, 8000)
     } finally {
       setBusyEdit(false)
     }
@@ -200,7 +219,7 @@ export default function AssetWorkshop() {
 
   const acceptCandidate = async () => {
     if (!candidate) return
-    await applySvg(candidate, '已采纳新版本')
+    if (!(await applySvg(candidate, '已采纳新版本'))) return
     setCandidate(null)
     setEditDesc('')
     setEditRefs([])
@@ -225,7 +244,8 @@ export default function AssetWorkshop() {
   // D5：被引用文档逐篇"用新版素材重渲染"（重跑该文档的素材解析 + compose + 素材 PNG 渲染，就地刷新）
   // 可能耗时（读素材 + 栅格化），故带忙碌态：进行中该按钮 disabled，且入口守卫避免重复触发。
   const rerenderDocWithCurrentAssets = async (docId: string) => {
-    if (refUpdateBusy.current) return
+    if (refUpdateBusy.current || writing.current || busyEdit) return
+    ++detailSequence.current
     refUpdateBusy.current = docId
     setBusyRefDoc(docId)
     try {
@@ -281,6 +301,7 @@ export default function AssetWorkshop() {
         hasAcceptedHistory: Boolean(doc.acceptedRevisionId ?? doc.revisionId),
       })
       const saved = await saveDocument(docId, {
+        baseRevisionId: doc.revisionId ?? undefined,
         title: doc.title,
         source: matured,
         html,
@@ -294,7 +315,7 @@ export default function AssetWorkshop() {
       // saveDocument 内部会吞掉 Tauri 异常并返回 null——**必须查返回值**，
       // 否则保存失败也会说"已重渲染"，给用户一个假成功（比不提示更糟）。
       if (!saved) {
-        flash('重渲染完成但保存失败，文档未更新，请稍后重试', 8000)
+        flash('重渲染未保存：文档可能已被修改或删除，请重新打开后重试。', 8000)
         return
       }
       if (verdict.ok) {
@@ -313,6 +334,12 @@ export default function AssetWorkshop() {
   }
 
   const doDelete = async (id: string) => {
+    if (writing.current || busyEdit || refUpdateBusy.current || making) return
+    if (!window.confirm('删除这个素材？已保存文档的素材快照会保留，但后续无法再从素材库复用。')) return
+    writing.current = true
+    setBusySave(true)
+    ++detailSequence.current
+    try {
     // deleteAsset 返回是否真的删掉：失败时绝不清空详情、也不说"已删除"
     const ok = await deleteAsset(id)
     if (!ok) {
@@ -325,6 +352,7 @@ export default function AssetWorkshop() {
     }
     await refresh()
     flash('素材已删除')
+    } finally { writing.current = false; setBusySave(false) }
   }
 
   const patchMeta = (p: Partial<AssetMetaL>) => {
@@ -348,6 +376,7 @@ export default function AssetWorkshop() {
                 key={c.key}
                 className={`ws-cat ${c.key === activeCat ? 'ws-cat-active' : ''}`}
                 data-cat={c.key}
+                aria-pressed={c.key === activeCat}
                 title={c.hint}
                 onClick={() => {
                   setActiveCat(c.key)
@@ -363,8 +392,10 @@ export default function AssetWorkshop() {
             <textarea
               className="ws-desc"
               rows={3}
-              placeholder="用自然语言描述素材长什么样、适合放哪：对象/形状/位置/配色都写清楚，例如：右下角一朵小花的气泡角饰，浅暖色五瓣小花、花心一点金黄，用于 KEY 气泡右下角…"
+              placeholder="描述主体、配色和使用位置，例如：米白与深绿色的书页角饰，放在气泡右下角。"
               value={makeDesc}
+              disabled={making}
+              aria-label="素材描述"
               onChange={(e) => setMakeDesc(e.target.value)}
             />
             <div className="ws-make-row">
@@ -376,6 +407,7 @@ export default function AssetWorkshop() {
           <div className="ws-search">
             <input
               className="ws-q"
+              aria-label="搜索当前分类素材"
               placeholder="在此分类内检索：按描述/名称/标签模糊匹配…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -398,24 +430,24 @@ export default function AssetWorkshop() {
                 有 {unreadable.length} 个素材无法读取
               </div>
             )}
-            {visible.length === 0 && !listError && <div className="ws-empty">该分类还没有素材。</div>}
+            {visible.length === 0 && !listError && <div className="ws-empty">{q.trim() ? '没有匹配的素材，换个关键词试试。' : '该分类还没有素材。'}</div>}
             {visible.map((m) => (
               <div
                 key={m.id}
                 className={`ws-row ${rec?.meta.id === m.id ? 'ws-row-active' : ''}`}
                 data-id={m.id}
-                onClick={() => void openDetail(m.id)}
               >
-                <div className="ws-row-main">
+                <button className="ws-row-main ws-open" disabled={busySave || busyEdit || !!busyRefDoc} onClick={() => void openDetail(m.id)} aria-pressed={rec?.meta.id === m.id}>
                   <div className="ws-row-title">{m.title || m.name}</div>
                   <div className="ws-row-desc">{m.desc}</div>
                   <div className="ws-row-meta">
                     {m.name} · v{m.version} · 入库 {m.createdAt.slice(5, 16).replace('T', ' ')}
                   </div>
-                </div>
+                </button>
                 <button
                   className="mini mini-danger ws-del"
                   title="删除此素材"
+                  disabled={busySave || busyEdit || !!busyRefDoc || making}
                   onClick={(e) => {
                     e.stopPropagation()
                     void doDelete(m.id)
@@ -430,12 +462,12 @@ export default function AssetWorkshop() {
 
         <div className="ws-right">
           {!rec ? (
-            <div className="ws-empty-right" />
+            <div className="ws-empty-right"><span className="empty-symbol" aria-hidden="true">素</span><p>选择一个素材，查看详情或继续修改。</p></div>
           ) : (
-            <div className="ws-detail">
+            <fieldset className="ws-detail" disabled={busySave || busyEdit || !!busyRefDoc}>
               <div className="ws-detail-head">
                 <span className="ws-ver">素材详情 · v{rec.meta.version}</span>
-                <span className="ws-ver-tag">{categoryLabel(rec.meta.category)} · usage={rec.meta.usage} · {rec.meta.origin === 'workshop' ? '工坊制作' : '推文现场补做'}</span>
+                <span className="ws-ver-tag">{categoryLabel(rec.meta.category)} · {rec.meta.origin === 'workshop' ? '工坊制作' : '推文现场补做'}</span>
               </div>
               <div className="ws-preview">
                 <img src={svgPreviewUri(rec.svg)} alt="素材预览" />
@@ -553,11 +585,11 @@ export default function AssetWorkshop() {
                   onChange={(e) => setRecord({ meta: rec.meta, svg: e.target.value })}
                 />
               </label>
-            </div>
+            </fieldset>
           )}
         </div>
       </div>
-      {msg && <div className="ws-msg">{msg}</div>}
+      {msg && <div className="ws-msg" role="status">{msg}</div>}
     </div>
   )
 }

@@ -34,38 +34,22 @@ export function ensureKnowledgeLoaded(): Promise<KnowledgeEntry[]> {
   return cache
 }
 
-// 主题词 → 命中文件（精确映射，按语义）
-const TOPIC_MAP: Record<string, string[]> = {
-  标题: ['copy-title'],
-  摘要: ['cover-summary'],
-  开头: ['copy-open'],
-  结尾: ['copy-end'],
-  金句: ['copy-quote'],
-  小标题: ['copy-subheading', 'module-subheading'],
-  文案: ['copy-style-basics', 'copy-points'],
-  干货: ['type-tutorial', 'copy-tpl-tutorial'],
-  资讯: ['type-news', 'copy-tpl-news'],
-  新闻: ['type-news'],
-  情感: ['type-emotion', 'copy-tpl-emotion'],
-  软文: ['type-soft', 'copy-tpl-soft'],
-  促销: ['type-promo', 'copy-tpl-promo'],
-  活动: ['type-promo'],
-  品牌: ['type-brand-story', 'copy-tpl-brand'],
-  人物: ['type-person-story', 'copy-tpl-person'],
-  盘点: ['type-list'],
-  清单: ['type-list'],
-  科普: ['type-science'],
-  测评: ['type-science'],
-  公告: ['type-announcement'],
-  通知: ['type-announcement'],
-  连载: ['type-serial', 'module-serial'],
-  校园: ['style-campus', 'style-variant-sport'],
+// 明确风格名先于宽泛场景词检索，避免六条结果被“活动/校园”等挤满。
+// 这里只为模型提供知识候选，不决定文章风格或对话流程。
+const STYLE_QUERY_MAP: Record<string, string[]> = {
+  极简: ['style-minimal', 'style-guide-choose'],
+  简约: ['style-minimal', 'style-guide-choose'],
+  素净: ['style-minimal', 'style-guide-choose'],
+  少装饰: ['style-minimal', 'style-guide-choose'],
+  孟菲斯: ['style-variant-memphis'],
+  波普: ['style-variant-pop'],
+  运动: ['style-variant-sport'],
+  校园: ['style-campus'],
   科技: ['style-tech'],
   国潮: ['style-guochao'],
   商务: ['style-business'],
   日系: ['style-japanese'],
   手账: ['style-handbook'],
-  极简: ['style-minimal'],
   插画: ['style-illustration'],
   港风: ['style-hk-retro'],
   杂志: ['style-magazine'],
@@ -77,9 +61,65 @@ const TOPIC_MAP: Record<string, string[]> = {
   美式: ['style-american-retro'],
   画廊: ['style-gallery'],
   敦煌: ['style-variant-dunhuang'],
-  孟菲斯: ['style-variant-memphis'],
-  波普: ['style-variant-pop'],
-  运动: ['style-variant-sport'],
+}
+
+// 主题词 → 命中文件（精确映射，按语义）
+const TOPIC_MAP: Record<string, string[]> = {
+  更花: ['module-bubble', 'style-campus', 'style-guide-choose', 'module-heading', 'module-divider-page'],
+  精致: ['module-bubble', 'style-campus', 'style-guide-choose', 'module-heading', 'module-divider-page'],
+  花笺: ['module-bubble', 'module-heading', 'module-divider-page', 'style-forest'],
+  票笺: ['module-bubble', 'module-heading', 'module-divider-page', 'style-campus'],
+  缎带: ['module-bubble', 'module-heading', 'module-divider-page', 'style-campus'],
+  花哨: ['style-guide-choose', 'style-variant-memphis', 'style-variant-pop', 'style-campus'],
+  明丽: ['style-guide-choose', 'style-campus', 'style-variant-memphis', 'style-variant-pop'],
+  明亮: ['style-guide-choose', 'style-campus', 'style-variant-memphis'],
+  鲜亮: ['style-guide-choose', 'style-campus', 'style-variant-memphis'],
+  活力: ['style-guide-choose', 'style-variant-sport', 'style-campus'],
+  活泼: ['style-guide-choose', 'style-campus', 'style-variant-memphis'],
+  热闹: ['style-guide-choose', 'style-variant-pop', 'style-campus'],
+  撞色: ['style-guide-choose', 'style-variant-memphis', 'style-variant-pop'],
+  装饰: ['style-guide-choose', 'style-variant-memphis', 'style-variant-pop'],
+  校园: ['writing-campus'],
+  大学生: ['writing-campus', 'style-campus', 'style-guide-choose'],
+  社团: ['writing-campus', 'style-campus', 'style-guide-choose'],
+  招新: ['writing-campus', 'style-campus', 'style-variant-memphis'],
+  迎新: ['writing-campus', 'style-campus', 'style-variant-memphis'],
+  音乐节: ['writing-campus', 'style-variant-pop', 'style-campus'],
+  市集: ['writing-campus', 'style-variant-memphis', 'style-campus'],
+  运动会: ['writing-campus', 'style-variant-sport', 'style-campus'],
+  标题: ['writing-purpose', 'writing-structure'],
+  摘要: ['writing-purpose'],
+  开头: ['writing-purpose', 'writing-structure'],
+  结尾: ['writing-structure', 'writing-review'],
+  金句: ['writing-purpose', 'writing-review'],
+  小标题: ['writing-structure', 'module-subheading'],
+  文案: ['writing-purpose', 'writing-language', 'writing-structure'],
+  写作: ['writing-purpose', 'writing-language', 'writing-structure'],
+  语言: ['writing-language', 'writing-review'],
+  连贯: ['writing-language', 'writing-structure'],
+  碎句: ['writing-language'],
+  润色: ['writing-language', 'writing-review'],
+  审稿: ['writing-review', 'writing-language'],
+  干货: ['writing-explain'],
+  教程: ['writing-explain'],
+  资讯: ['writing-campus', 'writing-structure'],
+  新闻: ['writing-campus', 'writing-structure'],
+  情感: ['writing-story'],
+  软文: ['writing-product'],
+  促销: ['writing-product'],
+  活动: ['writing-campus'],
+  品牌: ['writing-product', 'writing-story'],
+  产品: ['writing-product'],
+  自我介绍: ['writing-product', 'writing-purpose'],
+  人物: ['writing-story'],
+  故事: ['writing-story'],
+  盘点: ['writing-structure', 'writing-explain'],
+  清单: ['writing-structure', 'writing-explain'],
+  科普: ['writing-explain'],
+  测评: ['writing-explain'],
+  公告: ['writing-campus'],
+  通知: ['writing-campus'],
+  连载: ['writing-story', 'module-serial'],
   气泡: ['module-bubble'],
   卡片: ['module-card', 'module-price'],
   步骤: ['module-steps'],
@@ -109,7 +149,7 @@ const TOPIC_MAP: Record<string, string[]> = {
   福利: ['module-gift'],
   封面: ['cover-spec', 'cover-text', 'cover-firstscreen'],
   首屏: ['cover-firstscreen'],
-  摘要写法: ['cover-summary'],
+  摘要写法: ['writing-purpose'],
   合规: ['comp-banned'],
   违禁词: ['comp-banned'],
   广告法: ['comp-banned'],
@@ -173,8 +213,8 @@ function shortHead(e: KnowledgeEntry, max = 18): string {
 // 子方向展示优先级（注册表按此排序，保证核心创作类别不被截断在末尾）
 const REGISTRY_GROUP_ORDER = [
   '排版引擎', // 第 29 轮：本地 compose 引擎协议（v2 语法/素材占位/风格声明）——创作必读，置顶防截断
-  '文本/内容类型',
-  '文本/文案',
+  '文本/写作',
+  '产品',
   '文本/合规',
   '视觉/风格',
   '视觉/模块',
@@ -264,7 +304,7 @@ function findEntry(entries: KnowledgeEntry[], raw: string): KnowledgeEntry | nul
 
 /**
  * 第 29 轮：本地排版引擎协议全文（engine-write-protocol）——compose 正确性的确定性来源。
- * 创作撰写阶段若 digest 未含该协议（如 prep 未取用/降级），由 App 强制附加进上下文，不依赖模型自觉 load。
+ * prep 与撰写阶段直接附加这份可信原文，不以摘要中出现文件名作为已完整取用的证明。
  */
 export async function loadEngineProtocol(): Promise<string | null> {
   const entries = await ensureKnowledgeLoaded()
@@ -273,7 +313,7 @@ export async function loadEngineProtocol(): Promise<string | null> {
 }
 
 /**
- * 本地执行知识工具：load_knowledge(name) → 返回点文件全文（截 6000 字符）；
+ * 本地执行知识工具：load_knowledge(name) → 权威引擎协议全文；普通点文件截 6000 字符；
  * search_knowledge(query) → 主题词/二元组近似返回 ≤6 个匹配文件名。执行不抛错（返回提示串）。
  */
 export async function runKnowledgeTool(call: KnowledgeToolCall): Promise<string> {
@@ -286,7 +326,9 @@ export async function runKnowledgeTool(call: KnowledgeToolCall): Promise<string>
       if (!e) {
         return `未找到知识文件「${name}」。可在注册表查看点文件名，或改用 search_knowledge 检索。`
       }
-      const body = e.text.length > 6000 ? e.text.slice(0, 6000) + '\n…（节选）' : e.text
+      const body = e.name !== 'engine-write-protocol' && e.text.length > 6000
+        ? e.text.slice(0, 6000) + '\n…（节选）'
+        : e.text
       return `# ${e.name}（${e.dir}）\n${body}`
     }
     if (call.name === 'search_knowledge') {
@@ -294,7 +336,10 @@ export async function runKnowledgeTool(call: KnowledgeToolCall): Promise<string>
       if (!q) return 'search_knowledge 缺少参数 query（检索主题，如 促销活动）。'
       const byName = new Map(entries.map((en) => [en.name, en]))
       const picked = new Set<string>()
-      // 1) 主题词精确映射
+      // 1) 明确风格偏好先取知识，再补充自然描述与主题词。
+      for (const [word, names] of Object.entries(STYLE_QUERY_MAP)) {
+        if (q.includes(word)) for (const n of names) picked.add(n)
+      }
       for (const [word, names] of Object.entries(TOPIC_MAP)) {
         if (q.includes(word)) for (const n of names) picked.add(n)
       }

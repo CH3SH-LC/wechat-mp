@@ -1,10 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "智序",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.ch3sh.wechat-mp-desktop",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm dev:assets",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
@@ -18,6 +18,18 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "shortDescription": "智序 · 公众号推文助手",
+    "longDescription": "通过自然对话创作、排版与修改公众号推文，支持本地保存、手机预览、原图导入与图片导出。",
+    "homepage": "https://github.com/CH3SH-LC/wechat-mp",
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false,
+        "installMode": "currentUser"
+      }
+    },
     "resources": {
       "resources/使用手册.html": "使用手册.html"
     },

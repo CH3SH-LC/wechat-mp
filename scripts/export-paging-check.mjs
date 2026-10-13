@@ -78,8 +78,7 @@ function resolveChromiumExe() {
     const t = isAbsolute(env) ? env : resolve(process.cwd(), env)
     return existsSync(t) ? t : null
   }
-  const hard = 'C:/Users/Lenovo/AppData/Local/ms-playwright/chromium-1234/chrome-win64/chrome.exe'
-  return existsSync(hard) ? hard : null
+  return null
 }
 
 // ── 夹具冻结核对（只读；sha256 写进观测，便于事后确认跑的是哪一版夹具）────────────────

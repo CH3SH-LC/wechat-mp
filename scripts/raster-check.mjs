@@ -20,11 +20,11 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { createJudge, guardCrashes, parseRunnerArgs, resolveOutDir } from './lib/run-result.mjs'
 
 const require = createRequire(import.meta.url)
-// minChecks：2026-10-01 实测 8 条（固定 6 个样例派生，条数稳定；静默少跑一条就变红）
-const judge = createJudge({ script: 'raster-check', outDir: resolveOutDir('raster-check'), minChecks: 8 })
+// minChecks：原有栅格校准 8 条 + R31 DOM 尺寸 9 条 + R32 XHTML 导出 10 条。
+const judge = createJudge({ script: 'raster-check', outDir: resolveOutDir('raster-check'), minChecks: 27 })
 guardCrashes(judge)
 
-/** playwright 模块：require('playwright') → VERIFY_PLAYWRIGHT → 作者机器上的历史绝对路径；都不行 → BLOCKED */
+/** playwright 模块：本机安装或 VERIFY_PLAYWRIGHT；不可用则明确 BLOCKED。 */
 function resolvePlaywright() {
   const tried = []
   try {
@@ -43,17 +43,11 @@ function resolvePlaywright() {
   } else {
     tried.push('VERIFY_PLAYWRIGHT → 未设置')
   }
-  const hard = 'D:/deepseek-harness/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright'
-  try {
-    return require(hard)
-  } catch (e) {
-    tried.push(`${hard} → ${String(e.message || e).split('\n')[0]}`)
-  }
   judge.block(`解析不到 playwright 模块。已尝试：\n  - ${tried.join('\n  - ')}`)
   judge.finish({ exitCode: 2 })
   process.exit(2)
 }
-/** chromium 可执行文件：VERIFY_CHROMIUM 优先；没设就用历史上能跑的那一份；都不存在则交给 playwright 自解析 */
+/** chromium 可执行文件：VERIFY_CHROMIUM 优先，否则交给 Playwright 解析。 */
 function resolveChromiumExe() {
   const env = process.env.VERIFY_CHROMIUM
   if (env) {
@@ -65,8 +59,7 @@ function resolveChromiumExe() {
     }
     return target
   }
-  const hard = 'C:/Users/Lenovo/AppData/Local/ms-playwright/chromium-1234/chrome-win64/chrome.exe'
-  return existsSync(hard) ? hard : null
+  return null
 }
 const { chromium } = resolvePlaywright()
 const chromiumExe = resolveChromiumExe()
@@ -179,6 +172,152 @@ try {
     check('按真实尺寸（60px）与按 256px 的度量确实不同', at60.subjectPx < at256.subjectPx, `60px→${at60.subjectPx.toFixed(1)}｜256px→${at256.subjectPx.toFixed(1)}`)
     check('主体像素随显示宽度等比缩放', Math.abs(at256.subjectPx / at60.subjectPx - 256 / 60) < 0.2, `ratio=${(at256.subjectPx / at60.subjectPx).toFixed(2)}`)
   }
+
+  // R31：正文插画与角饰不是同一个尺寸。走真实 compose → PNG 占位替换 → DOM，
+  // 在独立 iframe 内测量，既不继承工作台 CSS，也不改写生产输出的图片样式。
+  // bud.svg 是现有 300×200 非正方形合法夹具，同时用于 inline 与 TIP deco：
+  // 固定高度拉伸、全局把所有图放大，以及旧 179px 上限都能被下面的断言抓到。
+  console.log('\n[正文插画与角饰的真实 DOM 尺寸]')
+  const layoutProbe = await page.evaluate(async (svg) => {
+    const { composeMarkdown } = await import('/src/lib/compose.ts')
+    const { renderArtPlaceholders } = await import('/src/lib/artRender.ts')
+    const source = [
+      '[[boxes:radius=0;frame=line;shape=rail;mark=none]]',
+      '# 插画尺寸回归',
+      '正文插画用于解释内容，角饰只提示重点。',
+      '::: art inline R31正文插画', svg, ':::',
+      '::: art deco r31deco', svg, ':::',
+      '> [!TIP|r31deco] 检查两种用途\n> 正文插画随阅读宽度调整，角饰保持小尺寸。',
+    ].join('\n\n')
+    const composed = composeMarkdown(source, { mode: 'text' })
+    const rendered = await renderArtPlaceholders(composed.html, composed.arts)
+    const viewBox = /viewBox="\s*[\d.\-]+\s+[\d.\-]+\s+([\d.\-]+)\s+([\d.\-]+)"/.exec(svg)
+    if (!viewBox) throw new Error('R31 fixture has no viewBox')
+    const expectedRatio = Number(viewBox[1]) / Number(viewBox[2])
+    const frame = document.createElement('iframe')
+    frame.style.cssText = 'position:absolute;left:0;top:0;width:375px;height:1200px;border:0;display:block'
+    try {
+      await new Promise((done, fail) => {
+        const timer = setTimeout(() => fail(new Error('R31 layout iframe load timeout')), 5000)
+        frame.onload = () => { clearTimeout(timer); done() }
+        frame.onerror = () => { clearTimeout(timer); fail(new Error('R31 layout iframe failed')) }
+        frame.srcdoc = '<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;padding:0}</style></head><body>' + rendered + '</body></html>'
+        document.body.appendChild(frame)
+      })
+      const doc = frame.contentDocument
+      const win = frame.contentWindow
+      if (!doc || !win) throw new Error('R31 layout iframe document unavailable')
+      const images = Array.from(doc.images)
+      await Promise.all(images.map((img) => img.decode()))
+      const article = doc.body.firstElementChild
+      const inline = doc.querySelector('img[alt="R31正文插画"]')
+      const deco = doc.querySelector('img[alt=""]')
+      if (!article || !inline || !deco) throw new Error('R31 production output is missing article, inline image, or TIP deco')
+      const dimensions = []
+      const measureImage = (img) => {
+        const rect = img.getBoundingClientRect()
+        return { width: rect.width, height: rect.height, left: rect.left, right: rect.right, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight }
+      }
+      for (const viewportWidth of [375, 320]) {
+        frame.style.width = viewportWidth + 'px'
+        await new Promise((done) => win.requestAnimationFrame(() => win.requestAnimationFrame(done)))
+        const rect = article.getBoundingClientRect()
+        const style = win.getComputedStyle(article)
+        const contentLeft = rect.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft)
+        const contentRight = rect.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight)
+        dimensions.push({
+          viewportWidth, articleWidth: rect.width, contentWidth: contentRight - contentLeft,
+          contentLeft, contentRight, scrollWidth: doc.documentElement.scrollWidth,
+          inline: measureImage(inline), deco: measureImage(deco),
+        })
+      }
+      return {
+        expectedRatio, artCount: composed.arts.length, rejectedArts: composed.rejectedArts.length,
+        imageCount: images.length, loaded: images.every((img) => img.complete && img.naturalWidth > 0),
+        unresolved: /@@ART\d+@@/.test(rendered), dimensions,
+      }
+    } finally {
+      frame.remove()
+    }
+  }, readFileSync(join(fixtureDir, 'bud.svg'), 'utf8'))
+  judge.observe('R31 compose→renderArtPlaceholders→DOM 实测', JSON.stringify(layoutProbe))
+  check('生产链保留并加载正文插画与 TIP 角饰两张图',
+    layoutProbe.artCount === 2 && layoutProbe.rejectedArts === 0 && layoutProbe.imageCount === 2 && layoutProbe.loaded && !layoutProbe.unresolved)
+  const closeTo = (actual, expected) => Math.abs(actual - expected) <= 0.5
+  for (const row of layoutProbe.dimensions) {
+    const expectedWidth = row.viewportWidth === 375 ? 300 : 288
+    const insideContent = row.inline.left >= row.contentLeft - 0.5 && row.inline.right <= row.contentRight + 0.5
+    check(`${row.viewportWidth}px 文章宽度与正文内容区符合实际容器`,
+      closeTo(row.articleWidth, row.viewportWidth) && closeTo(row.contentWidth, row.viewportWidth - 32),
+      `文章 ${row.articleWidth}px，内容区 ${row.contentWidth}px`)
+    check(`${row.viewportWidth}px 下正文插画显示 ${expectedWidth}px 且无横向溢出`,
+      closeTo(row.inline.width, expectedWidth) && insideContent && row.scrollWidth <= row.viewportWidth,
+      `插画 ${row.inline.width}×${row.inline.height}px，页面 scrollWidth=${row.scrollWidth}px`)
+    check(`${row.viewportWidth}px 下正文插画保持原始宽高比`,
+      Math.abs(row.inline.width / row.inline.height - layoutProbe.expectedRatio) < 0.01 &&
+        Math.abs(row.inline.naturalWidth / row.inline.naturalHeight - layoutProbe.expectedRatio) < 0.01,
+      `显示比例 ${(row.inline.width / row.inline.height).toFixed(3)}，原始比例 ${layoutProbe.expectedRatio.toFixed(3)}`)
+    check(`${row.viewportWidth}px 下 TIP 角饰仍为 60px 且不拉伸`,
+      closeTo(row.deco.width, 60) && Math.abs(row.deco.width / row.deco.height - layoutProbe.expectedRatio) < 0.01,
+      `角饰 ${row.deco.width}×${row.deco.height}px`)
+  }
+  // R32: local-image materialization returns ordinary HTML (void tags have no slash).
+  // Exercise the real exporter with PNG/JPEG originals, decoration, entities and void
+  // elements. Only native file IO is replaced; image decoding/rasterization is real.
+  const xhtmlProbe = await page.evaluate(async () => {
+    const { renderArticleImages } = await import('/src/lib/htmlToImage.ts')
+    const { exportArticleImages } = await import('/src/lib/exportImages.ts')
+    const makeImage = (color, mime) => {
+      const c = document.createElement('canvas'); c.width = 64; c.height = 48
+      const ctx = c.getContext('2d'); ctx.fillStyle = color; ctx.fillRect(0, 0, 64, 48)
+      return c.toDataURL(mime)
+    }
+    const originals = [makeImage('#e62020', 'image/png'), makeImage('#205ce6', 'image/jpeg'), makeImage('#209b45', 'image/png')]
+    const html = `<section style="padding:12px;background:#fff"><p>A &amp; B&nbsp;读书会<br>第二行 &lt;原图&gt; "引号"</p><hr><img src="${originals[0]}" alt="PNG &amp; &quot;原图&quot;" style="width:120px;height:auto;display:block"><IMG SRC='${originals[1]}' alt='JPEG 原图' style='width:120px;height:auto;display:block'><span><img src="${originals[2]}" alt="角饰" style="width:60px;height:auto"></span><p>尾部文字</p></section>`
+    const rawXmlInvalid = !!new DOMParser().parseFromString(`<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><div xmlns="http://www.w3.org/1999/xhtml">${html}</div></foreignObject></svg>`, 'image/svg+xml').querySelector('parsererror')
+    const srcDescriptor = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+    const hadNative = Object.prototype.hasOwnProperty.call(window, '__TAURI_INTERNALS__'), originalNative = window.__TAURI_INTERNALS__
+    const calls = []; let serialized = ''
+    Object.defineProperty(HTMLImageElement.prototype, 'src', { ...srcDescriptor, set(value) {
+      if (String(value).startsWith('data:image/svg+xml;charset=utf-8,')) serialized = decodeURIComponent(String(value).split(',').slice(1).join(','))
+      srcDescriptor.set.call(this, value)
+    } })
+    window.__TAURI_INTERNALS__ = { invoke: async (cmd, args) => { calls.push({ cmd, files: args?.files }); return 'isolated-fixture-export' } }
+    try {
+      const rendered = await renderArticleImages(html)
+      const parsed = new DOMParser().parseFromString(serialized, 'image/svg+xml')
+      const nodes = [...parsed.querySelectorAll('img')]
+      const long = new Image(); long.src = rendered.long; await long.decode()
+      const c = document.createElement('canvas'); c.width = long.naturalWidth; c.height = long.naturalHeight
+      const ctx = c.getContext('2d'); ctx.drawImage(long, 0, 0)
+      const rgba = ctx.getImageData(0, 0, c.width, c.height).data
+      let red = 0, blue = 0, green = 0
+      for (let i = 0; i < rgba.length; i += 4) {
+        if (rgba[i] > 180 && rgba[i + 1] < 90 && rgba[i + 2] < 90) red++
+        if (rgba[i] < 90 && rgba[i + 1] < 140 && rgba[i + 2] > 180) blue++
+        if (rgba[i] < 90 && rgba[i + 1] > 110 && rgba[i + 2] < 110) green++
+      }
+      const exported = await exportArticleImages(html)
+      const files = calls.filter(x => x.cmd === 'export_images').flatMap(x => x.files || [])
+      const fileDimensions = await Promise.all(files.map(async f => { const im = new Image(); im.src = f.data; await im.decode(); return { width: im.naturalWidth, height: im.naturalHeight } }))
+      return { rawXmlInvalid, error: null, xmlValid: !parsed.querySelector('parsererror'), entities: parsed.documentElement.textContent.includes('A & B\u00a0读书会') && parsed.documentElement.textContent.includes('<原图>'), voidCounts: [nodes.length, parsed.querySelectorAll('br').length, parsed.querySelectorAll('hr').length], originalsPreserved: nodes.every((n, i) => n.getAttribute('src') === originals[i]), red, blue, green, width: c.width, height: c.height, exported: exported.ok, exportCalls: calls.filter(x => x.cmd === 'export_images').length, fileDimensions }
+    } catch (e) { return { rawXmlInvalid, error: String(e) } }
+    finally {
+      Object.defineProperty(HTMLImageElement.prototype, 'src', srcDescriptor)
+      if (hadNative) window.__TAURI_INTERNALS__ = originalNative; else delete window.__TAURI_INTERNALS__
+    }
+  })
+  judge.observe('R32 XHTML 真实转图与导出', JSON.stringify(xhtmlProbe))
+  check('HTML 直接嵌入 XML 的旧实现会失败（证红）', xhtmlProbe.rawXmlInvalid)
+  check('普通 HTML 混合原图能够完整转图', !xhtmlProbe.error, xhtmlProbe.error || '')
+  check('转图实际使用的 SVG 是合法 XML', xhtmlProbe.xmlValid)
+  check('实体、空格和尖括号文字保持语义', xhtmlProbe.entities)
+  check('三张图、换行与分割线均保留', JSON.stringify(xhtmlProbe.voidCounts) === '[3,1,1]')
+  check('PNG/JPEG 原图与角饰数据字节不变', xhtmlProbe.originalsPreserved)
+  check('成品 PNG 实际包含两张原图及角饰颜色', xhtmlProbe.red > 1000 && xhtmlProbe.blue > 1000 && xhtmlProbe.green > 1000, `red=${xhtmlProbe.red} blue=${xhtmlProbe.blue} green=${xhtmlProbe.green}`)
+  check('混合原图长图为 750px 且非空', xhtmlProbe.width === 750 && xhtmlProbe.height > 0)
+  check('真实导出链产生一次落盘请求及长图和分页', xhtmlProbe.exported && xhtmlProbe.exportCalls === 1 && xhtmlProbe.fileDimensions?.length >= 2)
+  check('提交落盘的所有 PNG 均可解码且宽度一致', xhtmlProbe.fileDimensions?.length >= 2 && xhtmlProbe.fileDimensions.every(d => d.width === 750 && d.height > 0))
 } catch (e) {
   console.log('  FAIL - raster-check error:', String(e).slice(0, 300))
   failed++

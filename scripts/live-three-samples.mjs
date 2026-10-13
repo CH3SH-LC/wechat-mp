@@ -32,7 +32,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 const require = createRequire(import.meta.url)
-const { chromium } = require('D:/deepseek-harness/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/node_modules/playwright')
+const { chromium } = require(process.env.VERIFY_PLAYWRIGHT || 'playwright')
 
 const which = String(process.argv[2] || '').trim()
 if (!['1', '2', '3'].includes(which)) {

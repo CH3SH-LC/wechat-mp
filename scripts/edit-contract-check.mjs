@@ -20,7 +20,7 @@ import { writeInstruction } from '../src/lib/edit-contract.ts'
 import { buildReviseContent } from '../src/lib/revise.ts'
 import { structureDiff } from '../src/lib/edit-diff.ts'
 
-const MIN_CHECKS = 16
+const MIN_CHECKS = 21
 const judge = createJudge({ script: 'edit-contract-check', outDir: resolveOutDir('edit-contract-check'), minChecks: MIN_CHECKS })
 guardCrashes(judge)
 let failed = 0
@@ -63,11 +63,26 @@ const wholePlain = buildReviseContent(v2, wholeDocIssues)
 const wholeKeep = buildReviseContent(v2, wholeDocIssues, { preserveRest: true })
 const localPlain = buildReviseContent(v2, localIssues)
 const localKeep = buildReviseContent(v2, localIssues, { preserveRest: true })
-check('整篇修订分支：默认不带"逐字保留"（新写回合的质检不该被改稿口径绑住）', !wholePlain.includes(KEEP_CLAUSE), '')
+check('整篇修订分支：默认不带整篇改稿保留范围（原图自身仍须保护）',
+  !wholePlain.includes('**这一轮是在改稿**') && !wholePlain.includes('**其余内容逐字保留**'), '')
 check('整篇修订分支：改稿回合**带上**"只改问题所指、其余逐字保留"', wholeKeep.includes(KEEP_CLAUSE) && wholeKeep.includes('不许借机'), '')
 check('定点修订分支：改稿回合同样带上（两个分支都要，不能只改一处）', localKeep.includes(KEEP_CLAUSE), '')
 check('两个分支的默认口径都没被改坏（仍带素材规则与完整正文要求）',
   [wholePlain, localPlain].every((t) => t.includes('```v2') && t.includes('[[asset:')), '')
+
+// R32：检查实际生成的两类修订消息，防止旧“三种素材”提示把原图当非法语法移除。
+const originalPhoto = `![照片说明保持原文](local-image://li-${'a'.repeat(64)})`
+const photoSource = `${originalPhoto}\n\n[[asset:art-inline|missing-fixture|需要修复的库素材]]\n\n原图后的正文。`
+const photoRepairs = [
+  buildReviseContent(photoSource, wholeDocIssues),
+  buildReviseContent(photoSource, ['库素材引用缺失'], { preserveRest: true }),
+]
+check('整体与定点修订都完整携带原图引用及候选全文，不在提示构造时改写',
+  photoRepairs.every((t) => t.includes('```v2\n' + photoSource + '\n```')), '')
+check('两类修订都明确支持真实local-image URI并要求原图整行逐字保留',
+  photoRepairs.every((t) => t.includes('![画面说明](local-image://li-<SHA256>)') && t.includes('已有原图引用整行逐字保留') && t.includes('不编造 ID')), '')
+check('两类修订都限制照片位仅用于尚缺照片，禁止将原图换成占位或生成图',
+  photoRepairs.every((t) => t.includes('明确稍后提供、当前仍缺失') && t.includes('不能把原图替换为照片占位、生成插画') && !t.includes('素材写法只用这三种')), '')
 
 // ── ③ 改动范围度量 ────────────────────────────────────────────────────────────
 console.log('\n[3. structureDiff：改了多少能量出来]')

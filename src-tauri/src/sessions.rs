@@ -7,11 +7,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionImage {
+    pub asset_id: String,
+    pub name: String,
+    pub mime: String,
+    pub width: u32,
+    pub height: u32,
+    pub byte_length: usize,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionMsg {
     pub id: u64,
     pub role: String,
     pub content: String,
+    #[serde(default, rename = "localImages", skip_serializing_if = "Vec::is_empty")]
+    pub local_images: Vec<SessionImage>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -109,23 +122,32 @@ fn derive_title(messages: &[SessionMsg]) -> String {
     "新对话".to_string()
 }
 
+fn session_path(dir: &Path, id: &str) -> Result<PathBuf, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')) {
+        return Err(format!("非法会话 id：{id}"));
+    }
+    Ok(dir.join(format!("{id}.json")))
+}
+
 fn write_session(dir: &Path, s: &SessionFile) -> Result<String, String> {
+    let path = session_path(dir, &s.id)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("创建会话目录失败：{e}"))?;
-    let path = dir.join(format!("{}.json", s.id));
     let json = serde_json::to_string_pretty(s).map_err(|e| format!("序列化失败：{e}"))?;
-    std::fs::write(&path, json).map_err(|e| format!("写入会话失败：{e}"))?;
+    crate::documents::atomic_write_file(&path, json.as_bytes()).map_err(|e| format!("写入会话失败：{e}"))?;
     Ok(path.to_string_lossy().to_string())
 }
 
 fn read_session(dir: &Path, id: &str) -> Result<Option<SessionFile>, String> {
-    let path = dir.join(format!("{id}.json"));
+    let path = session_path(dir, id)?;
     if !path.exists() {
         return Ok(None);
     }
     let raw = std::fs::read_to_string(&path).map_err(|e| format!("读取会话失败：{e}"))?;
-    serde_json::from_str::<SessionFile>(&raw)
-        .map(Some)
-        .map_err(|e| format!("会话文件损坏：{e}"))
+    let file = serde_json::from_str::<SessionFile>(&raw).map_err(|e| format!("会话文件损坏：{e}"))?;
+    if file.id != id {
+        return Err("会话文件内的 id 与文件名不一致，原文件已保留".into());
+    }
+    Ok(Some(file))
 }
 
 /// 读"当前会话"指针。
@@ -147,7 +169,7 @@ fn read_current(base: &Path) -> Result<Option<String>, String> {
 fn write_current(base: &Path, current: &Option<String>) -> Result<(), String> {
     let json = serde_json::json!({ "current": current });
     let text = serde_json::to_string_pretty(&json).map_err(|e| format!("序列化当前会话失败：{e}"))?;
-    std::fs::write(state_path_at(base), text).map_err(|e| format!("写入 state.json 失败：{e}"))
+    crate::documents::atomic_write_file(&state_path_at(base), text.as_bytes()).map_err(|e| format!("写入 state.json 失败：{e}"))
 }
 
 /// 会话操作（新建/打开/保存/迁移）后记录"当前会话"的尽力而为版本。
@@ -186,6 +208,7 @@ fn migrate_legacy(base: &Path) -> Result<bool, String> {
                         id: m["id"].as_u64().unwrap_or(0),
                         role: m["role"].as_str().unwrap_or("user").to_string(),
                         content: m["content"].as_str().unwrap_or("").to_string(),
+                        local_images: Vec::new(),
                     })
                 })
                 .collect()
@@ -324,7 +347,11 @@ fn rename_at(base: &Path, id: &str, title: &str) -> Result<(), String> {
 
 fn delete_at(base: &Path, id: &str) -> Result<SessionsList, String> {
     let sd = sessions_dir_at(base);
-    let _ = std::fs::remove_file(sd.join(format!("{id}.json")));
+    match std::fs::remove_file(session_path(&sd, id)?) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("删除会话失败（原文件仍保留）：{e}")),
+    }
     let list = list_at(base)?;
     // 若删除的是当前会话，list_at 已回退到最近会话
     Ok(list)
@@ -388,7 +415,24 @@ mod tests {
     }
 
     fn msg(id: u64, role: &str, content: &str) -> SessionMsg {
-        SessionMsg { id, role: role.into(), content: content.into() }
+        SessionMsg { id, role: role.into(), content: content.into(), local_images: Vec::new() }
+    }
+
+    #[test]
+    fn local_image_metadata_survives_save_and_reopen_and_old_messages_load() {
+        let old: SessionMsg = serde_json::from_str(r#"{"id":1,"role":"user","content":"旧消息"}"#).unwrap();
+        assert!(old.local_images.is_empty());
+        let base = tmp_base("local-images");
+        let id = create_at(&base).unwrap();
+        let mut message = msg(2, "user", "把这张原图放进去");
+        message.local_images.push(SessionImage { asset_id: format!("li-{}", "a".repeat(64)), name: "原图 空格.png".into(), mime: "image/png".into(), width: 1200, height: 800, byte_length: 12345 });
+        save_at(&base, &id, None, "auto", "auto", &[message.clone()]).unwrap();
+        let opened = open_at(&base, &id).unwrap().unwrap();
+        assert_eq!(opened.data.messages[0].local_images, message.local_images);
+        let bytes = std::fs::read_to_string(sessions_dir_at(&base).join(format!("{id}.json"))).unwrap();
+        assert!(bytes.contains("localImages"));
+        assert!(!bytes.contains("data:image"));
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
@@ -406,6 +450,75 @@ mod tests {
         let opened = open_at(&base, &id).expect("open").expect("some");
         assert_eq!(opened.data.mode, "promo");
         assert_eq!(opened.data.messages[0].content, "写一篇开学典礼推文");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_atomic_replace_preserves_session_and_current_bytes() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let base = tmp_base("atomic-preserve");
+        let id = create_at(&base).unwrap();
+        save_at(&base, &id, None, "auto", "auto", &[msg(1, "user", "旧消息")]).unwrap();
+        let session_path = sessions_dir_at(&base).join(format!("{id}.json"));
+        let before = std::fs::read(&session_path).unwrap();
+        // 允许读和原地写，禁止重命名。旧 std::fs::write 会覆盖；新原子写必须失败并保留原件。
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(3).open(&session_path).unwrap();
+        let result = save_at(&base, &id, None, "promo", "auto", &[msg(2, "user", "新消息")]);
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&session_path).unwrap(), before);
+        drop(lock);
+        let state = state_path_at(&base);
+        let before_state = std::fs::read(&state).unwrap();
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(3).open(&state).unwrap();
+        assert!(write_current(&base, &Some("another-session".into())).is_err());
+        assert_eq!(std::fs::read(&state).unwrap(), before_state);
+        drop(lock);
+        assert!(std::fs::read_dir(sessions_dir_at(&base)).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains(".tmp-")));
+        assert!(std::fs::read_dir(&base).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().contains(".tmp-")));
+        save_at(&base, &id, None, "auto", "auto", &[msg(3, "user", "重试成功")]).unwrap();
+        assert_eq!(open_at(&base, &id).unwrap().unwrap().data.messages[0].content, "重试成功");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn session_ids_cannot_escape_the_session_directory() {
+        let base = tmp_base("unsafe-id");
+        let outside = base.join("settings.json");
+        std::fs::write(&outside, "必须保留").unwrap();
+        for id in ["../settings", "..\\settings", "C:\\outside", "", "s/name"] {
+            assert!(open_at(&base, id).is_err());
+            assert!(save_at(&base, id, None, "auto", "auto", &[]).is_err());
+            assert!(rename_at(&base, id, "新标题").is_err());
+            assert!(delete_at(&base, id).is_err());
+        }
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "必须保留");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn failed_delete_is_not_reported_as_success() {
+        let base = tmp_base("delete-error");
+        let path = sessions_dir_at(&base).join("s-blocked.json");
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(delete_at(&base, "s-blocked").is_err());
+        assert!(path.is_dir());
+        std::fs::remove_dir(&path).unwrap();
+        assert!(delete_at(&base, "s-blocked").is_ok(), "真正不存在的文件可以重复删除");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn mismatched_session_id_is_reported_without_rewriting_another_file() {
+        let base = tmp_base("mismatched-id");
+        let id = create_at(&base).unwrap();
+        let path = sessions_dir_at(&base).join(format!("{id}.json"));
+        let mut file: SessionFile = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        file.id = "s-other".into();
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        assert!(rename_at(&base, &id, "不应写入另一个文件").is_err());
+        assert!(!sessions_dir_at(&base).join("s-other.json").exists());
+        assert_eq!(list_at(&base).unwrap().unreadable.len(), 1);
         let _ = std::fs::remove_dir_all(&base);
     }
 

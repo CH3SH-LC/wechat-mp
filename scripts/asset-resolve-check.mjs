@@ -14,10 +14,10 @@ const { fixableWarnings } = await import('../src/lib/revise.ts')
 const { splitAssistant } = await import('../src/lib/extract.ts')
 const { createLedger, unfinished } = await import('../src/lib/asset-ledger.ts')
 const { newRunId } = await import('../src/lib/trace.ts')
-const { judgeReuse, hasColorConflict, pairBubbleRefs, planDecoAliases, splitPolicy } = await import('../src/lib/asset-resolve.ts')
+const { judgeReuse, hasColorConflict, pairBubbleRefs, planDecoAliases, splitPolicy, findLegacyDecoBlocks } = await import('../src/lib/asset-resolve.ts')
 
-// minChecks：2026-10-01 实测 86 条（无分场景前缀，靠条数下界证明执行完整）
-const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check'), minChecks: 89 })
+// minChecks：R35 新增 11 条，合计 100 条（靠条数下界证明执行完整）
+const judge = createJudge({ script: 'asset-resolve-check', outDir: resolveOutDir('asset-resolve-check'), minChecks: 100 })
 guardCrashes(judge)
 
 let failed = 0
@@ -149,6 +149,13 @@ check(
   planDecoAliases({ pairedRef: 'second', placeholderAlias: 'second', assetName: 'rose', assetId: 'as-1' }).join(',') === 'second,rose,as-1',
 )
 
+// R35：内部角饰别名与气泡引用统一接受 Unicode 字母/数字，不扩大外部占位协议。
+check('R35 中文及 Unicode 数字气泡引用可配对', pairBubbleRefs(['[[asset:bubble|as-1|用途]]', '> [!KEY|星_２-é] 标题'], [0])[0] === '星_２-é')
+check('R35 中文库名称与配对词保留并去重', planDecoAliases({ pairedRef: '星', placeholderAlias: '星', assetName: '玫瑰_２-é', assetId: 'as-1' }).join(',') === '星,玫瑰_２-é,as-1')
+const unicodeLegacy = findLegacyDecoBlocks(['::: art deco 星 玫瑰_２-é', '旧说明', ':::'])
+check('R35 中文遗留角饰块可识别全部别名', unicodeLegacy.length === 1 && unicodeLegacy[0].names.join(',') === '星,玫瑰_２-é' && unicodeLegacy[0].body === '旧说明')
+check('R35 内部别名仍拒绝标点符号', planDecoAliases({ pairedRef: '星/花' }).length === 0 && pairBubbleRefs(['占位行', '> [!KEY|星/花] 标题'], [0])[0] === undefined && findLegacyDecoBlocks(['::: art deco 星/花', '旧说明', ':::']).length === 0)
+
 // ---------- 解析器层 ----------
 let rose = await seedRose()
 check('种子素材已入库', !!rose, rose && rose.id)
@@ -203,6 +210,33 @@ console.log('\n[§2 角饰别名必须让气泡引用解析成功]')
   check('角饰块带库名称与 id', decoLine.includes('rose') && decoLine.includes(rose.id), decoLine)
   check('无"气泡角饰未定义"警告', !comp.warnings.some((w) => w.includes('未定义')), JSON.stringify(comp.warnings.filter((w) => w.includes('角饰'))))
   check('不触发整篇自动重写', fixableWarnings(comp.warnings).length === 0, JSON.stringify(fixableWarnings(comp.warnings)))
+}
+
+console.log('\n[R35 已有真实素材与中文本地角饰别名]')
+{
+  const beforeCount = (await listAssets()).length
+  const events = []
+  const { out, info, comp } = await run(
+    article(`[[asset:bubble|${rose.id}|右下角一朵红花的气泡角饰]]`, '> [!KEY|星] 记得带'),
+    { persist: true, onProgress: (e) => events.push(e) },
+  )
+  const decoLine = out.split('\n').find((l) => l.startsWith('::: art deco')) || ''
+  check('R35 编译角饰保留中文配对词', decoLine.startsWith('::: art deco 星 ') && decoLine.includes(rose.id), decoLine)
+  const roseIndex = comp.arts.findIndex((a) => a.svg.includes(ROSE_MARK))
+  check('R35 气泡使用真实玫瑰内容而非同名内置星标', out.includes(ROSE_MARK) && roseIndex >= 0 && comp.html.includes(`src="@@ART${roseIndex}@@" alt="" style="position:absolute;right:12px;bottom:10px;`), `roseIndex=${roseIndex}`)
+  const slots = info.ledger.order.map((id) => info.ledger.slots[id])
+  check('R35 中文别名复用零绘图尝试', slots.length === 1 && slots[0].attempts === 0 && !events.some((e) => e.text.startsWith('绘制素材')), JSON.stringify(slots.map((s) => s.attempts)))
+  check('R35 中文别名保留素材身份且不新增库记录', info.bindings[0]?.source === 'asset' && info.bindings[0]?.id === rose.id && !!info.used[rose.id] && info.storedFallback === 0 && (await listAssets()).length === beforeCount)
+  check('R35 中文别名无未定义或解析残留', info.residual === 0 && info.residue === 0 && !comp.warnings.some((w) => w.includes('未定义')), JSON.stringify(comp.warnings.filter((w) => w.includes('角饰'))))
+}
+{
+  // 外部绘图占位仍只接受 ASCII 名称；内部别名放宽不能把无效占位改成自动绘图。
+  const events = []
+  const { out, info } = await run(article('[[deco:中文|右下角一朵红色玫瑰花]]', '> [!KEY|星] 记得带'), {
+    persist: true, onProgress: (e) => events.push(e),
+  })
+  check('R35 中文外部占位仍明确拒绝', info.residue > 0 && info.errors.some((e) => e.includes('这行协议没被识别')) && !out.includes('[[deco:中文|'), JSON.stringify(info.errors))
+  check('R35 无效外部占位不触发绘图', info.storedFallback === 0 && !events.some((e) => e.text.startsWith('绘制素材')))
 }
 
 console.log('\n[§2 分类写错：用途兼容则恢复并告警，不兼容则明确拒绝]')

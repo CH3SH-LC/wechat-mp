@@ -61,8 +61,14 @@ export function checkHtml(html: string): QualityResult {
     issues.push({ kind: 'external-img', detail: `外链图片（发布后失效）：${[...external].slice(0, 3).join(' | ')}` })
   }
 
-  // 硬性宽度越界（375 视口 + 左右留白）
-  if (/width:\s*\d{3,}px/i.test(html)) {
+  // 只检查真正的 width 声明。max-width 是自适应上限，不能把它的后缀当作固定宽度。
+  const fixedWidth = [...html.matchAll(/\bstyle\s*=\s*(["'])(.*?)\1/gis)].some((style) =>
+    style[2].split(';').some((declaration) => {
+      const width = /^\s*width\s*:\s*(\d+(?:\.\d+)?)px\s*(?:!important\s*)?$/i.exec(declaration)
+      return width !== null && Number(width[1]) >= 100
+    }),
+  )
+  if (fixedWidth) {
     issues.push({ kind: 'fixed-width', detail: '发现 ≥100px 的固定像素宽度（应使用百分比/自适应）' })
   }
 

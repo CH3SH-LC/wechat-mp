@@ -1,10 +1,13 @@
-// live-style-choice.mjs —— 风格选型验证（第 20 轮）：同质注入（风格速查+促销类型+红线），三主题 auto 不指定风格
-// 期望：咖啡→非国潮（速查：美式复古/日系）；科技新品→科技；节日国货→国潮
-import { readFileSync, writeFileSync } from 'fs'
+// live-style-choice.mjs —— 历史风格选择观察；R36 同步当前写作知识。
+// 固定注入风格速查、产品介绍方法与合规；只观察三个主题的自主选择，不预定主题到风格的唯一答案。
+// 本脚本不经过桌面 prep/独立复核/交付门禁，不能作为 R36 文案或桌面验收证据。
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
+import { resolve } from 'node:path'
 import { buildSystemPrompt } from '../src/lib/persona.ts'
 
-const outDir = process.argv[2] || 'D:/deepseek-harness/verify-artifacts'
-const KB = 'D:/deepseek-harness/wechat-mp-desktop/src/knowledge'
+const outDir = resolve(process.argv[2] || resolve(import.meta.dirname, '../.local/runs/style-choice-' + Date.now()))
+mkdirSync(outDir, { recursive: true })
+const KB = resolve(import.meta.dirname, '../src/knowledge')
 const read = (rel) => {
   const text = readFileSync(`${KB}/${rel}`, 'utf8')
   return text.length > 8000 ? text.slice(0, 8000) + '\n…（节选截断）' : text
@@ -12,10 +15,10 @@ const read = (rel) => {
 const styleIndex = read('视觉/风格/00-索引.md')
 const picks = [
   { path: '/src/knowledge/视觉/风格/00-索引.md', head: '', text: styleIndex },
-  { path: '/src/knowledge/文本/内容类型/type-promo.md', head: '', text: read('文本/内容类型/type-promo.md') },
+  { path: '/src/knowledge/文本/写作/writing-product.md', head: '', text: read('文本/写作/writing-product.md') },
   { path: '/src/knowledge/文本/合规/comp-banned.md', head: '', text: read('文本/合规/comp-banned.md') },
 ]
-const sys = buildSystemPrompt(picks)
+const sys = buildSystemPrompt(picks) + '\n\n## 当前排版协议（只决定语法与呈现，不提供本稿事实）\n' + readFileSync(`${KB}/排版引擎/engine-write-protocol.md`, 'utf8')
 const cred = readFileSync(process.env.USERPROFILE + '/.dsh/.credentials.yaml', 'utf8')
 const key = (cred.match(/DEEPSEEK_API_KEY:\s*"?([^"\r\n]+)/) || [])[1]?.trim()
 

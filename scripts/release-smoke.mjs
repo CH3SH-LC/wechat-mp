@@ -168,7 +168,7 @@ try {
     )
     check(
       '关闭走的是应用自身的退出路径（forced 单独记，不再"异常关闭也算通过"）',
-      r.forced !== true && r.exitedBeforeRequest !== true,
+      r.closed === true && r.refused !== true && r.forced !== true && r.exitedBeforeRequest !== true,
       `forced=${r.forced} exitedBeforeRequest=${r.exitedBeforeRequest} via=${r.via}`,
     )
   }
@@ -238,10 +238,11 @@ function isAlive(pid) {
 }
 
 function isEmptyish(files) {
-  // 全新隔离 profile 下不应该有任何**作品 / 运行痕迹**：没有 .md 源文、没有 traces/*.jsonl、
-  // 没有素材文件。空壳的 sessions.json / 目录结构不算数据。
+  // 全新 profile 不应有作品或创作回合日志；原生窗口启动本身会写固定运行日志。
+  // 只允许这两个确切文件，不能把所有 traces/*.jsonl 都排除。
   const keys = Object.keys(files)
-  const data = keys.filter((k) => /\.md$/i.test(k) || /\.jsonl$/i.test(k) || /^assets\//i.test(k) || /^docs\//i.test(k))
+  const runtimeLogs = new Set(['traces/desktop-runtime.jsonl', 'traces/desktop-runtime.previous.jsonl'])
+  const data = keys.filter((k) => !runtimeLogs.has(k) && (/\.md$/i.test(k) || /\.jsonl$/i.test(k) || /^assets\//i.test(k) || /^docs\//i.test(k) || /^documents\//i.test(k)))
   return data.length === 0
 }
 

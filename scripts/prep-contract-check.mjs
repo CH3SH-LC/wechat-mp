@@ -49,7 +49,7 @@ const run = {
   errors: [],
   sourceHashes: {},
 }
-for (const rel of ['src/lib/prep.ts', 'src/App.tsx']) {
+for (const rel of ['src/lib/prep.ts', 'src/lib/persona.ts', 'src/lib/retrieval.ts', 'src/App.tsx', 'src/knowledge/排版引擎/engine-write-protocol.md', 'src/knowledge/产品/zhixu-product-facts.md', 'src/knowledge/文本/写作/writing-purpose.md']) {
   run.sourceHashes[rel] = createHash('sha256').update(readFileSync(join(repoRoot, rel))).digest('hex')
 }
 const check = (id, pass, ...evidence) => {
@@ -106,6 +106,9 @@ const chromiumExe = resolveChromium()
 
 const V2 = '[[theme:校园]]\n\n## 周末到馆提醒\n\n各位读者：\n\n- **10月10日（周六）**：9:00-17:00 开放。\n- **10月11日（周日）**：全天闭馆。\n\n咨询电话：**010-55556666**'
 const FENCE = (s) => '```v2\n' + s + '\n```'
+const ENGINE_PROTOCOL = readFileSync(join(repoRoot, 'src/knowledge/排版引擎/engine-write-protocol.md'), 'utf8')
+const ORDINARY_KNOWLEDGE = readFileSync(join(repoRoot, 'src/knowledge/文本/写作/writing-purpose.md'), 'utf8')
+const PRODUCT_FACTS = readFileSync(join(repoRoot, 'src/knowledge/产品/zhixu-product-facts.md'), 'utf8')
 
 // ---- T3（2026-10-03 真实小样）受控夹具 ---------------------------------------------------------
 //
@@ -130,6 +133,39 @@ const FINISH_REJECT_MARKER = 'finish_preparation 调用被拒绝'
 
 /** 每个用例：一串「第 N 次 prep_turn 的返回」，按顺序消耗（超出后重复最后一条） */
 const CASES = [
+  // 同一批真实知识工具同时读能力事实与写作规范；分别覆盖直接交稿和后续撰写入口。
+  // 只检验上下文合同和资料传递，不把受控正文当作模型遵守事实边界的证据。
+  ...['compose', 'candidate'].map((kind) => ({
+    name: `r33-product-facts-and-writing-examples-${kind}`,
+    userText: '写一篇介绍智序的公众号文章。',
+    replies: [
+      { text: null, calls: [
+        { id: 'product-facts', name: 'load_knowledge', args: '{"name":"zhixu-product-facts"}' },
+        { id: 'ordinary-knowledge', name: 'load_knowledge', args: '{"name":"writing-purpose"}' },
+      ] },
+      { text: null, calls: [{ id: 'product-finish', name: 'finish_preparation', args: JSON.stringify({
+        outcome: kind, assetPolicy: 'preserve',
+        ...(kind === 'candidate' ? { source: '# 从需求到预览\n\n智序接受自然语言需求，生成后可以在手机宽度预览中查看文章，再通过对话修改。' } : {}),
+      }) }] },
+    ],
+    want: { kind, calls: 2, assetPolicy: 'preserve', productKnowledge: true, ordinaryExcerptTool: true },
+  })),
+  {
+    name: 'candidate-on-first-request-has-full-protocol',
+    replies: [{ text: null, calls: [{ id: 'f1', name: 'finish_preparation', args: JSON.stringify({ outcome: 'candidate', source: V2, assetPolicy: 'modify' }) }] }],
+    want: { kind: 'candidate', calls: 1, sourceIncludes: '周末到馆提醒' },
+  },
+  {
+    name: 'protocol-full-ordinary-knowledge-excerpt',
+    replies: [
+      { text: null, calls: [
+        { id: 'full-protocol', name: 'load_knowledge', args: '{"name":"engine-write-protocol"}' },
+        { id: 'ordinary-knowledge', name: 'load_knowledge', args: '{"name":"writing-purpose"}' },
+      ] },
+      { text: null, calls: [{ id: 'f1', name: 'finish_preparation', args: '{"outcome":"compose","assetPolicy":"modify"}' }] },
+    ],
+    want: { kind: 'compose', calls: 2, fullProtocolTool: true, ordinaryExcerptTool: true },
+  },
   {
     name: 'valid-compose',
     replies: [
@@ -437,7 +473,7 @@ const CASES = [
     replies: [
       { text: null, calls: [{ id: 'k1', name: 'load_knowledge', args: '{"name":"engine-write-protocol"}' }] },
       { text: null, calls: [{ id: 'k2', name: 'search_knowledge', args: '{"query":"校园图书馆开放通知"}' }] },
-      { text: null, calls: [{ id: 'k3', name: 'load_knowledge', args: '{"name":"type-notice"}' }] },
+      { text: null, calls: [{ id: 'k3', name: 'load_knowledge', args: '{"name":"writing-campus"}' }] },
       { text: null, calls: [{ id: 'k4', name: 'load_knowledge', args: '{"name":"sentinel-must-not-be-called"}' }] },
     ],
     // 注意：exhausted 分支**不带** digest——没有撰写发生，知识摘要无处可用（有 digest 的是 reply/compose/candidate）。
@@ -484,7 +520,7 @@ try {
   if (!run.errors.length) {
     try {
       rows = await page.evaluate(
-        async ({ cases, marker, fixtures }) => {
+        async ({ cases, marker, fixtures, protocol, ordinaryKnowledge, productFacts }) => {
           const { runPrep, parseFinishArgs, extractV2Source, MAX_PREP_CALLS, isCorrectableFinishError } = await import('/src/lib/prep.ts')
           const out = []
           for (const c of cases) {
@@ -494,7 +530,8 @@ try {
               invoke: async (cmd, args) => {
                 if (cmd !== 'prep_turn') throw new Error('Unexpected invoke: ' + cmd)
                 // 先登记"这次请求已经发出"再决定抛不抛——取消场景断言的是"异常上抛"，不是"没发出去"
-                invokes.push(args)
+                // 请求时刻快照：convo 后续会追加消息，不能保留同一个数组引用。
+                invokes.push(JSON.parse(JSON.stringify(args)))
                 const reply = c.replies[Math.min(invokes.length - 1, c.replies.length - 1)]
                 if (reply && reply.throw) throw new Error(reply.throw)
                 return reply ?? { text: '', calls: [] }
@@ -521,6 +558,16 @@ try {
             out.push({
               name: c.name,
               invokeCount: invokes.length,
+              protocolPerRequest: invokes.map((i) => i.messages.some((m) => String(m.content || '').includes(protocol))),
+              protocolCopiesPerRequest: invokes.map((i) => i.messages.reduce((n, m) => n + String(m.content || '').split(protocol).length - 1, 0)),
+              fullProtocolTool: invokes.some((i) => i.messages.some((m) => m.role === 'tool' && m.tool_call_id === 'full-protocol' && String(m.content || '').includes(protocol))),
+              ordinaryExcerptTool: invokes.some((i) => i.messages.some((m) => m.role === 'tool' && m.tool_call_id === 'ordinary-knowledge' &&
+                String(m.content || '') === '# writing-purpose（文本）\n' + (ordinaryKnowledge.length > 6000
+                  ? ordinaryKnowledge.slice(0, 6000) + '\n…（节选）'
+                  : ordinaryKnowledge))),
+              productFactsTool: invokes.some((i) => i.messages.some((m) => m.role === 'tool' && m.tool_call_id === 'product-facts' && String(m.content || '').includes(productFacts))),
+              // 钉住追加的 prep 指令；不能让上游 persona 的正确规则掩盖这里的矛盾。
+              productBoundaryPerRequest: invokes.map((i) => i.messages.filter((m) => m.role === 'user' && String(m.content || '').includes('创作类请求的处理方式')).map((m) => String(m.content || ''))),
               secondHasToolResult: Boolean(invokes[1] && invokes[1].messages.some((m) => m.role === 'tool')),
               firstInvokeUserHasImages: Boolean(
                 invokes[0] && invokes[0].messages.some((m) => m.role === 'user' && Array.isArray(m.images) && m.images.length),
@@ -623,7 +670,7 @@ try {
           }
           return { rows: out, pure, pure2 }
         },
-        { cases: CASES, marker: FINISH_REJECT_MARKER, fixtures: { composeWithText: COMPOSE_WITH_TEXT, candidateWithText: CANDIDATE_WITH_TEXT } },
+        { cases: CASES, marker: FINISH_REJECT_MARKER, fixtures: { composeWithText: COMPOSE_WITH_TEXT, candidateWithText: CANDIDATE_WITH_TEXT }, protocol: ENGINE_PROTOCOL, ordinaryKnowledge: ORDINARY_KNOWLEDGE, productFacts: PRODUCT_FACTS },
       )
     } catch (e) {
       fail('evaluate', String(e.message || e).split('\n')[0])
@@ -674,6 +721,15 @@ if (!run.errors.length && rows.rows) {
       check(`${c.name}：结果类型 = ${c.want.kind}`, o && o.mode === 'prep' && o.kind === c.want.kind, `实测 ${o ? o.mode + '/' + o.kind : 'null'}`)
     }
     check(`${c.name}：请求次数等于预期（无第 4 次准备请求）`, r.invokeCount === c.want.calls, `实测 ${r.invokeCount}（期望 ${c.want.calls}，上限 ${r.maxCalls}）`)
+    check(`${c.name}：每次实际 prep 请求都包含可信协议全文（含末尾规则）`, r.protocolPerRequest.length > 0 && r.protocolPerRequest.every(Boolean), JSON.stringify(r.protocolPerRequest))
+    check(`${c.name}：每次实际 prep 请求只包含一份协议全文`, r.protocolCopiesPerRequest.length > 0 && r.protocolCopiesPerRequest.every((n) => n === 1), JSON.stringify(r.protocolCopiesPerRequest))
+    if (c.want.fullProtocolTool) check(`${c.name}：实际 tool 结果没有截断引擎协议`, ENGINE_PROTOCOL.length > 6000 && r.fullProtocolTool, `全文 ${ENGINE_PROTOCOL.length} 字符`)
+    if (c.want.ordinaryExcerptTool) check(`${c.name}：普通知识按实际长度完整传递或超过 6000 字符时节选`, r.ordinaryExcerptTool, `原文 ${ORDINARY_KNOWLEDGE.length} 字符，期望${ORDINARY_KNOWLEDGE.length > 6000 ? '节选' : '全文'}`)
+    if (c.want.productKnowledge) {
+      check(`${c.name}：实际知识工具完整送回产品事实，未误作写作示例丢弃`, r.productFactsTool)
+      check(`${c.name}：产品事实与写作规范都随合法结果进入后续摘要`, String(o?.digest || '').includes(PRODUCT_FACTS) && String(o?.digest || '').includes(ORDINARY_KNOWLEDGE.slice(0, 6000)))
+      check(`${c.name}：每次 prep 追加指令承认产品能力依据，同时排除方法示例和旧稿确证事实`, r.productBoundaryPerRequest.length === r.invokeCount && r.productBoundaryPerRequest.every((items) => items.length === 1 && items[0].includes('明确标注的应用产品事实可作为相应产品能力的依据') && items[0].includes('写作方法、风格与视觉规范里的例子以及旧稿不能确证本稿事实') && !items[0].includes('取到的知识只约束写法')))
+    }
     if (c.want.kind !== 'throw') {
       if (c.want.failure) check(`${c.name}：失败分类 = ${c.want.failure}`, o && o.failure === c.want.failure, `实测 ${o && o.failure}`)
       if (c.want.assetPolicy) check(`${c.name}：assetPolicy = ${c.want.assetPolicy}`, o && o.assetPolicy === c.want.assetPolicy, `实测 ${o && o.assetPolicy}`)

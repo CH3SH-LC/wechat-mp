@@ -367,7 +367,10 @@ function planCuts(
 export async function renderArticleImages(html: string): Promise<RenderedImages> {
   const host = document.createElement('div')
   host.style.cssText = `position:fixed;left:-20000px;top:0;width:${WIDTH}px;background:#fff;font-family:${FONT};`
-  host.innerHTML = `<div style="width:${WIDTH}px;box-sizing:border-box">${html}</div>`
+  const article = document.createElement('div')
+  article.style.cssText = `width:${WIDTH}px;box-sizing:border-box;font-family:${FONT}`
+  article.innerHTML = html
+  host.appendChild(article)
   document.body.appendChild(host)
   try {
     // 等内嵌 data 图解码 + 字体/布局稳定后再量高
@@ -388,7 +391,10 @@ export async function renderArticleImages(html: string): Promise<RenderedImages>
     const top0 = host.getBoundingClientRect().top
     const protectedRanges = toDeviceRanges(collectProtected(host, top0, h), H2)
 
-    const inner = `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${WIDTH}px;box-sizing:border-box;font-family:${FONT}">${html}</div>`
+    // foreignObject is parsed as XML, while saved/rendered articles are HTML. Serialize
+    // the measured DOM as XHTML so void tags (img/br/hr), entities and attributes are
+    // valid XML without changing image bytes or relying on tag-replacement regexes.
+    const inner = new XMLSerializer().serializeToString(article)
     const svg =
       `<svg xmlns="http://www.w3.org/2000/svg" width="${W2}" height="${H2}">` +
       `<g transform="scale(${SCALE})"><foreignObject width="${WIDTH}" height="${h}">${inner}</foreignObject></g></svg>`

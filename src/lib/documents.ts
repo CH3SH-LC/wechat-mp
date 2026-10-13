@@ -119,6 +119,7 @@ const LS_KEY = 'wxmp-docs-v1'
 
 /** 浏览器端的一"版"内容（与桌面 `revisions/<id>/` 里的四件套一一对应） */
 interface LsRevision {
+  revisionId?: string
   title: string
   updatedAt: string
   source: string
@@ -147,12 +148,27 @@ interface LsState {
   docs: Record<string, LsDoc>
 }
 
+function newBrowserRevisionId(): string {
+  return `b-${globalThis.crypto.randomUUID()}`
+}
+
+function browserContent(id: string, d: LsDoc): DocContentL {
+  return {
+    id, ...d, bindings: d.bindings || [],
+    acceptedRevisionId: d.accepted ? d.revisionId : undefined,
+    draftRevisionId: d.draft?.revisionId ?? (d.accepted === false ? d.revisionId : undefined),
+  }
+}
+
 /** 读 localStorage。**读不出来就抛**——由调用方判定"读失败"还是"没有内容"（不许静默当空） */
 function lsRead(): LsState {
   const raw = localStorage.getItem(LS_KEY)
   if (!raw) return { docs: {} }
   const s = JSON.parse(raw) as LsState
-  return { docs: s.docs || {} }
+  if (!s || typeof s !== 'object' || !s.docs || typeof s.docs !== 'object' || Array.isArray(s.docs)) {
+    throw new Error('文档存储结构损坏，原数据已保留')
+  }
+  return s
 }
 
 /** 写 localStorage；写失败（超限/不可写）就抛，由调用方判定是否成功 */
@@ -235,9 +251,16 @@ export async function openDocumentSafe(id: string): Promise<DocOpenResult> {
     }
   }
   try {
-    const d = lsRead().docs[id]
+    const s = lsRead()
+    const d = s.docs[id]
     if (!d) return { ok: false, notFound: true, error: '文档不存在' }
-    return { ok: true, doc: { id, ...d, bindings: d.bindings || [] } }
+    // 旧浏览器存档首次打开时补稳定版本号，正文/快照保持原样；后续保存便可校验基准。
+    if (!d.revisionId || (d.draft && !d.draft.revisionId)) {
+      d.revisionId ||= newBrowserRevisionId()
+      if (d.draft) d.draft.revisionId ||= newBrowserRevisionId()
+      lsWrite(s)
+    }
+    return { ok: true, doc: browserContent(id, d) }
   } catch (e) {
     console.warn('文档读取失败：', e)
     return { ok: false, notFound: false, error: brief(e) }
@@ -253,13 +276,38 @@ export async function openDocument(id: string): Promise<DocContentL | null> {
   return r.ok ? r.doc : null
 }
 
+/** 素材影响扫描复用文档读取协议，不另写 localStorage 键名或把读失败折成无引用。 */
+export async function scanDocumentReferences(assetId: string): Promise<{
+  references: { id: string; title: string }[]
+  scanWarning: string | null
+}> {
+  const references: { id: string; title: string }[] = []
+  const list = await listDocuments()
+  if (!list.ok) return { references, scanWarning: `影响扫描失败：${list.error}；无法判定有哪些文档在用` }
+  let unreadable = list.unreadable.length
+  for (const item of list.items) {
+    const opened = await openDocumentSafe(item.id)
+    if (!opened.ok || typeof opened.doc.source !== 'string') {
+      unreadable++
+      continue
+    }
+    const doc = opened.doc
+    if (doc.accepted === false) continue // 浏览器只有草稿，没有可供更新的成品。
+    if (doc.source.includes(`|${assetId}|`) && doc.source.includes('[[asset:')) references.push({ id: item.id, title: doc.title })
+  }
+  return {
+    references,
+    scanWarning: unreadable ? `影响扫描不完整：有 ${unreadable} 篇文档未能读取，无法判定它们是否引用了这张素材` : null,
+  }
+}
+
 export async function saveDocument(id: string, p: SaveDocPayload): Promise<DocContentL | null> {
   if (inTauri()) {
     try {
       // 成品提交必须带质量记录（Rust 侧 `validation="verified"` 时会校验），
       // 否则报错——这是"磁盘保存成功 ≠ 验收通过"在协议层的落点。
       const asDraft = !p.accepted
-      return await invoke<DocContentL>('save_document', {
+      const saved = await invoke<Record<string, unknown>>('save_document', {
         id,
         title: p.title,
         source: p.source,
@@ -275,6 +323,7 @@ export async function saveDocument(id: string, p: SaveDocPayload): Promise<DocCo
         expectedGeneration: null,
         asDraft,
       })
+      return fromRustContent(saved)
     } catch (e) {
       // 返回 null = 未写入（调用方必须查返回值；这里同时留下原因）
       console.warn('文档保存失败：', e)
@@ -284,8 +333,12 @@ export async function saveDocument(id: string, p: SaveDocPayload): Promise<DocCo
   try {
     const s = lsRead()
     const prev = s.docs[id]
+    if (p.baseRevisionId !== undefined && p.baseRevisionId !== prev?.revisionId) {
+      throw new Error('提交被拒绝：文档已更新或已删除，本次未写入任何内容')
+    }
     const now = new Date().toISOString()
     const revision: LsRevision = {
+      revisionId: newBrowserRevisionId(),
       title: p.title.trim() || prev?.title || '',
       updatedAt: now,
       source: p.source,
@@ -296,17 +349,19 @@ export async function saveDocument(id: string, p: SaveDocPayload): Promise<DocCo
     }
     if (p.accepted) {
       // 提交成品：顶层字段就是成品内容；若这版内容与草稿相同则草稿可以清掉
-      s.docs[id] = { ...revision, accepted: true, revisionId: prev?.revisionId }
+      s.docs[id] = { ...revision, accepted: true }
     } else if (prev?.accepted) {
       // 已有成品时存草稿：**顶层仍是成品**（读回来的是已提交的那一版），新内容存进 draft。
       // 这正是桌面端两个指针的语义——草稿不得顶掉成品，也不得抹掉成品的验收标记。
       s.docs[id] = { ...prev, draft: revision }
     } else {
       // 还没有成品：草稿就是当前内容（读回来是这一版，但 accepted=false，不是合格回滚目标）
-      s.docs[id] = { ...revision, accepted: false, revisionId: prev?.revisionId }
+      s.docs[id] = { ...revision, accepted: false }
     }
     lsWrite(s)
-    return { id, ...s.docs[id] }
+    return {
+      ...browserContent(id, s.docs[id]), ...revision, accepted: !!p.accepted,
+    }
   } catch (e) {
     console.warn('文档保存失败：', e)
     return null

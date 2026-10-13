@@ -35,7 +35,7 @@ src-tauri/gen/schemas/
 # （它的意义就是"不在项目里"，搬进来等于取消隔离），那部分用完即清。
 .local/
 
-# 文档不进版本控制（2026-10-09 用户口径："未来的 git 需要忽略所有我的 docs"）
+# 项目说明和研发记录不进版本控制；AI 运行时知识库正常提交
 # **文件保留在磁盘上**，只是不再被 git 跟踪；`git rm -r --cached` 一次之后由此规则兜住。
 /docs/
 /GOAL.md
@@ -46,12 +46,37 @@ src-tauri/gen/schemas/
 /README.md
 /RELEASE-NOTES.md
 /CLAUDE.md
-# ⚠️ 刻意**不写**全局 `*.md` —— 下面这两类 markdown 不是"文档"，是**代码的一部分**：
+# 刻意不写全局 *.md：下面两类 Markdown 是代码的一部分：
 #   src/knowledge/**/*.md     应用运行时加载的知识语料（删了应用就没有知识库）
 #   scripts/fixtures/**/*.md  回归夹具（删了脚本就跑不起来）
 
 # 测试/运行生成物一律忽略
-docs/                    # 兜底：即使哪天 docs/ 重新进仓库，其下产物也不跟
-*.tmp-*                  # writeFileAtomic 的中间文件（`.tmp-<pid>-<ts>-<rand>`）
+# 任意目录中的内部文档及原子写入中间文件
+docs/
+*.tmp-*
 **/run-result.json
 **/*.jsonl
+
+# 本机配置和凭据；示例文件允许提交
+.env
+.env.*
+!.env.example
+!.env.sample
+.credentials*
+credentials.yaml
+*.pem
+*.key
+
+# 验证与发布产物；发布资产由 GitHub Release 托管
+coverage/
+playwright-report/
+test-results/
+/output/
+/tmp/
+
+# demo/ 原始成品与 src-tauri/resources/使用手册.html 为明确发布资源
+# 测试脚本、脚本夹具及运行时知识继续跟踪，内部记录保留本地
+
+# 用户明确要求：供 AI 调用的数据库文档不作项目文档隔离
+!/src/knowledge/
+!/src/knowledge/**

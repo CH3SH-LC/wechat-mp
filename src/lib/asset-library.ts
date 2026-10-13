@@ -3,6 +3,7 @@
 // 分类检索由 TS 确定性打分（标题/desc/tags bigram），风格仅为软参考；替换源时 version+1 并返回影响扫描。
 
 import { invoke } from '@tauri-apps/api/core'
+import { scanDocumentReferences } from './documents.ts'
 import { inTauri } from './chat.ts'
 import type { UnreadableItemL } from './sessions.ts'
 
@@ -283,7 +284,13 @@ export async function updateAsset(id: string, patch: AssetPatchL, svg?: string):
       return null
     }
   }
-  const s = lsRead()
+  let s: ReturnType<typeof lsRead>
+  try {
+    s = lsRead()
+  } catch (e) {
+    console.warn('素材更新失败：', e)
+    return null
+  }
   const a = s.items[id]
   if (!a) return null
   const m = a.meta
@@ -300,25 +307,14 @@ export async function updateAsset(id: string, patch: AssetPatchL, svg?: string):
     a.svg = svg
     m.version += 1
   }
-  // 浏览器端影响扫描：解析各文档 source 中的 [[asset:分类|<id>|…]] 引用
-  const references: RefDocL[] = []
-  try {
-    const docs = JSON.parse(localStorage.getItem('wxmp-docs-v1') || '{}').docs || {}
-    for (const [docId, d] of Object.entries(docs) as [string, { title: string; source: string }][]) {
-      if ((d.source || '').includes(`|${id}|`) && (d.source || '').includes('[[asset:')) {
-        references.push({ id: docId, title: d.title || '' })
-      }
-    }
-  } catch {
-    // ignore：影响扫描失败不影响本次更新
-  }
   try {
     lsWrite(s)
   } catch (e) {
     console.warn('素材更新失败：', e)
     return null
   }
-  return { meta: m, references, scanWarning: null }
+  const { references, scanWarning } = await scanDocumentReferences(id)
+  return { meta: m, references, scanWarning }
 }
 
 /** 删除：返回是否真的删掉（false 时调用方不得当作已删除） */

@@ -49,10 +49,10 @@
 ```html
 <section style="background:#fff8f1;border-left:4px solid #fa8c16;border-radius:8px;padding:12px 16px;margin:0 0 16px;">
   <p style="margin:0;font-size:15px;font-weight:700;color:#d46b08;">
-    <span style="margin-right:8px;">1</span>一句话核心技巧
+    <span style="margin-right:8px;">1</span>[要点名称]
   </p>
   <p style="margin:6px 0 0;font-size:14px;line-height:1.75;color:#7a5233;">
-    跟正文呼应的简短说明，把方法论压缩成一句可带走的话。
+    [与正文对应的完整说明，保留必要条件]
   </p>
 </section>
 ```

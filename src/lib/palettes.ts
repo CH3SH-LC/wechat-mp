@@ -131,10 +131,34 @@ export const PALETTES: StylePalette[] = [
     orange: '#3a4d8f', amber: '#c9a227', teal: '#4f7d8f', ink: '#1e2440',
     sub: '#6f7a9a', tip: '#3a4d8f', warn: '#8f6f14', danger: '#b0392f',
   },
+  // R35：亮色留给线饰、小记号与插画；标题/标签用同色系深档，正文容器仍不铺底。
+  // 这里只定义颜色，不指定版式轴；三种色板均可用于极简或装饰性排版。
+  {
+    key: 'memphis', label: '孟菲斯', bg: '#ffffff',
+    accent: '#d72e62', accentDark: '#b31d4b', heading: '#28213e',
+    soft: '#fff2f6', soft2: '#f1f0ff', border: '#decfe8', hl: '#ffe8a8',
+    orange: '#d72e62', amber: '#ffbe26', teal: '#16ad9d', ink: '#28213e',
+    sub: '#675377', tip: '#0b7b70', warn: '#945b14', danger: '#a3204b',
+  },
+  {
+    key: 'pop', label: '波普', bg: '#ffffff',
+    accent: '#d62a35', accentDark: '#a71924', heading: '#17171f',
+    soft: '#fff1f2', soft2: '#eff3ff', border: '#d7d9e7', hl: '#ffe78a',
+    orange: '#d62a35', amber: '#f5c518', teal: '#2b5be6', ink: '#17171f',
+    sub: '#59576e', tip: '#2b5be6', warn: '#915b0a', danger: '#a71924',
+  },
+  {
+    key: 'sport', label: '运动', bg: '#ffffff',
+    accent: '#1765dc', accentDark: '#164aa4', heading: '#17345d',
+    soft: '#eef5ff', soft2: '#fff2e9', border: '#cbdbed', hl: '#e4f7ab',
+    orange: '#1765dc', amber: '#ff7a1a', teal: '#79b51c', ink: '#17345d',
+    sub: '#52687d', tip: '#1765dc', warn: '#aa4c0a', danger: '#b32736',
+  },
 ]
 
 const BY_KEY = new Map(PALETTES.map((p) => [p.key, p]))
 const BY_LABEL = new Map(PALETTES.map((p) => [p.label, p]))
+const PALETTE_ALIAS: Record<string, string> = { 波普艺术: 'pop', 运动活力: 'sport', 孟菲斯几何: 'memphis', 'pop-art': 'pop', sports: 'sport' }
 
 // 风格名归一（第 28 轮）：真实模型常声明「校园风/国潮风/日系风」，去尾缀"风格/风/風"后再匹配，
 // 避免带尾缀声明落空 → 静默回退默认色系
@@ -147,11 +171,13 @@ export function normalizeStyleName(name: string): string {
 }
 
 function paletteByName(name: string): StylePalette | undefined {
+  const normalized = normalizeStyleName(name)
   return (
     BY_KEY.get(name) ||
     BY_LABEL.get(name) ||
-    BY_LABEL.get(normalizeStyleName(name)) ||
-    BY_KEY.get(normalizeStyleName(name))
+    BY_LABEL.get(normalized) ||
+    BY_KEY.get(normalized.toLowerCase()) ||
+    BY_KEY.get(PALETTE_ALIAS[normalized] || PALETTE_ALIAS[normalized.toLowerCase()])
   )
 }
 
@@ -176,7 +202,7 @@ export function themeDeclaration(md: string): string | undefined {
 
 // 第 23 轮：风格不限预置——正文可用 [[palette:k=v;k2=v2]] 自定义可渲染色板。
 // 仅收 compose 可消费的语义键，且值须为合法十六进制（#rgb/#rrggbb），否则忽略该键。
-const PALETTE_KEYS = new Set(['bg', 'accent', 'accentDark', 'heading', 'soft', 'soft2', 'border', 'hl', 'orange', 'amber', 'teal', 'ink'])
+const PALETTE_KEYS = new Set(['bg', 'text', 'sub', 'tip', 'warn', 'danger', 'accent', 'accentDark', 'heading', 'soft', 'soft2', 'border', 'hl', 'orange', 'amber', 'teal', 'ink'])
 
 export function parsePaletteDirective(md: string): Record<string, string> | undefined {
   const m = /\[\[palette:([^\]]+)\]\]/.exec(String(md || ''))

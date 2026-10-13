@@ -191,7 +191,10 @@ export function probeProcessIdentity(pid, opts = {}) {
   let psError = null
   try {
     const cmd =
-      `$ErrorActionPreference='Stop'; $p=Get-Process -Id ${Number(pid)}; $path=$null; $start=$null; ` +
+      // Windows PowerShell 默认输出可能是本机代码页；调用方以 UTF-8 解码，
+      // 必须显式统一，否则“智序”等中文安装目录被误判为不同进程。
+      `$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); ` +
+      `$p=Get-Process -Id ${Number(pid)}; $path=$null; $start=$null; ` +
       `try{$path=$p.Path}catch{}; ` +
       `try{$start=[long]($p.StartTime.ToUniversalTime() - [datetime]'1970-01-01T00:00:00Z').TotalMilliseconds}catch{}; ` +
       `[pscustomobject]@{image=$p.ProcessName;path=$path;start=$start}|ConvertTo-Json -Compress`

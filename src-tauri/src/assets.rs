@@ -263,7 +263,7 @@ fn add_at(base: &Path, input: AssetInput) -> Result<AssetMeta, String> {
     Ok(meta)
 }
 
-/// 扫描某素材被哪些文档引用（解析 documents/*/source.md 中的 [[asset:分类|<id>|…]] 引用行）。
+/// 扫描某素材被哪些当前成品引用；新版读 manifest，旧版兼容平铺 source.md。
 ///
 /// 返回 `(引用清单, 未判定文档数)`。**第二个返回值是本次修复的重点**：
 /// 旧实现用 `read_to_string(...).unwrap_or_default()` 把"读不出来"折叠成"空文本"，
@@ -281,6 +281,21 @@ fn scan_usage_at(base: &Path, asset_id: &str) -> Result<(Vec<RefDoc>, usize), St
         let dir = entry.path();
         if !dir.is_dir() {
             continue;
+        }
+        let id = entry.file_name().to_string_lossy().to_string();
+        match crate::documents::current_for_asset_scan(base, &id) {
+            Ok(Some(Some(doc))) => {
+                if doc.source.contains(&format!("|{asset_id}|")) && doc.source.contains("[[asset:") {
+                    refs.push(RefDoc { id, title: doc.title });
+                }
+                continue;
+            }
+            Ok(Some(None)) => continue, // 尚无成品；草稿不能冒充用户正在用的版本。
+            Ok(None) => {} // 未迁移旧文档：沿用下面的兼容读取。
+            Err(_) => {
+                undecided += 1;
+                continue;
+            }
         }
         let source = match std::fs::read_to_string(dir.join("source.md")) {
             Ok(t) => t,
@@ -348,13 +363,15 @@ fn update_at(base: &Path, id: &str, patch: AssetPatch, svg: Option<String>) -> R
         meta.version += 1;
     }
     write_files(&dir, &meta, svg.as_deref().filter(|_| has_new_svg))?;
-    let (references, undecided) = scan_usage_at(base, id)?;
-    let scan_warning = if undecided > 0 {
-        Some(format!(
-            "影响扫描不完整：有 {undecided} 篇文档未能读取，无法判定它们是否引用了这张素材——请勿据此断定'没有文档在用'"
-        ))
-    } else {
-        None
+    // 素材已经保存成功；影响扫描失败不能伪装成保存失败，让用户重试导致版本重复递增。
+    let (references, scan_warning) = match scan_usage_at(base, id) {
+        Ok((references, undecided)) => {
+            let warning = (undecided > 0).then(|| format!(
+                "影响扫描不完整：有 {undecided} 篇文档未能读取，无法判定它们是否引用了这张素材——请勿据此断定'没有文档在用'"
+            ));
+            (references, warning)
+        }
+        Err(e) => (Vec::new(), Some(format!("素材已保存，但影响扫描失败：{e}；无法判定有哪些文档在用"))),
     };
     Ok(UpdateResult { meta, references, scan_warning })
 }
@@ -585,5 +602,88 @@ mod tests {
         assert!(item_dir_at(Path::new("x"), "../evil").is_err());
         assert!(item_dir_at(Path::new("x"), "as/1").is_err());
         assert!(item_dir_at(Path::new("x"), "as-1").is_ok());
+    }
+
+    fn current_doc(base: &Path, id: &str, source: &str) -> PathBuf {
+        use sha2::{Digest, Sha256};
+        let dir = base.join("documents").join(id);
+        let revision = dir.join("revisions").join("r-current");
+        std::fs::create_dir_all(&revision).unwrap();
+        let meta = crate::documents::DocMeta {
+            id: id.into(), title: "当前成品".into(),
+            hashes: crate::documents::RevisionHashes {
+                source: format!("{:x}", Sha256::digest(source.as_bytes())),
+                html: format!("{:x}", Sha256::digest(b"<section>current</section>")),
+            },
+            ..Default::default()
+        };
+        std::fs::write(revision.join("source.md"), source).unwrap();
+        std::fs::write(revision.join("article.html"), "<section>current</section>").unwrap();
+        std::fs::write(revision.join("meta.json"), serde_json::to_vec(&meta).unwrap()).unwrap();
+        let manifest = crate::documents::DocManifest {
+            schema_version: crate::documents::SCHEMA_VERSION,
+            accepted_revision_id: Some("r-current".into()),
+            generation: 1,
+            ..Default::default()
+        };
+        std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn scan_uses_current_revision_not_retained_legacy_or_draft() {
+        let base = tmp_base("scan-current");
+        let m = add_at(&base, input("current", "bubble", "当前引用")).unwrap();
+        let source = format!("[[asset:bubble|{}|装饰]]", m.id);
+        let used = current_doc(&base, "s-used", &source);
+        // 迁移留下的旧源文不引用；当前版本必须仍被列出。
+        std::fs::write(used.join("source.md"), "过时正文").unwrap();
+        let unused = current_doc(&base, "s-unused", "当前已删除素材引用");
+        std::fs::write(unused.join("source.md"), &source).unwrap();
+        // 只有草稿的文档不应被提供为“更新成品”的目标。
+        let draft = current_doc(&base, "s-draft", &source);
+        std::fs::write(draft.join("manifest.json"), r#"{"schema_version":1,"draft_revision_id":"r-current","generation":1}"#).unwrap();
+        let result = update_at(&base, &m.id, AssetPatch::default(), None).unwrap();
+        assert!(result.scan_warning.is_none());
+        assert_eq!(result.references.len(), 1);
+        assert_eq!(result.references[0].id, "s-used");
+        assert_eq!(result.references[0].title, "当前成品");
+        assert_eq!(std::fs::read_to_string(used.join("source.md")).unwrap(), "过时正文", "扫描不得迁移或改写数据");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn broken_current_revision_never_reports_a_complete_empty_scan() {
+        let base = tmp_base("scan-broken-current");
+        let m = add_at(&base, input("broken", "bubble", "版本损坏")).unwrap();
+        let source = format!("[[asset:bubble|{}|装饰]]", m.id);
+        let no_source = current_doc(&base, "s-no-source", &source);
+        std::fs::remove_file(no_source.join("revisions/r-current/source.md")).unwrap();
+        let changed = current_doc(&base, "s-changed", &source);
+        std::fs::write(changed.join("revisions/r-current/source.md"), "外部改写").unwrap();
+        let no_manifest = current_doc(&base, "s-no-manifest", &source);
+        std::fs::remove_file(no_manifest.join("manifest.json")).unwrap();
+        // 即便旧文件存在，也不能在当前指针丢失后退回过时源文。
+        std::fs::write(no_manifest.join("source.md"), "旧文稿").unwrap();
+        let corrupt = current_doc(&base, "s-corrupt", &source);
+        std::fs::write(corrupt.join("manifest.json"), "{ broken").unwrap();
+        let unsafe_id = current_doc(&base, "s-unsafe", &source);
+        std::fs::write(unsafe_id.join("manifest.json"), r#"{"accepted_revision_id":"../../outside"}"#).unwrap();
+        let result = update_at(&base, &m.id, AssetPatch::default(), None).unwrap();
+        assert!(result.references.is_empty());
+        assert!(result.scan_warning.unwrap().contains("5 篇"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn scan_directory_error_reports_saved_asset_with_warning() {
+        let base = tmp_base("scan-root-error");
+        let m = add_at(&base, input("root-error", "bubble", "扫描错误")).unwrap();
+        std::fs::write(base.join("documents"), "目录被其它文件占用").unwrap();
+        let result = update_at(&base, &m.id, AssetPatch::default(), Some("<svg>new</svg>".into())).unwrap();
+        assert_eq!(result.meta.version, m.version + 1);
+        assert!(result.scan_warning.unwrap().contains("素材已保存"));
+        assert_eq!(get_at(&base, &m.id).unwrap().unwrap().svg, "<svg>new</svg>");
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

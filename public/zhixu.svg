@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256" fill="none">
+  <title>智序</title>
+  <defs>
+    <linearGradient id="ink" x1="40" y1="16" x2="208" y2="248" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#216F64"/>
+      <stop offset="1" stop-color="#104E49"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="54" fill="url(#ink)"/>
+  <path d="M77 39H149L197 87V200C197 210.493 188.493 219 178 219H77C66.507 219 58 210.493 58 200V58C58 47.507 66.507 39 77 39Z" fill="#FFFCF4"/>
+  <path d="M149 39L197 87H165C156.163 87 149 79.837 149 71V39Z" fill="#F08A72"/>
+  <path d="M87 108H166L88 169H170" stroke="#155D55" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

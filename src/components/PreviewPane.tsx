@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { QualityResult } from '../lib/quality.ts'
 import type { DeliveryIssue, DeliveryVerdict } from '../lib/delivery-quality.ts'
 import { exportHtml } from '../lib/exportHtml.ts'
@@ -191,6 +191,10 @@ export default function PreviewPane({
   const [exportingImg, setExportingImg] = useState(false)
   const msgTimer = useRef<number | null>(null)
   const frameRef = useRef<HTMLIFrameElement | null>(null)
+  const exportingRef = useRef(false)
+  // 消息、任务状态或缩放变化不应重新解析整篇含图片 data URL 的 HTML。
+  const previewSrcDoc = useMemo(() => html ? wrapSrcDoc(html) : undefined, [html])
+  useEffect(() => () => { if (msgTimer.current) window.clearTimeout(msgTimer.current) }, [])
 
   // 预览块拾取：iframe 与父页同源（allow-same-origin），父页直接挂监听即可，
   // 无需 allow-scripts / postMessage / 注入脚本。点击产物只是一段文本，交给对话输入框。
@@ -238,18 +242,19 @@ export default function PreviewPane({
   }
 
   const copy = async () => {
-    if (!html) return
+    if (!html || busy) return
     try {
       await navigator.clipboard.writeText(html)
       setCopied(true)
       setTimeout(() => setCopied(false), 1200)
     } catch {
       setCopied(false)
+      flashMsg(setExportMsg, '复制失败，请使用「导出 HTML」保存文件。')
     }
   }
 
   const doExport = async () => {
-    if (!html) return
+    if (!html || busy) return
     const r = await exportHtml(html)
     flashMsg(setExportMsg, r.ok ? `已导出：${r.msg}` : `导出失败：${r.msg}`)
   }
@@ -257,25 +262,27 @@ export default function PreviewPane({
   // 草稿取回入口（计划 §8 第三条）：导出/复制的必须是**失败候选**（draftHtml），
   // 不是预览里那份（回滚场景下预览是已验收成品）。刻意与上面的成品导出分开成两个按钮。
   const copyDraft = async () => {
-    if (!draftHtml) return
+    if (!draftHtml || busy) return
     try {
       await navigator.clipboard.writeText(draftHtml)
       setCopiedDraft(true)
       setTimeout(() => setCopiedDraft(false), 1200)
     } catch {
       setCopiedDraft(false)
+      flashMsg(setExportMsg, '复制草稿失败，请使用「导出草稿 HTML」保存文件。')
     }
   }
 
   const doExportDraft = async () => {
-    if (!draftHtml) return
+    if (!draftHtml || busy) return
     const r = await exportHtml(draftHtml)
     flashMsg(setExportMsg, r.ok ? `已导出草稿：${r.msg}` : `导出草稿失败：${r.msg}`)
   }
 
   // 第 34 轮：HTML → 图片（长图 + 分页），替代微信 API 发草稿箱，由用户手动上传
   const doExportImg = async () => {
-    if (!html) return
+    if (!html || busy || exportingRef.current) return
+    exportingRef.current = true
     setExportingImg(true)
     flashMsg(setExportMsg, '正在把正文渲染为图片（长图 + 分页）…')
     try {
@@ -284,6 +291,7 @@ export default function PreviewPane({
     } catch (e) {
       flashMsg(setExportMsg, `导出图片失败：${String(e)}`, 20000)
     } finally {
+      exportingRef.current = false
       setExportingImg(false)
     }
   }
@@ -339,7 +347,7 @@ export default function PreviewPane({
         <span className="dot dot-green" />
         推文预览 · 375px
         <div className="preview-actions">
-          <button className="mini" onClick={() => setZoom((z) => (z >= 1.5 ? 1 : z + 0.25))}>
+          <button className="mini preview-zoom" aria-label={`预览缩放 ${Math.round(zoom * 100)}%，点击切换`} onClick={() => setZoom((z) => (z >= 1.5 ? 0.75 : z + 0.25))}>
             {Math.round(zoom * 100)}%
           </button>
           <button
@@ -376,7 +384,7 @@ export default function PreviewPane({
           >
             导出 HTML{draftTag}
           </button>
-          <button className="mini mini-danger" data-act="clear" onClick={onClear} disabled={!html}>
+          <button className="mini mini-danger" data-act="clear" onClick={onClear} disabled={!html || busy || exportingImg}>
             清空
           </button>
         </div>
@@ -432,7 +440,7 @@ export default function PreviewPane({
         </div>
       )}
 
-      {exportMsg && <div className="export-msg">{exportMsg}</div>}
+      {exportMsg && <div className="export-msg" role="status">{exportMsg}</div>}
       {/* 保存失败：必须是看得见的功能反馈，不能只留控制台线索（用户会以为稿子已经存好）。
           契约：data-save-error="1" 只在失败时出现，未失败时该容器不渲染。仅为展示，不参与流程（铁律 6）。 */}
       {saveError ? (
@@ -531,15 +539,15 @@ export default function PreviewPane({
 
       <div className="preview-body" data-doc-draft={docState && stateText ? (showingDraft ? '1' : '0') : undefined}>
         {!html ? (
-          <div className="preview-empty" />
+          <div className="preview-empty"><span className="empty-symbol" aria-hidden="true">文</span><strong>你的下一篇推文，从这里开始</strong></div>
         ) : (
-          <div className="preview-stage">
+          <div className="preview-stage" style={{ width: 393 * zoom, height: 700 * zoom }}>
             <div className="phone" style={{ transform: `scale(${zoom})` }}>
               <div className="phone-notch" />
               <iframe
                 ref={frameRef}
                 title="推文预览"
-                srcDoc={wrapSrcDoc(html)}
+                srcDoc={previewSrcDoc}
                 sandbox="allow-same-origin"
                 onLoad={attachPick}
               />

@@ -1,4 +1,5 @@
-// live-conformance.mjs —— 第 28 轮：真实模型 → 排版引擎 → 产品规范断言（验收闸门，补"只证能力不证合规"盲区）
+// live-conformance.mjs —— 历史模型到排版引擎的协议实验；R36 同步当前知识。
+// 不经过桌面 prep/独立复核/保存链路，不能作为 R36 文案或桌面验收证据。
 // 用法：node scripts/live-conformance.mjs [--out <目录>]   （需真实 DEEPSEEK_API_KEY / ~/.dsh）
 // 覆盖：①兜底话术不泄漏进正文 ②风格名归一（带"风"尾缀不落空）③口径 A：给真实照片 → ::: photo 照片位 + 装饰插画（[[img]]/[[deco]]）并存；口径 B：无照片 → [[img]]/[[deco]] 插画占位（零照片位）
 //
@@ -18,6 +19,10 @@ const ENGINE_PROTOCOL = fs.readFileSync(
   path.join(import.meta.dirname, '..', 'src', 'knowledge', '排版引擎', 'engine-write-protocol.md'),
   'utf8',
 )
+const WRITING_KNOWLEDGE = ['writing-purpose', 'writing-campus', 'writing-product']
+  .map(name => `\n\n## ${name}（写作方法，不提供本稿事实）\n` + fs.readFileSync(
+    path.join(import.meta.dirname, '..', 'src', 'knowledge', '文本', '写作', `${name}.md`), 'utf8',
+  )).join('')
 
 function cred() {
   if (process.env.DEEPSEEK_API_KEY) return process.env.DEEPSEEK_API_KEY.trim()
@@ -44,7 +49,7 @@ async function chat(history) {
       reasoning_effort: 'max',
       max_tokens: 64000,
       messages: [
-        { role: 'system', content: PERSONA_RULES + '\n\n## 已取用：排版引擎协议（本轮创作依据，冲突以本协议为准）\n' + ENGINE_PROTOCOL + REGISTRY },
+        { role: 'system', content: PERSONA_RULES + '\n\n## 已取用：排版引擎协议（只决定语法与呈现，不提供本稿事实）\n' + ENGINE_PROTOCOL + WRITING_KNOWLEDGE + REGISTRY },
         ...history,
       ],
     }),
@@ -69,7 +74,7 @@ async function chat(history) {
 }
 
 const REGISTRY =
-  '\n## 知识注册表（节选）\n【视觉/风格】style-campus(校园) / style-japanese(日系) / style-guochao(国潮) / style-tech(科技)\n【文本/内容类型】type-promo(促销/宣传) / type-news(资讯)\n【文本/文案】copy-tpl-promo(促销成稿模板)\n【文本/合规】comp-banned(违禁词)\n'
+  '\n## 知识目录（仅说明分类，本实验没有知识工具；只使用上方实际提供的资料）\n【视觉/风格】style-campus(校园) / style-japanese(日系) / style-guochao(国潮) / style-tech(科技)\n【文本/写作】writing-purpose(写作目的) / writing-campus(校园消息) / writing-product(产品介绍)\n【文本/合规】comp-banned(违禁词)\n'
 
 const judge = createJudge({
   script: 'live-conformance',
@@ -187,7 +192,7 @@ async function chatC(history) {
       reasoning_effort: 'max',
       max_tokens: 64000,
       messages: [
-        { role: 'system', content: PERSONA_RULES + '\n\n## 已取用：排版引擎协议（本轮创作依据，冲突以本协议为准）\n' + ENGINE_PROTOCOL + REGISTRY + ASSET_DIGEST_C },
+        { role: 'system', content: PERSONA_RULES + '\n\n## 已取用：排版引擎协议（只决定语法与呈现，不提供本稿事实）\n' + ENGINE_PROTOCOL + WRITING_KNOWLEDGE + REGISTRY + ASSET_DIGEST_C },
         ...history,
       ],
     }),
