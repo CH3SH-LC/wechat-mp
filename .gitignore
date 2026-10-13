@@ -35,7 +35,7 @@ src-tauri/gen/schemas/
 # （它的意义就是"不在项目里"，搬进来等于取消隔离），那部分用完即清。
 .local/
 
-# 项目说明和研发记录不进版本控制；AI 运行时知识库正常提交
+# 公开 README.md 正常提交；项目内部研发文档保持本地，AI 运行时知识库正常提交
 # **文件保留在磁盘上**，只是不再被 git 跟踪；`git rm -r --cached` 一次之后由此规则兜住。
 /docs/
 /GOAL.md
@@ -43,7 +43,6 @@ src-tauri/gen/schemas/
 /PROGRESS-LITE.md
 /REQUIREMENTS.md
 /STRUCTURE.md
-/README.md
 /RELEASE-NOTES.md
 /CLAUDE.md
 # 刻意不写全局 *.md：下面两类 Markdown 是代码的一部分：
